@@ -1,0 +1,248 @@
+{
+	"actions": [],
+	"autoname": "naming_series:",
+	"creation": "2025-01-01 00:00:00.000000",
+	"default_view": "List",
+	"doctype": "DocType",
+	"editable_grid": 1,
+	"engine": "InnoDB",
+	"field_order": [
+		"naming_series",
+		"status",
+		"source_filename",
+		"column_break_header",
+		"nanonets_file_id",
+		"nanonets_model_id",
+		"section_break_supplier",
+		"supplier_name_ocr",
+		"supplier",
+		"column_break_supplier",
+		"supplier_match_status",
+		"section_break_invoice",
+		"invoice_number",
+		"invoice_date",
+		"due_date",
+		"column_break_invoice",
+		"subtotal",
+		"tax_amount",
+		"total_amount",
+		"section_break_items",
+		"items",
+		"section_break_result",
+		"purchase_invoice",
+		"column_break_result",
+		"error_log",
+		"section_break_raw",
+		"raw_payload"
+	],
+	"fields": [
+		{
+			"fieldname": "naming_series",
+			"fieldtype": "Select",
+			"hidden": 1,
+			"label": "Series",
+			"options": "OCR-IMP-.#####",
+			"default": "OCR-IMP-.#####"
+		},
+		{
+			"default": "Pending",
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"label": "Status",
+			"options": "Pending\nNeeds Review\nMatched\nCompleted\nError",
+			"read_only": 1
+		},
+		{
+			"fieldname": "source_filename",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Source Filename",
+			"read_only": 1
+		},
+		{
+			"fieldname": "column_break_header",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "nanonets_file_id",
+			"fieldtype": "Data",
+			"label": "Nanonets File ID",
+			"read_only": 1,
+			"unique": 1
+		},
+		{
+			"fieldname": "nanonets_model_id",
+			"fieldtype": "Data",
+			"label": "Nanonets Model ID",
+			"read_only": 1
+		},
+		{
+			"fieldname": "section_break_supplier",
+			"fieldtype": "Section Break",
+			"label": "Supplier"
+		},
+		{
+			"fieldname": "supplier_name_ocr",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Supplier Name (OCR)",
+			"read_only": 1
+		},
+		{
+			"fieldname": "supplier",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "Supplier",
+			"options": "Supplier"
+		},
+		{
+			"fieldname": "column_break_supplier",
+			"fieldtype": "Column Break"
+		},
+		{
+			"default": "Unmatched",
+			"fieldname": "supplier_match_status",
+			"fieldtype": "Select",
+			"label": "Supplier Match Status",
+			"options": "Auto Matched\nSuggested\nUnmatched\nConfirmed",
+			"read_only": 1
+		},
+		{
+			"fieldname": "section_break_invoice",
+			"fieldtype": "Section Break",
+			"label": "Invoice Details"
+		},
+		{
+			"fieldname": "invoice_number",
+			"fieldtype": "Data",
+			"label": "Invoice Number"
+		},
+		{
+			"fieldname": "invoice_date",
+			"fieldtype": "Date",
+			"label": "Invoice Date"
+		},
+		{
+			"fieldname": "due_date",
+			"fieldtype": "Date",
+			"label": "Due Date"
+		},
+		{
+			"fieldname": "column_break_invoice",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "subtotal",
+			"fieldtype": "Currency",
+			"label": "Subtotal",
+			"read_only": 1
+		},
+		{
+			"fieldname": "tax_amount",
+			"fieldtype": "Currency",
+			"label": "Tax Amount",
+			"read_only": 1
+		},
+		{
+			"fieldname": "total_amount",
+			"fieldtype": "Currency",
+			"label": "Total Amount",
+			"read_only": 1
+		},
+		{
+			"fieldname": "section_break_items",
+			"fieldtype": "Section Break",
+			"label": "Line Items"
+		},
+		{
+			"fieldname": "items",
+			"fieldtype": "Table",
+			"label": "Items",
+			"options": "OCR Import Item"
+		},
+		{
+			"fieldname": "section_break_result",
+			"fieldtype": "Section Break",
+			"label": "Result"
+		},
+		{
+			"fieldname": "purchase_invoice",
+			"fieldtype": "Link",
+			"label": "Purchase Invoice",
+			"options": "Purchase Invoice",
+			"read_only": 1
+		},
+		{
+			"fieldname": "column_break_result",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "error_log",
+			"fieldtype": "Link",
+			"label": "Error Log",
+			"options": "Error Log",
+			"read_only": 1
+		},
+		{
+			"collapsible": 1,
+			"fieldname": "section_break_raw",
+			"fieldtype": "Section Break",
+			"label": "Raw OCR Data"
+		},
+		{
+			"fieldname": "raw_payload",
+			"fieldtype": "Code",
+			"label": "Raw Payload",
+			"options": "JSON",
+			"read_only": 1
+		}
+	],
+	"index_web_pages_for_search": 1,
+	"links": [],
+	"modified": "2025-01-01 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "ERPNext OCR",
+	"name": "OCR Import",
+	"owner": "Administrator",
+	"permissions": [
+		{
+			"create": 1,
+			"delete": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "System Manager",
+			"share": 1,
+			"write": 1
+		},
+		{
+			"create": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "Accounts User",
+			"share": 1,
+			"write": 1
+		},
+		{
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "Accounts Manager",
+			"share": 1,
+			"write": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": [],
+	"track_changes": 1
+}

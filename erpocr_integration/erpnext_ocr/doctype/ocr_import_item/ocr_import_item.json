@@ -1,0 +1,75 @@
+{
+	"actions": [],
+	"creation": "2025-01-01 00:00:00.000000",
+	"doctype": "DocType",
+	"editable_grid": 1,
+	"engine": "InnoDB",
+	"field_order": [
+		"description_ocr",
+		"item_code",
+		"item_name",
+		"qty",
+		"rate",
+		"amount",
+		"match_status"
+	],
+	"fields": [
+		{
+			"fieldname": "description_ocr",
+			"fieldtype": "Small Text",
+			"in_list_view": 1,
+			"label": "OCR Description",
+			"read_only": 1
+		},
+		{
+			"fieldname": "item_code",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "Item Code",
+			"options": "Item"
+		},
+		{
+			"fieldname": "item_name",
+			"fieldtype": "Data",
+			"label": "Item Name"
+		},
+		{
+			"fieldname": "qty",
+			"fieldtype": "Float",
+			"in_list_view": 1,
+			"label": "Qty"
+		},
+		{
+			"fieldname": "rate",
+			"fieldtype": "Currency",
+			"in_list_view": 1,
+			"label": "Rate"
+		},
+		{
+			"fieldname": "amount",
+			"fieldtype": "Currency",
+			"in_list_view": 1,
+			"label": "Amount"
+		},
+		{
+			"default": "Unmatched",
+			"fieldname": "match_status",
+			"fieldtype": "Select",
+			"in_list_view": 1,
+			"label": "Match Status",
+			"options": "Auto Matched\nUnmatched\nConfirmed"
+		}
+	],
+	"index_web_pages_for_search": 1,
+	"istable": 1,
+	"links": [],
+	"modified": "2025-01-01 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "ERPNext OCR",
+	"name": "OCR Import Item",
+	"owner": "Administrator",
+	"permissions": [],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": []
+}

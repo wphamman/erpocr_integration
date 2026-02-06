@@ -1,0 +1,47 @@
+[project]
+name = "erpocr_integration"
+authors = [
+	{ name = "wphamman", email = "wphamman@users.noreply.github.com" }
+]
+description = "Nanonets OCR integration for ERPNext — automatic invoice data extraction and import"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+license = { text = "GNU GPLv3" }
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+	"F",
+	"E",
+	"W",
+	"I",
+	"UP",
+	"B",
+	"RUF",
+]
+ignore = [
+	"B017",
+	"B018",
+	"E101",
+	"E402",
+	"E501",
+	"E741",
+	"F401",
+	"F403",
+	"F405",
+	"W191",
+]
+typing-modules = ["frappe.types.DF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "tab"
+docstring-code-format = true

@@ -1,0 +1,131 @@
+{
+	"actions": [],
+	"creation": "2025-01-01 00:00:00.000000",
+	"doctype": "DocType",
+	"engine": "InnoDB",
+	"field_order": [
+		"enabled",
+		"section_break_nanonets",
+		"nanonets_api_key",
+		"nanonets_model_id",
+		"column_break_nanonets",
+		"webhook_token",
+		"section_break_defaults",
+		"default_company",
+		"default_warehouse",
+		"column_break_defaults",
+		"default_expense_account",
+		"default_cost_center",
+		"section_break_matching",
+		"matching_threshold"
+	],
+	"fields": [
+		{
+			"default": "1",
+			"fieldname": "enabled",
+			"fieldtype": "Check",
+			"label": "Enabled"
+		},
+		{
+			"fieldname": "section_break_nanonets",
+			"fieldtype": "Section Break",
+			"label": "Nanonets Configuration"
+		},
+		{
+			"fieldname": "nanonets_api_key",
+			"fieldtype": "Password",
+			"label": "Nanonets API Key",
+			"reqd": 1
+		},
+		{
+			"description": "The Model ID from your Nanonets invoice extraction model.",
+			"fieldname": "nanonets_model_id",
+			"fieldtype": "Data",
+			"label": "Nanonets Model ID"
+		},
+		{
+			"fieldname": "column_break_nanonets",
+			"fieldtype": "Column Break"
+		},
+		{
+			"description": "Auto-generated token used to validate incoming webhook requests. Include this as ?token= in your Nanonets webhook URL.",
+			"fieldname": "webhook_token",
+			"fieldtype": "Data",
+			"label": "Webhook Token",
+			"read_only": 1
+		},
+		{
+			"fieldname": "section_break_defaults",
+			"fieldtype": "Section Break",
+			"label": "ERPNext Defaults"
+		},
+		{
+			"description": "Company used when creating Purchase Invoice drafts.",
+			"fieldname": "default_company",
+			"fieldtype": "Link",
+			"label": "Default Company",
+			"options": "Company",
+			"reqd": 1
+		},
+		{
+			"description": "Default warehouse for Purchase Invoice line items.",
+			"fieldname": "default_warehouse",
+			"fieldtype": "Link",
+			"label": "Default Warehouse",
+			"options": "Warehouse"
+		},
+		{
+			"fieldname": "column_break_defaults",
+			"fieldtype": "Column Break"
+		},
+		{
+			"description": "Expense account used for line items that could not be matched to an ERPNext Item.",
+			"fieldname": "default_expense_account",
+			"fieldtype": "Link",
+			"label": "Default Expense Account",
+			"options": "Account"
+		},
+		{
+			"description": "Default cost center for Purchase Invoice line items.",
+			"fieldname": "default_cost_center",
+			"fieldtype": "Link",
+			"label": "Default Cost Center",
+			"options": "Cost Center"
+		},
+		{
+			"fieldname": "section_break_matching",
+			"fieldtype": "Section Break",
+			"label": "Matching"
+		},
+		{
+			"default": "80",
+			"description": "Minimum similarity score (0-100) for fuzzy matching of supplier and item names. Used in Phase 2.",
+			"fieldname": "matching_threshold",
+			"fieldtype": "Percent",
+			"label": "Matching Threshold"
+		}
+	],
+	"index_web_pages_for_search": 1,
+	"issingle": 1,
+	"links": [],
+	"modified": "2025-01-01 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "ERPNext OCR",
+	"name": "OCR Settings",
+	"owner": "Administrator",
+	"permissions": [
+		{
+			"create": 1,
+			"delete": 1,
+			"email": 1,
+			"print": 1,
+			"read": 1,
+			"role": "System Manager",
+			"share": 1,
+			"write": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": []
+}
