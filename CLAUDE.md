@@ -212,7 +212,7 @@ fixtures = [
 
 ### Development
 - **Code location**: `c:\Users\wpham\ERPNextProjects\OCRIntegration`
-- **GitHub repo**: `https://github.com/wpham/erpocr_integration` (TBD — push pending)
+- **GitHub repo**: https://github.com/wphamman/erpocr_integration
 - **Live ERPNext**: Remote server (production — install after testing)
 
 ### Local Docker ERPNext (for testing)
