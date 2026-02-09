@@ -93,9 +93,11 @@ def process(raw_payload: str):
 
 		# Add line items
 		for line in line_items:
+			description = line.get("description", "")
+			product_code = line.get("product_code", "")
 			ocr_import.append("items", {
-				"description_ocr": line.get("description", ""),
-				"item_name": line.get("description", ""),
+				"description_ocr": description,
+				"item_name": product_code or description,
 				"qty": _parse_float(line.get("quantity", "1")),
 				"rate": _parse_amount(line.get("unit_price", "0")),
 				"amount": _parse_amount(line.get("amount", "0")),
@@ -109,6 +111,12 @@ def process(raw_payload: str):
 			if matched_supplier:
 				ocr_import.supplier = matched_supplier
 				ocr_import.supplier_match_status = match_status
+				# Update supplier tax_id if we have it and the supplier doesn't
+				supplier_tax_id = header_fields.get("supplier_tax_id", "")
+				if supplier_tax_id:
+					existing_tax_id = frappe.db.get_value("Supplier", matched_supplier, "tax_id")
+					if not existing_tax_id:
+						frappe.db.set_value("Supplier", matched_supplier, "tax_id", supplier_tax_id)
 			else:
 				ocr_import.supplier_match_status = "Unmatched"
 		else:
@@ -116,7 +124,11 @@ def process(raw_payload: str):
 
 		# Run item matching for each line
 		for item in ocr_import.items:
-			if item.description_ocr:
+			matched_item, match_status = None, "Unmatched"
+			# Try product_code first (direct item_code match), then description
+			if item.item_name and item.item_name != item.description_ocr:
+				matched_item, match_status = match_item(item.item_name)
+			if not matched_item and item.description_ocr:
 				matched_item, match_status = match_item(item.description_ocr)
 				if matched_item:
 					item.item_code = matched_item
@@ -187,6 +199,10 @@ def _extract_header_fields(predictions: list) -> dict:
 		"amount_due": "total_amount",
 		"invoice_amount": "total_amount",
 		"total_due_amount": "total_amount",
+		# Supplier tax ID
+		"seller_vat_number": "supplier_tax_id",
+		"vendor_tax_id": "supplier_tax_id",
+		"supplier_vat": "supplier_tax_id",
 	}
 
 	fields = {}
@@ -241,11 +257,13 @@ def _extract_line_items(predictions: list) -> list[dict]:
 			# Map common column labels to our field names
 			if label in ("description", "item_description", "item", "product", "item_name", "particulars"):
 				rows[row_num]["description"] = text
+			elif label in ("product_code", "item_code", "sku", "part_number"):
+				rows[row_num]["product_code"] = text
 			elif label in ("quantity", "qty", "units"):
 				rows[row_num]["quantity"] = text
 			elif label in ("unit_price", "rate", "price", "unit_cost"):
 				rows[row_num]["unit_price"] = text
-			elif label in ("amount", "total", "line_total", "net_amount"):
+			elif label in ("amount", "total", "line_total", "net_amount", "line_amount"):
 				rows[row_num]["amount"] = text
 
 	# Convert rows dict to list, skip empty rows
