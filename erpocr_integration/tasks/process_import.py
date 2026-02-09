@@ -27,6 +27,9 @@ def process(raw_payload: str):
 	"""
 	ocr_import_name = None
 
+	# Webhook runs as Guest — elevate to Administrator for document creation
+	frappe.set_user("Administrator")
+
 	try:
 		payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
 

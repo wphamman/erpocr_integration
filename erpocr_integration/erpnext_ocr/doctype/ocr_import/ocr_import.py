@@ -116,14 +116,19 @@ class OCRImport(Document):
 			"supplier": self.supplier,
 			"company": settings.default_company,
 			"posting_date": self.invoice_date or frappe.utils.today(),
-			"due_date": self.due_date,
 			"bill_no": self.invoice_number,
+			"bill_date": self.invoice_date,
 			"items": pi_items,
 		}
 
+		# Only set due_date if it's on or after the posting_date
+		posting_date = pi_dict["posting_date"]
+		if self.due_date and str(self.due_date) >= str(posting_date):
+			pi_dict["due_date"] = self.due_date
+
 		pi = frappe.get_doc(pi_dict)
 		pi.flags.ignore_mandatory = True
-		pi.insert()
+		pi.insert(ignore_permissions=True)
 
 		# Link PI back to this import
 		self.purchase_invoice = pi.name
