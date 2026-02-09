@@ -2,12 +2,30 @@
 # For license information, please see license.txt
 
 import json
+import re
 
 import frappe
 from frappe import _
 
 from erpocr_integration.tasks.matching import match_item, match_supplier
 from erpocr_integration.tasks.utils import log_and_raise_error
+
+
+def _clean_ocr_text(value: str) -> str:
+	"""Normalize OCR-extracted text by removing common artifacts."""
+	if not value:
+		return ""
+	# Replace newlines/carriage returns with empty string
+	value = value.replace("\n", "").replace("\r", "")
+	# Collapse multiple spaces into one
+	value = re.sub(r"\s+", " ", value)
+	# Remove spaces after opening and before closing brackets/parens
+	# e.g. "( Pty )" → "(Pty)", "Star Pops ( Pty ) Ltd" → "Star Pops (Pty) Ltd"
+	value = re.sub(r"\(\s+", "(", value)
+	value = re.sub(r"\s+\)", ")", value)
+	value = re.sub(r"\[\s+", "[", value)
+	value = re.sub(r"\s+\]", "]", value)
+	return value.strip()
 
 
 def process(raw_payload: str):
@@ -130,11 +148,11 @@ def process(raw_payload: str):
 				matched_item, match_status = match_item(item.item_name)
 			if not matched_item and item.description_ocr:
 				matched_item, match_status = match_item(item.description_ocr)
-				if matched_item:
-					item.item_code = matched_item
-					item.match_status = match_status
-				else:
-					item.match_status = "Unmatched"
+			if matched_item:
+				item.item_code = matched_item
+				item.match_status = match_status
+			else:
+				item.match_status = "Unmatched"
 
 		# Insert the record — before_save will set the correct status
 		ocr_import.insert(ignore_permissions=True)
@@ -211,7 +229,7 @@ def _extract_header_fields(predictions: list) -> dict:
 			continue
 
 		label = pred.get("label", "").lower().strip()
-		value = pred.get("ocr_text", "").strip()
+		value = _clean_ocr_text(pred.get("ocr_text", ""))
 
 		if not value:
 			continue
@@ -245,7 +263,7 @@ def _extract_line_items(predictions: list) -> list[dict]:
 		for cell in cells:
 			row_num = cell.get("row", 0)
 			label = cell.get("label", "").lower().strip()
-			text = cell.get("text", "").strip()
+			text = _clean_ocr_text(cell.get("text", ""))
 
 			if row_num == 0:
 				# Skip header row
@@ -269,7 +287,7 @@ def _extract_line_items(predictions: list) -> list[dict]:
 	# Convert rows dict to list, skip empty rows
 	for row_num in sorted(rows.keys()):
 		row = rows[row_num]
-		if row.get("description") or row.get("amount"):
+		if row.get("description") or row.get("product_code") or row.get("amount") or row.get("quantity"):
 			items.append(row)
 
 	return items
@@ -280,7 +298,6 @@ def _parse_date(value: str) -> str | None:
 	if not value:
 		return None
 
-	import re
 	from datetime import datetime
 
 	# Normalize whitespace — OCR often adds extra spaces (e.g., "February 9 , 2026")
@@ -318,8 +335,6 @@ def _parse_amount(value: str) -> float:
 	if not value:
 		return 0.0
 
-	import re
-
 	# Remove currency symbols, spaces, and thousands separators
 	cleaned = re.sub(r"[^\d.,\-]", "", str(value))
 
@@ -352,8 +367,6 @@ def _parse_float(value: str) -> float:
 	"""Parse a numeric string to float."""
 	if not value:
 		return 1.0
-
-	import re
 
 	cleaned = re.sub(r"[^\d.\-]", "", str(value))
 	try:
