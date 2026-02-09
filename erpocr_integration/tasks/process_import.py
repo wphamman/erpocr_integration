@@ -33,13 +33,16 @@ def process(raw_payload: str):
 	try:
 		payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
 
-		# Extract the first result
-		results = payload.get("result", [])
+		# Extract the result — Nanonets sends either a dict or a list
+		results = payload.get("result", {})
 		if not results:
 			frappe.log_error("OCR Integration Error", "Webhook payload has no results")
 			return
 
-		result = results[0]
+		if isinstance(results, list):
+			result = results[0]
+		else:
+			result = results
 
 		# Safety check: only process approved documents
 		approval_status = result.get("approval_status", "")
@@ -177,10 +180,13 @@ def _extract_header_fields(predictions: list) -> dict:
 		"tax": "tax_amount",
 		"vat": "tax_amount",
 		"vat_amount": "tax_amount",
+		"total_tax": "tax_amount",
 		"total_amount": "total_amount",
 		"total": "total_amount",
 		"grand_total": "total_amount",
 		"amount_due": "total_amount",
+		"invoice_amount": "total_amount",
+		"total_due_amount": "total_amount",
 	}
 
 	fields = {}
@@ -209,6 +215,7 @@ def _extract_line_items(predictions: list) -> list[dict]:
 	Each cell has row, col, label, and text fields.
 	"""
 	items = []
+	rows: dict[int, dict] = {}
 
 	for pred in predictions:
 		if pred.get("type") != "table":
@@ -219,7 +226,6 @@ def _extract_line_items(predictions: list) -> list[dict]:
 			continue
 
 		# Group cells by row
-		rows: dict[int, dict] = {}
 		for cell in cells:
 			row_num = cell.get("row", 0)
 			label = cell.get("label", "").lower().strip()
@@ -259,8 +265,10 @@ def _parse_date(value: str) -> str | None:
 	import re
 	from datetime import datetime
 
-	# Try common date formats
-	value = value.strip()
+	# Normalize whitespace — OCR often adds extra spaces (e.g., "February 9 , 2026")
+	value = re.sub(r"\s+", " ", value.strip())
+	# Remove spaces before punctuation (e.g., "9 , 2026" → "9, 2026")
+	value = re.sub(r"\s+,", ",", value)
 	formats = [
 		"%Y-%m-%d",      # 2024-01-15
 		"%d/%m/%Y",      # 15/01/2024

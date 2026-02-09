@@ -31,9 +31,10 @@ class OCRImport(Document):
 				all_items_matched = False
 				break
 
-		if supplier_matched and all_items_matched:
+		if supplier_matched and all_items_matched and self.items:
 			self.status = "Matched"
-		elif self.status != "Pending":
+		elif self.supplier_name_ocr or self.items:
+			# Data was extracted but not fully matched — needs user review
 			self.status = "Needs Review"
 
 	def on_update(self):
