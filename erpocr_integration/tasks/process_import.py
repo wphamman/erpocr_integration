@@ -8,7 +8,6 @@ import frappe
 from frappe import _
 
 from erpocr_integration.tasks.matching import match_item, match_supplier
-from erpocr_integration.tasks.utils import log_and_raise_error
 
 
 def _clean_ocr_text(value: str) -> str:
@@ -28,84 +27,51 @@ def _clean_ocr_text(value: str) -> str:
 	return value.strip()
 
 
-def process(raw_payload: str):
+def process_extracted_data(extracted_data: dict, source_type: str, uploaded_by: str = None):
 	"""
-	Process a Nanonets webhook payload.
+	Universal entry point for OCR data from any source (Gemini, future sources).
 
-	This function is called asynchronously via frappe.enqueue() from the webhook endpoint.
+	Args:
+		extracted_data: dict with keys:
+			- header_fields: {supplier_name, invoice_number, dates, amounts, ...}
+			- line_items: [{description, product_code, qty, rate, amount}, ...]
+			- raw_response: Original API response (for audit trail)
+			- source_filename: Original filename
+			- extraction_time: Time taken by extraction (seconds)
+		source_type: "Gemini Manual Upload" or "Gemini Email"
+		uploaded_by: User who initiated (optional)
 
-	Steps:
-	1. Parse the JSON payload
-	2. Extract header fields (supplier, invoice number, dates, amounts)
-	3. Extract line items from table predictions
-	4. Check for duplicate imports (by nanonets_file_id)
-	5. Create an OCR Import record
-	6. Run supplier and item matching
-	7. If fully matched, auto-create Purchase Invoice draft
+	Returns:
+		str: OCR Import record name
 	"""
 	ocr_import_name = None
 
-	# Webhook runs as Guest — elevate to Administrator for document creation
+	# Ensure we have admin permissions for document creation
 	frappe.set_user("Administrator")
 
 	try:
-		payload = json.loads(raw_payload) if isinstance(raw_payload, str) else raw_payload
-
-		# Extract the result — Nanonets sends either a dict or a list
-		results = payload.get("result", {})
-		if not results:
-			frappe.log_error("OCR Integration Error", "Webhook payload has no results")
-			return
-
-		if isinstance(results, list):
-			result = results[0]
-		else:
-			result = results
-
-		# Safety check: only process approved documents
-		approval_status = result.get("approval_status", "")
-		if approval_status and approval_status != "approved":
-			frappe.log_error(
-				"OCR Integration Warning",
-				f"Skipping non-approved document (status: {approval_status})",
-			)
-			return
-
-		# Extract identifiers
-		nanonets_file_id = result.get("id", "")
-		nanonets_model_id = result.get("model_id", "")
-		source_filename = result.get("input", "")
-
-		# Dedup check
-		if nanonets_file_id and frappe.db.exists("OCR Import", {"nanonets_file_id": nanonets_file_id}):
-			frappe.log_error(
-				"OCR Integration Warning",
-				f"Duplicate webhook for file ID {nanonets_file_id} — skipping",
-			)
-			return
-
-		# Parse predictions — use moderated_boxes if available (reviewed data), else predicted_boxes
-		predictions = result.get("moderated_boxes") or result.get("prediction") or result.get("predicted_boxes") or []
-
-		# Extract header fields and table data
-		header_fields = _extract_header_fields(predictions)
-		line_items = _extract_line_items(predictions)
+		header_fields = extracted_data.get("header_fields", {})
+		line_items = extracted_data.get("line_items", [])
+		raw_response = extracted_data.get("raw_response", "")
+		source_filename = extracted_data.get("source_filename", "")
+		extraction_time = extracted_data.get("extraction_time", 0.0)
 
 		# Create OCR Import record
 		ocr_import = frappe.get_doc({
 			"doctype": "OCR Import",
 			"status": "Pending",
 			"source_filename": source_filename,
-			"nanonets_file_id": nanonets_file_id,
-			"nanonets_model_id": nanonets_model_id,
+			"source_type": source_type,
+			"uploaded_by": uploaded_by or frappe.session.user,
+			"extraction_time": extraction_time,
 			"supplier_name_ocr": header_fields.get("supplier_name", ""),
 			"invoice_number": header_fields.get("invoice_number", ""),
-			"invoice_date": _parse_date(header_fields.get("invoice_date", "")),
-			"due_date": _parse_date(header_fields.get("due_date", "")),
-			"subtotal": _parse_amount(header_fields.get("subtotal", "")),
-			"tax_amount": _parse_amount(header_fields.get("tax_amount", "")),
-			"total_amount": _parse_amount(header_fields.get("total_amount", "")),
-			"raw_payload": json.dumps(payload, indent=2),
+			"invoice_date": header_fields.get("invoice_date"),
+			"due_date": header_fields.get("due_date"),
+			"subtotal": header_fields.get("subtotal", 0.0),
+			"tax_amount": header_fields.get("tax_amount", 0.0),
+			"total_amount": header_fields.get("total_amount", 0.0),
+			"raw_payload": raw_response,
 			"items": [],
 		})
 
@@ -116,9 +82,9 @@ def process(raw_payload: str):
 			ocr_import.append("items", {
 				"description_ocr": description,
 				"item_name": product_code or description,
-				"qty": _parse_float(line.get("quantity", "1")),
-				"rate": _parse_amount(line.get("unit_price", "0")),
-				"amount": _parse_amount(line.get("amount", "0")),
+				"qty": line.get("quantity", 1.0),
+				"rate": line.get("unit_price", 0.0),
+				"amount": line.get("amount", 0.0),
 				"match_status": "Unmatched",
 			})
 
@@ -171,126 +137,11 @@ def process(raw_payload: str):
 					f"Auto PI creation failed for {ocr_import.name}\n{frappe.get_traceback()}",
 				)
 
+		return ocr_import_name
+
 	except Exception:
-		log_and_raise_error(exception=True, ocr_import_name=ocr_import_name)
-
-
-def _extract_header_fields(predictions: list) -> dict:
-	"""
-	Extract header-level fields from Nanonets predictions.
-
-	Looks for fields with type == "field" and maps common label names
-	to our internal field names.
-	"""
-	# Map of common Nanonets label names to our field names
-	# Users can have different labels in their Nanonets model — this covers common patterns
-	label_map = {
-		# Supplier
-		"supplier_name": "supplier_name",
-		"vendor_name": "supplier_name",
-		"seller_name": "supplier_name",
-		"company_name": "supplier_name",
-		# Invoice number
-		"invoice_number": "invoice_number",
-		"invoice_no": "invoice_number",
-		"invoice_id": "invoice_number",
-		"bill_number": "invoice_number",
-		# Invoice date
-		"invoice_date": "invoice_date",
-		"date": "invoice_date",
-		"bill_date": "invoice_date",
-		# Due date
-		"due_date": "due_date",
-		"payment_due_date": "due_date",
-		# Amounts
-		"subtotal": "subtotal",
-		"sub_total": "subtotal",
-		"net_amount": "subtotal",
-		"tax_amount": "tax_amount",
-		"tax": "tax_amount",
-		"vat": "tax_amount",
-		"vat_amount": "tax_amount",
-		"total_tax": "tax_amount",
-		"total_amount": "total_amount",
-		"total": "total_amount",
-		"grand_total": "total_amount",
-		"amount_due": "total_amount",
-		"invoice_amount": "total_amount",
-		"total_due_amount": "total_amount",
-		# Supplier tax ID
-		"seller_vat_number": "supplier_tax_id",
-		"vendor_tax_id": "supplier_tax_id",
-		"supplier_vat": "supplier_tax_id",
-	}
-
-	fields = {}
-	for pred in predictions:
-		if pred.get("type") != "field":
-			continue
-
-		label = pred.get("label", "").lower().strip()
-		value = _clean_ocr_text(pred.get("ocr_text", ""))
-
-		if not value:
-			continue
-
-		mapped_field = label_map.get(label)
-		if mapped_field and mapped_field not in fields:
-			fields[mapped_field] = value
-
-	return fields
-
-
-def _extract_line_items(predictions: list) -> list[dict]:
-	"""
-	Extract line items from Nanonets table predictions.
-
-	Table predictions have type == "table" with a cells[] array.
-	Each cell has row, col, label, and text fields.
-	"""
-	items = []
-	rows: dict[int, dict] = {}
-
-	for pred in predictions:
-		if pred.get("type") != "table":
-			continue
-
-		cells = pred.get("cells", [])
-		if not cells:
-			continue
-
-		# Group cells by row
-		for cell in cells:
-			row_num = cell.get("row", 0)
-			label = cell.get("label", "").lower().strip()
-			text = _clean_ocr_text(cell.get("text", ""))
-
-			if row_num == 0:
-				# Skip header row
-				continue
-
-			if row_num not in rows:
-				rows[row_num] = {}
-
-			# Map common column labels to our field names
-			if label in ("description", "item_description", "item", "product", "item_name", "particulars"):
-				rows[row_num]["description"] = text
-			elif label in ("product_code", "item_code", "sku", "part_number"):
-				rows[row_num]["product_code"] = text
-			elif label in ("quantity", "qty", "units"):
-				rows[row_num]["quantity"] = text
-			elif label in ("unit_price", "rate", "price", "unit_cost"):
-				rows[row_num]["unit_price"] = text
-			elif label in ("amount", "total", "line_total", "net_amount", "line_amount"):
-				rows[row_num]["amount"] = text
-
-	# Convert rows dict to list, skip empty rows
-	for row_num in sorted(rows.keys()):
-		row = rows[row_num]
-		if row.get("description") or row.get("product_code") or row.get("amount") or row.get("quantity"):
-			items.append(row)
-
-	return items
+		frappe.log_error("OCR Integration Error", frappe.get_traceback())
+		raise
 
 
 def _parse_date(value: str) -> str | None:

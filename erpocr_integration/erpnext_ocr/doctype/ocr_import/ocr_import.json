@@ -11,8 +11,9 @@
 		"status",
 		"source_filename",
 		"column_break_header",
-		"nanonets_file_id",
-		"nanonets_model_id",
+		"source_type",
+		"uploaded_by",
+		"extraction_time",
 		"section_break_supplier",
 		"supplier_name_ocr",
 		"supplier",
@@ -66,16 +67,26 @@
 			"fieldtype": "Column Break"
 		},
 		{
-			"fieldname": "nanonets_file_id",
-			"fieldtype": "Data",
-			"label": "Nanonets File ID",
-			"read_only": 1,
-			"unique": 1
+			"default": "Gemini Manual Upload",
+			"fieldname": "source_type",
+			"fieldtype": "Select",
+			"in_standard_filter": 1,
+			"label": "Source Type",
+			"options": "Gemini Manual Upload\nGemini Email",
+			"read_only": 1
 		},
 		{
-			"fieldname": "nanonets_model_id",
-			"fieldtype": "Data",
-			"label": "Nanonets Model ID",
+			"fieldname": "uploaded_by",
+			"fieldtype": "Link",
+			"label": "Uploaded By",
+			"options": "User",
+			"read_only": 1
+		},
+		{
+			"description": "Time taken by Gemini API to extract data (seconds)",
+			"fieldname": "extraction_time",
+			"fieldtype": "Float",
+			"label": "Extraction Time",
 			"read_only": 1
 		},
 		{

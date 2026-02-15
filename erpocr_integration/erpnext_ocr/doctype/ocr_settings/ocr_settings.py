@@ -6,6 +6,4 @@ from frappe.model.document import Document
 
 
 class OCRSettings(Document):
-	def before_save(self):
-		if not self.webhook_token:
-			self.webhook_token = frappe.generate_hash(length=32)
+	pass

@@ -1,7 +1,7 @@
 app_name = "erpocr_integration"
 app_title = "ERPNext OCR Integration"
 app_publisher = "wphamman"
-app_description = "Nanonets OCR integration for ERPNext — automatic invoice data extraction and import"
+app_description = "Gemini AI OCR integration for ERPNext — automatic invoice data extraction and import"
 app_email = "wphamman@users.noreply.github.com"
 app_license = "GNU GPLv3"
 
@@ -17,7 +17,7 @@ app_license = "GNU GPLv3"
 # web_include_js = "/assets/erpocr_integration/js/erpocr_integration.js"
 
 # include js in doctype views
-# doctype_js = {"DocType": "public/js/doctype.js"}
+doctype_js = {"OCR Import": "public/js/ocr_import.js"}
 # doctype_list_js = {"DocType": "public/js/doctype_list.js"}
 
 # Home Pages
@@ -68,7 +68,11 @@ app_license = "GNU GPLv3"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {}
+scheduler_events = {
+	"hourly": [
+		"erpocr_integration.tasks.email_monitor.poll_email_inbox"
+	]
+}
 
 # Permissions
 # -----------
@@ -79,9 +83,7 @@ app_license = "GNU GPLv3"
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-ignore_links_on_delete = [
-	"OCR Request Log",
-]
+# ignore_links_on_delete = []
 
 # Request Events
 # ----------------
@@ -97,10 +99,3 @@ ignore_links_on_delete = [
 # --------
 
 fixtures = []
-
-# Log Clearing
-# ------------
-
-default_log_clearing_doctypes = {
-	"OCR Request Log": 7,
-}
