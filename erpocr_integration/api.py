@@ -146,7 +146,7 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 				if drive_result.get("file_id"):
 					frappe.logger().info(f"Uploaded {filename} to Drive: {drive_result['folder_path']}")
 			except Exception as e:
-				frappe.log_error("Drive Upload Failed", f"Failed to upload {filename} to Drive: {str(e)}")
+				frappe.log_error(title="Drive Upload Failed", message=f"Failed to upload {filename} to Drive: {str(e)}")
 		else:
 			# Drive scan: keep file_id reference, move to archive after processing succeeds
 			drive_result = {"file_id": existing_drive_file_id, "shareable_link": None, "folder_path": None}
@@ -197,7 +197,7 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 						})
 					frappe.db.commit()
 			except Exception as e:
-				frappe.log_error("Drive Move Failed", f"Failed to move {filename} to archive: {str(e)}")
+				frappe.log_error(title="Drive Move Failed", message=f"Failed to move {filename} to archive: {str(e)}")
 
 		# Publish realtime update
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
@@ -213,7 +213,7 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 	except Exception as e:
 		# Update status to Error
 		try:
-			error_log = frappe.log_error("OCR Integration Error", f"Gemini extraction failed for {filename}\n{frappe.get_traceback()}")
+			error_log = frappe.log_error(title="OCR Integration Error", message=f"Gemini extraction failed for {filename}\n{frappe.get_traceback()}")
 			frappe.db.set_value("OCR Import", ocr_import_name, {
 				"status": "Error",
 				"error_log": error_log.name
@@ -228,7 +228,7 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 			)
 		except Exception:
 			# Even error handling failed
-			frappe.log_error("OCR Integration Critical Error", frappe.get_traceback())
+			frappe.log_error(title="OCR Integration Critical Error", message=frappe.get_traceback())
 
 
 def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_result: dict):
@@ -364,6 +364,9 @@ def retry_gemini_extraction(ocr_import: str):
 	Args:
 		ocr_import: Name of the OCR Import record
 	"""
+	if not frappe.has_permission("OCR Import", "write", ocr_import):
+		frappe.throw(_("You do not have permission to retry this extraction"))
+
 	ocr_import_doc = frappe.get_doc("OCR Import", ocr_import)
 
 	if ocr_import_doc.status != "Error":

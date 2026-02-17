@@ -115,6 +115,7 @@ def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | No
 		"Supplier",
 		filters={"disabled": 0},
 		fields=["name", "supplier_name"],
+		limit_page_length=0,
 	)
 
 	for s in suppliers:
@@ -130,6 +131,7 @@ def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | No
 	aliases = frappe.get_all(
 		"OCR Supplier Alias",
 		fields=["ocr_text", "supplier"],
+		limit_page_length=0,
 	)
 	for a in aliases:
 		if not a.ocr_text:
@@ -171,6 +173,7 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 		"Item",
 		filters={"disabled": 0},
 		fields=["name", "item_name"],
+		limit_page_length=0,
 	)
 
 	for i in items:
@@ -186,6 +189,7 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 	aliases = frappe.get_all(
 		"OCR Item Alias",
 		fields=["ocr_text", "item_code"],
+		limit_page_length=0,
 	)
 	for a in aliases:
 		if not a.ocr_text:

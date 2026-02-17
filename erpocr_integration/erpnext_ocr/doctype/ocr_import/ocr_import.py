@@ -246,11 +246,14 @@ class OCRImport(Document):
 		pi.insert()
 
 		# Add comment with original invoice link (if available from Drive)
-		if self.drive_link:
+		if self.drive_link and self.drive_link.startswith("https://"):
+			from frappe.utils import escape_html
+			safe_link = escape_html(self.drive_link)
+			safe_path = escape_html(self.drive_folder_path or "N/A")
 			pi.add_comment(
 				"Comment",
-				f"<b>Original Invoice PDF:</b> <a href='{self.drive_link}' target='_blank'>View in Google Drive</a><br>"
-				f"<small>Archive path: {self.drive_folder_path or 'N/A'}</small>"
+				f"<b>Original Invoice PDF:</b> <a href='{safe_link}' target='_blank' rel='noopener noreferrer'>View in Google Drive</a><br>"
+				f"<small>Archive path: {safe_path}</small>"
 			)
 
 		# Link PI back to this import

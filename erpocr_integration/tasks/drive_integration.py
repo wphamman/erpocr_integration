@@ -46,16 +46,17 @@ def upload_invoice_to_drive(pdf_content: bytes, filename: str, supplier_name: st
 	settings = frappe.get_single("OCR Settings")
 
 	if not settings.drive_integration_enabled:
-		frappe.log_error("Drive Integration Disabled", "Attempted to upload to Drive but integration is disabled")
+		frappe.log_error(title="Drive Integration Disabled", message="Attempted to upload to Drive but integration is disabled")
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
-	if not settings.drive_service_account_json or not settings.drive_archive_folder_id:
-		frappe.log_error("Drive Configuration Missing", "Drive integration enabled but credentials or folder ID not configured")
+	sa_json = settings.get_password("drive_service_account_json")
+	if not sa_json or not settings.drive_archive_folder_id:
+		frappe.log_error(title="Drive Configuration Missing", message="Drive integration enabled but credentials or folder ID not configured")
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 	try:
 		# Get authenticated Drive service
-		service = _get_drive_service(settings.drive_service_account_json)
+		service = _get_drive_service(sa_json)
 
 		# Build folder path: Archive Root / Year / Month / Supplier
 		folder_path, parent_folder_id = _build_folder_structure(
@@ -103,13 +104,11 @@ def upload_invoice_to_drive(pdf_content: bytes, filename: str, supplier_name: st
 		}
 
 	except HttpError as e:
-		error_message = f"Google Drive API error: {str(e)}"
-		frappe.log_error("Drive Upload Failed", error_message)
+		frappe.log_error(title="Drive Upload Failed", message=f"Google Drive API error: {str(e)}")
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 	except Exception as e:
-		error_message = f"Drive upload error: {str(e)}\n{frappe.get_traceback()}"
-		frappe.log_error("Drive Upload Failed", error_message)
+		frappe.log_error(title="Drive Upload Failed", message=f"Drive upload error: {str(e)}\n{frappe.get_traceback()}")
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 
@@ -168,7 +167,7 @@ def _build_folder_structure(service, root_folder_id: str, supplier_name: str = N
 			date_obj = datetime.datetime.strptime(invoice_date, "%Y-%m-%d")
 			year = str(date_obj.year)
 			month_name = date_obj.strftime("%m-%B")  # "01-January"
-		except:
+		except (ValueError, TypeError):
 			year = str(datetime.datetime.now().year)
 			month_name = datetime.datetime.now().strftime("%m-%B")
 	else:
@@ -203,6 +202,9 @@ def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> s
 	"""
 	Get existing folder or create new one.
 
+	Handles race conditions: if two concurrent jobs try to create the same
+	folder, one may fail. In that case, re-search for the folder.
+
 	Args:
 		service: Authenticated Drive service
 		folder_name: Name of folder to find/create
@@ -229,11 +231,19 @@ def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> s
 			'parents': [parent_folder_id]
 		}
 
-		folder = service.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
-		return folder.get('id')
+		try:
+			folder = service.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
+			return folder.get('id')
+		except HttpError:
+			# Race condition: another job may have created the folder — re-search
+			results = service.files().list(q=query, fields='files(id, name)', supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+			files = results.get('files', [])
+			if files:
+				return files[0]['id']
+			raise  # Re-raise if still no folder found
 
 	except HttpError as e:
-		frappe.log_error("Drive Folder Creation Error", f"Failed to create folder {folder_name}: {str(e)}")
+		frappe.log_error(title="Drive Folder Creation Error", message=f"Failed to create folder {folder_name}: {str(e)}")
 		raise
 
 
@@ -248,15 +258,16 @@ def download_file_from_drive(file_id: str) -> bytes | None:
 		bytes: File content, or None on failure
 	"""
 	settings = frappe.get_single("OCR Settings")
+	sa_json = settings.get_password("drive_service_account_json")
 
-	if not settings.drive_service_account_json:
+	if not sa_json:
 		return None
 
 	try:
 		from io import BytesIO
 		from googleapiclient.http import MediaIoBaseDownload
 
-		service = _get_drive_service(settings.drive_service_account_json)
+		service = _get_drive_service(sa_json)
 		request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
 
 		buffer = BytesIO()
@@ -269,7 +280,7 @@ def download_file_from_drive(file_id: str) -> bytes | None:
 		return buffer.getvalue()
 
 	except Exception as e:
-		frappe.log_error("Drive Download Failed", f"Failed to download file {file_id}: {str(e)}")
+		frappe.log_error(title="Drive Download Failed", message=f"Failed to download file {file_id}: {str(e)}")
 		return None
 
 
@@ -284,14 +295,15 @@ def poll_drive_scan_folder():
 	if not settings.drive_integration_enabled or not settings.drive_scan_folder_id:
 		return
 
-	if not settings.drive_service_account_json:
+	sa_json = settings.get_password("drive_service_account_json")
+	if not sa_json:
 		return
 
 	try:
-		service = _get_drive_service(settings.drive_service_account_json)
+		service = _get_drive_service(sa_json)
 		files = _list_pdf_files(service, settings.drive_scan_folder_id)
 	except Exception as e:
-		frappe.log_error("Drive Scan Error", f"Failed to list scan folder: {str(e)}")
+		frappe.log_error(title="Drive Scan Error", message=f"Failed to list scan folder: {str(e)}")
 		return
 
 	if not files:
@@ -303,7 +315,7 @@ def poll_drive_scan_folder():
 		try:
 			_process_scan_file(service, file_info, settings)
 		except Exception as e:
-			frappe.log_error("Drive Scan Error", f"Failed to process {file_info.get('name', '?')}: {str(e)}")
+			frappe.log_error(title="Drive Scan Error", message=f"Failed to process {file_info.get('name', '?')}: {str(e)}")
 			continue
 
 
@@ -339,7 +351,7 @@ def _process_scan_file(service, file_info: dict, settings):
 	# Download PDF content
 	pdf_content = _download_file(service, drive_file_id)
 	if not pdf_content:
-		frappe.log_error("Drive Scan Error", f"Empty content for {filename}")
+		frappe.log_error(title="Drive Scan Error", message=f"Empty content for {filename}")
 		return
 
 	# Create OCR Import placeholder with drive_file_id for dedup
@@ -372,7 +384,7 @@ def _process_scan_file(service, file_info: dict, settings):
 		# Delete placeholder so next poll can retry this file
 		frappe.delete_doc("OCR Import", ocr_import.name, force=True, ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
-		frappe.log_error("Drive Scan Enqueue Failed", f"Failed to enqueue {filename}: {str(e)}")
+		frappe.log_error(title="Drive Scan Enqueue Failed", message=f"Failed to enqueue {filename}: {str(e)}")
 
 
 def _list_pdf_files(service, folder_id: str) -> list[dict]:
@@ -454,11 +466,12 @@ def move_file_to_archive(file_id: str, supplier_name: str = None, invoice_date: 
 	if not settings.drive_integration_enabled or not settings.drive_archive_folder_id:
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 
-	if not settings.drive_service_account_json:
+	sa_json = settings.get_password("drive_service_account_json")
+	if not sa_json:
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 
 	try:
-		service = _get_drive_service(settings.drive_service_account_json)
+		service = _get_drive_service(sa_json)
 
 		# Build archive folder structure (Year/Month/Supplier)
 		folder_path, target_folder_id = _build_folder_structure(
@@ -508,7 +521,7 @@ def move_file_to_archive(file_id: str, supplier_name: str = None, invoice_date: 
 		}
 
 	except Exception as e:
-		frappe.log_error("Drive Move Error", f"Failed to move {file_id} to archive: {str(e)}")
+		frappe.log_error(title="Drive Move Error", message=f"Failed to move {file_id} to archive: {str(e)}")
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 
 
@@ -522,14 +535,15 @@ def test_drive_connection():
 	if not settings.drive_integration_enabled:
 		return {"success": False, "message": "Drive integration is disabled"}
 
-	if not settings.drive_service_account_json:
+	sa_json = settings.get_password("drive_service_account_json")
+	if not sa_json:
 		return {"success": False, "message": "Service account JSON not configured"}
 
 	if not settings.drive_archive_folder_id:
 		return {"success": False, "message": "Archive folder ID not configured"}
 
 	try:
-		service = _get_drive_service(settings.drive_service_account_json)
+		service = _get_drive_service(sa_json)
 
 		# Try to get the root folder details
 		folder = service.files().get(fileId=settings.drive_archive_folder_id, fields='id, name', supportsAllDrives=True).execute()

@@ -118,13 +118,14 @@ frappe.ui.form.on('OCR Import', {
 		}
 
 		// Add "View Original Invoice" button and make Drive link clickable
-		if (!frm.is_new() && frm.doc.drive_link) {
+		if (!frm.is_new() && frm.doc.drive_link && frm.doc.drive_link.startsWith('https://')) {
 			frm.add_custom_button(__('View Original Invoice'), function() {
 				window.open(frm.doc.drive_link, '_blank');
 			}, __('Actions'));
 
-			// Render drive_link as clickable HTML
-			let link_html = `<a href="${frm.doc.drive_link}" target="_blank" style="word-break: break-all;">View in Google Drive</a>`;
+			// Render drive_link as clickable HTML (sanitize to prevent XSS)
+			let escaped_link = frappe.utils.escape_html(frm.doc.drive_link);
+			let link_html = `<a href="${escaped_link}" target="_blank" rel="noopener noreferrer" style="word-break: break-all;">View in Google Drive</a>`;
 			frm.fields_dict.drive_link.$wrapper.find('.like-disabled-input, .control-value').html(link_html);
 		}
 

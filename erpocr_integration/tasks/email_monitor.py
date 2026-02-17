@@ -25,9 +25,10 @@ def poll_email_inbox():
 		return
 
 	if not settings.email_account:
-		frappe.log_error("Email Monitoring Error", "Email monitoring enabled but no email account configured")
+		frappe.log_error(title="Email Monitoring Error", message="Email monitoring enabled but no email account configured")
 		return
 
+	mail = None
 	try:
 		# Get Email Account settings
 		email_account = frappe.get_doc("Email Account", settings.email_account)
@@ -35,33 +36,29 @@ def poll_email_inbox():
 		# Connect to IMAP
 		mail = _connect_imap(email_account)
 
-		# Debug: List all available folders
-		status, folders = mail.list()
-		if status == "OK":
-			frappe.logger().info(f"Available IMAP folders: {folders}")
-
 		# Select the OCR Invoices label/folder (for Gmail labels with spaces, use quotes)
-		# Gmail labels appear as IMAP folders
 		folder_name = '"OCR Invoices"'
 		try:
 			status, data = mail.select(folder_name)
-			frappe.logger().info(f"Tried to select folder {folder_name}, status: {status}, data: {data}")
 			if status != "OK":
 				# Try without quotes as fallback
 				status, data = mail.select("OCR Invoices")
-				frappe.logger().info(f"Tried to select folder 'OCR Invoices' (no quotes), status: {status}, data: {data}")
 				if status != "OK":
-					frappe.log_error("Email Monitoring Error", f"Failed to select folder '{folder_name}'. Make sure the Gmail label 'OCR Invoices' exists.\n\nAvailable folders: {folders}")
+					status, folders = mail.list()
+					frappe.log_error(
+						title="Email Monitoring Error",
+						message=f"Failed to select folder '{folder_name}'. Make sure the Gmail label 'OCR Invoices' exists.\n\nAvailable folders: {folders}"
+					)
 					return
 		except Exception as e:
-			frappe.log_error("Email Monitoring Error", f"Failed to select folder '{folder_name}': {str(e)}\n\nAvailable folders: {folders}")
+			frappe.log_error(title="Email Monitoring Error", message=f"Failed to select folder '{folder_name}': {str(e)}")
 			return
 
 		# Search for UNSEEN emails only (reduces load on growing folders)
 		# Duplicate check via Message-ID handles edge cases
 		status, messages = mail.uid('search', None, "UNSEEN")
 		if status != "OK":
-			frappe.log_error("Email Monitoring Error", "Failed to search for emails")
+			frappe.log_error(title="Email Monitoring Error", message="Failed to search for emails")
 			return
 
 		email_uids = messages[0].split()
@@ -78,7 +75,7 @@ def poll_email_inbox():
 				_process_email(mail, email_uid, email_account, settings, use_uid=True)
 			except Exception:
 				# Log error but continue with other emails
-				frappe.log_error("Email Monitoring Error", f"Failed to process email UID {email_uid}\n{frappe.get_traceback()}")
+				frappe.log_error(title="Email Monitoring Error", message=f"Failed to process email UID {email_uid}\n{frappe.get_traceback()}")
 
 		# Expunge deleted messages (if any were marked for deletion)
 		try:
@@ -89,9 +86,17 @@ def poll_email_inbox():
 		# Close connection
 		mail.close()
 		mail.logout()
+		mail = None  # Mark as closed
 
 	except Exception:
-		frappe.log_error("Email Monitoring Error", f"Email monitoring failed\n{frappe.get_traceback()}")
+		frappe.log_error(title="Email Monitoring Error", message=f"Email monitoring failed\n{frappe.get_traceback()}")
+	finally:
+		# Ensure IMAP connection is always closed, even on error
+		if mail:
+			try:
+				mail.logout()
+			except Exception:
+				pass
 
 
 def _connect_imap(email_account):
@@ -117,11 +122,14 @@ def _connect_imap(email_account):
 def _process_email(mail, email_id, email_account, settings, use_uid=False):
 	"""Process a single email and extract PDF attachments."""
 	try:
-		# Fetch email (use UID command if specified)
+		# Fetch email using BODY.PEEK[] to avoid marking as \Seen (read).
+		# RFC822 is equivalent to BODY[] which auto-sets \Seen flag.
+		# On Gmail, \Seen is global per message — marking read in "OCR Invoices"
+		# also marks read in Inbox. PEEK prevents this side effect.
 		if use_uid:
-			status, msg_data = mail.uid('fetch', email_id, "(RFC822)")
+			status, msg_data = mail.uid('fetch', email_id, "(BODY.PEEK[])")
 		else:
-			status, msg_data = mail.fetch(email_id, "(RFC822)")
+			status, msg_data = mail.fetch(email_id, "(BODY.PEEK[])")
 		if status != "OK":
 			frappe.logger().error(f"Email monitoring: Failed to fetch email {email_id}, status: {status}")
 			return
@@ -218,7 +226,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 			except Exception:
 				all_succeeded = False
 				error_msg = frappe.get_traceback()
-				frappe.log_error("Email Monitoring Error", f"Failed to process PDF {filename}\n{error_msg}")
+				frappe.log_error(title="Email Monitoring Error", message=f"Failed to process PDF {filename}\n{error_msg}")
 
 				# Create Error OCR Import so the failure is visible in the list
 				try:
@@ -234,7 +242,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					error_import.insert(ignore_permissions=True)
 					frappe.db.commit()  # nosemgrep
 				except Exception:
-					frappe.log_error("Email Monitoring Error", f"Failed to create error record for {filename}")
+					frappe.log_error(title="Email Monitoring Error", message=f"Failed to create error record for {filename}")
 
 		# Move to processed if all PDFs were handled (success or skipped)
 		if all_succeeded and not has_in_progress:
@@ -248,7 +256,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 				f"(will retry next poll)"
 			)
 	except Exception:
-		frappe.log_error("Email Monitoring Error", f"Failed to process email {email_id}\n{frappe.get_traceback()}")
+		frappe.log_error(title="Email Monitoring Error", message=f"Failed to process email {email_id}\n{frappe.get_traceback()}")
 
 
 def _move_to_processed_folder(mail, email_id, use_uid=False):
@@ -267,33 +275,31 @@ def _move_to_processed_folder(mail, email_id, use_uid=False):
 			('(OCR\\ Processed)', '(OCR\\ Invoices)'),  # Escaped spaces in parens
 		]
 
-		success = False
 		for idx, (add_label, remove_label) in enumerate(label_attempts, 1):
 			try:
 				# Add new label first
 				if use_uid:
-					result = mail.uid('store', email_id, '+X-GM-LABELS', add_label)
+					mail.uid('store', email_id, '+X-GM-LABELS', add_label)
 				else:
-					result = mail.store(email_id, '+X-GM-LABELS', add_label)
-				frappe.logger().info(f"Email monitoring: [Attempt {idx}] Added label {add_label}: {result}")
+					mail.store(email_id, '+X-GM-LABELS', add_label)
 
 				# Remove old label
 				if use_uid:
-					result = mail.uid('store', email_id, '-X-GM-LABELS', remove_label)
+					mail.uid('store', email_id, '-X-GM-LABELS', remove_label)
 				else:
-					result = mail.store(email_id, '-X-GM-LABELS', remove_label)
-				frappe.logger().info(f"Email monitoring: [Attempt {idx}] Removed label {remove_label}: {result}")
+					mail.store(email_id, '-X-GM-LABELS', remove_label)
 
-				success = True
 				break  # If we got here without exception, it worked
 			except Exception as e:
-				frappe.logger().error(f"Email monitoring: [Attempt {idx}] Label format {add_label}/{remove_label} failed: {str(e)}")
 				if idx == len(label_attempts):
 					# Last attempt failed, log comprehensive error
-					frappe.log_error("Email Label Manipulation Failed", f"All label format attempts failed for email {email_id}\n\nLast error: {str(e)}")
+					frappe.log_error(
+						title="Email Label Manipulation Failed",
+						message=f"All label format attempts failed for email {email_id}\n\nLast error: {str(e)}"
+					)
 
 	except Exception:
-		frappe.log_error("Email Monitoring Error", f"Failed to move email {email_id} to OCR Processed\n{frappe.get_traceback()}")
+		frappe.log_error(title="Email Monitoring Error", message=f"Failed to move email {email_id} to OCR Processed\n{frappe.get_traceback()}")
 
 
 def _extract_pdfs_from_email(msg) -> list[tuple[bytes, str]]:
@@ -371,22 +377,3 @@ def trigger_email_check():
 		queue="long"
 	)
 	return {"message": _("Email check triggered. Check background jobs for status.")}
-
-
-@frappe.whitelist()
-def list_imap_folders():
-	"""Debug function to list all IMAP folders."""
-	frappe.only_for("System Manager")
-
-	settings = frappe.get_single("OCR Settings")
-	if not settings.email_account:
-		return {"error": "No email account configured"}
-
-	email_account = frappe.get_doc("Email Account", settings.email_account)
-	mail = _connect_imap(email_account)
-
-	status, folders = mail.list()
-	mail.logout()
-
-	folder_list = [f.decode() for f in folders] if status == "OK" else []
-	return {"folders": folder_list}

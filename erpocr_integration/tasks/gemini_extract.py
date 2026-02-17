@@ -50,7 +50,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 	try:
 		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model)
 	except Exception as e:
-		frappe.log_error(f"Gemini API call failed for {filename}\n{frappe.get_traceback()}")
+		frappe.log_error(title="Gemini API Error", message=f"Gemini API call failed for {filename}\n{frappe.get_traceback()}")
 		raise Exception(f"Failed to call Gemini API: {str(e)}")
 
 	# Validate response
@@ -58,7 +58,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 	if not is_valid:
 		# Truncate response to avoid leaking full OCR/PII data into Error Log
 		truncated = json.dumps(response_data, indent=2)[:500]
-		frappe.log_error(f"Invalid Gemini response for {filename}\n{error_msg}\n{truncated}...")
+		frappe.log_error(title="Invalid Gemini Response", message=f"Invalid Gemini response for {filename}\n{error_msg}\n{truncated}...")
 		raise Exception(f"Invalid Gemini response: {error_msg}")
 
 	# Extract the JSON content from response
@@ -82,7 +82,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 	except Exception as e:
 		# Truncate response to avoid leaking full OCR/PII data into Error Log
 		truncated = json.dumps(response_data, indent=2)[:500]
-		frappe.log_error(f"Failed to parse Gemini response for {filename}\n{frappe.get_traceback()}\n{truncated}...")
+		frappe.log_error(title="Gemini Parse Error", message=f"Failed to parse Gemini response for {filename}\n{frappe.get_traceback()}\n{truncated}...")
 		raise Exception(f"Failed to parse Gemini response: {str(e)}")
 
 	# Extract invoices array from response
@@ -291,7 +291,7 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 			error_body = ""
 			try:
 				error_body = e.response.text
-			except:
+			except Exception:
 				pass
 
 			# Truncate error body to prevent sensitive invoice data from being logged
@@ -301,8 +301,8 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 			if e.response and e.response.status_code in (429, 500, 503) and attempt < max_retries - 1:
 				wait_time = 2 ** attempt  # 1s, 2s, 4s
 				frappe.log_error(
-					"Gemini API Rate Limit",
-					f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}"
+					title="Gemini API Rate Limit",
+					message=f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}"
 				)
 				time.sleep(wait_time)
 				continue
@@ -314,10 +314,10 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 				# Also try to log it (may fail if in nested error context)
 				try:
 					frappe.log_error(
-						"Gemini API Error",
-						f"{error_summary}\n\nResponse (first 500 chars):\n{error_body_truncated}\n\nRequest URL: {url}"
+						title="Gemini API Error",
+						message=f"{error_summary}\n\nResponse (first 500 chars):\n{error_body_truncated}\n\nRequest URL: {url}"
 					)
-				except:
+				except Exception:
 					pass  # Ignore if logging fails
 
 				raise
@@ -325,7 +325,7 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 		except requests.exceptions.Timeout:
 			if attempt < max_retries - 1:
 				wait_time = 2 ** attempt
-				frappe.log_error("Gemini API Timeout", f"Request timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+				frappe.log_error(title="Gemini API Timeout", message=f"Request timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
 				time.sleep(wait_time)
 				continue
 			else:
@@ -384,8 +384,7 @@ def _transform_to_ocr_import_format(gemini_data: dict, filename: str) -> dict:
 	Transform Gemini response to OCR Import dict format.
 	Applies same cleaning and parsing as Nanonets pipeline.
 	"""
-	# Import parsers from process_import (reuse existing code)
-	from erpocr_integration.tasks.process_import import _clean_ocr_text, _parse_amount, _parse_date, _parse_float
+	from erpocr_integration.tasks.process_import import _clean_ocr_text, _parse_date
 
 	# Extract and clean header fields
 	header_fields = {
