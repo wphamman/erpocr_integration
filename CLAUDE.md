@@ -188,7 +188,7 @@ bench restart
 - [x] Multi-invoice PDF support (one PDF → multiple OCR Imports)
 - [x] Google Drive folder polling (15-min scan inbox + move to archive)
 - [x] Google Drive archiving (Year/Month/Supplier folder structure)
-- [ ] Multi-file upload in UI (drag & drop multiple PDFs)
+- [x] Batch upload (covered by Drive scan folder — drop multiple PDFs, auto-processed)
 - [ ] OCR confidence scores from Gemini metadata
 - [ ] Custom prompt per company
 - [ ] Dashboard / statistics

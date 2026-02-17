@@ -317,21 +317,23 @@ def _process_scan_file(service, file_info: dict, settings):
 	drive_file_id = file_info["id"]
 	filename = file_info["name"]
 
-	# Dedup: check if this file was already processed
-	existing = frappe.db.get_value(
+	# Dedup: check ALL OCR Import rows for this drive_file_id
+	# (multi-invoice PDFs create multiple rows with the same drive_file_id)
+	existing_rows = frappe.get_all(
 		"OCR Import",
-		{"drive_file_id": drive_file_id},
-		["name", "status"],
-		as_dict=True,
+		filters={"drive_file_id": drive_file_id},
+		fields=["name", "status"],
 	)
-	if existing:
-		if existing.status == "Error":
-			# Previously failed — delete stale record so it can be retried
-			frappe.delete_doc("OCR Import", existing.name, force=True, ignore_permissions=True)
+	if existing_rows:
+		all_error = all(row.status == "Error" for row in existing_rows)
+		if all_error:
+			# All records failed — delete all so the file can be retried from scratch
+			for row in existing_rows:
+				frappe.delete_doc("OCR Import", row.name, force=True, ignore_permissions=True)
 			frappe.db.commit()  # nosemgrep
-			frappe.logger().info(f"Drive scan: Retrying previously failed {filename}")
+			frappe.logger().info(f"Drive scan: Retrying previously failed {filename} ({len(existing_rows)} record(s) cleared)")
 		else:
-			# Already processed (Pending/Matched/Completed/etc.) — skip
+			# At least one record succeeded or is still processing — skip
 			return
 
 	# Download PDF content
