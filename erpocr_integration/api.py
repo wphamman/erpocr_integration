@@ -64,16 +64,23 @@ def upload_pdf():
 	frappe.db.commit()
 
 	# Enqueue background processing
-	frappe.enqueue(
-		"erpocr_integration.api.gemini_process",
-		queue="long",
-		timeout=300,  # 5 minutes
-		pdf_content=pdf_content,
-		filename=filename,
-		ocr_import_name=ocr_import.name,
-		source_type="Gemini Manual Upload",
-		uploaded_by=frappe.session.user,
-	)
+	try:
+		frappe.enqueue(
+			"erpocr_integration.api.gemini_process",
+			queue="long",
+			timeout=300,  # 5 minutes
+			pdf_content=pdf_content,
+			filename=filename,
+			ocr_import_name=ocr_import.name,
+			source_type="Gemini Manual Upload",
+			uploaded_by=frappe.session.user,
+		)
+	except Exception:
+		# Enqueue failed — mark placeholder as Error so it doesn't sit as stale Pending
+		frappe.db.set_value("OCR Import", ocr_import.name, "status", "Error")
+		frappe.db.commit()
+		frappe.log_error(title="OCR Upload Error", message=f"Failed to enqueue processing for {filename}\n{frappe.get_traceback()}")
+		frappe.throw(_("Failed to start processing. Please try again."))
 
 	return {
 		"ocr_import": ocr_import.name,
@@ -245,7 +252,10 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 	ocr_import.tax_amount = header_fields.get("tax_amount", 0.0)
 	ocr_import.total_amount = header_fields.get("total_amount", 0.0)
 	ocr_import.currency = header_fields.get("currency", "")
-	raw_confidence = float(header_fields.get("confidence") or 0.0)
+	try:
+		raw_confidence = float(header_fields.get("confidence") or 0.0)
+	except (ValueError, TypeError):
+		raw_confidence = 0.0
 	ocr_import.confidence = max(0.0, min(100.0, raw_confidence * 100))  # Clamp to 0-100
 	ocr_import.raw_payload = extracted_data.get("raw_response", "")
 

@@ -90,7 +90,7 @@ frappe.ui.form.on('OCR Import', {
 		}
 
 		// Add retry/re-upload buttons for failed extractions
-		if (frm.doc.status === 'Error' && (frm.doc.source_type === 'Gemini Manual Upload' || frm.doc.source_type === 'Gemini Email')) {
+		if (frm.doc.status === 'Error' && ['Gemini Manual Upload', 'Gemini Email', 'Gemini Drive Scan'].includes(frm.doc.source_type)) {
 			if (frm.doc.drive_file_id) {
 				// PDF is in Drive — offer retry
 				frm.add_custom_button(__('Retry Extraction'), function() {

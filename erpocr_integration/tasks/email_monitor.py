@@ -195,6 +195,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					continue
 
 			pdfs_to_process += 1
+			ocr_import = None
 			try:
 				# Create placeholder OCR Import record
 				ocr_import = frappe.get_doc({
@@ -228,21 +229,24 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 				error_msg = frappe.get_traceback()
 				frappe.log_error(title="Email Monitoring Error", message=f"Failed to process PDF {filename}\n{error_msg}")
 
-				# Create Error OCR Import so the failure is visible in the list
+				# Mark the existing placeholder as Error (don't create a second record)
 				try:
-					error_import = frappe.get_doc({
-						"doctype": "OCR Import",
-						"status": "Error",
-						"source_filename": filename,
-						"email_message_id": message_id,
-						"source_type": "Gemini Email",
-						"uploaded_by": uploaded_by,
-						"company": settings.default_company,
-					})
-					error_import.insert(ignore_permissions=True)
+					if ocr_import and ocr_import.name:
+						frappe.db.set_value("OCR Import", ocr_import.name, "status", "Error")
+					else:
+						# Placeholder wasn't created — create an Error record
+						frappe.get_doc({
+							"doctype": "OCR Import",
+							"status": "Error",
+							"source_filename": filename,
+							"email_message_id": message_id,
+							"source_type": "Gemini Email",
+							"uploaded_by": uploaded_by,
+							"company": settings.default_company,
+						}).insert(ignore_permissions=True)
 					frappe.db.commit()  # nosemgrep
 				except Exception:
-					frappe.log_error(title="Email Monitoring Error", message=f"Failed to create error record for {filename}")
+					frappe.log_error(title="Email Monitoring Error", message=f"Failed to update error status for {filename}")
 
 		# Move to processed if all PDFs were handled (success or skipped)
 		if all_succeeded and not has_in_progress:
@@ -279,15 +283,21 @@ def _move_to_processed_folder(mail, email_id, use_uid=False):
 			try:
 				# Add new label first
 				if use_uid:
-					mail.uid('store', email_id, '+X-GM-LABELS', add_label)
+					status, _ = mail.uid('store', email_id, '+X-GM-LABELS', add_label)
 				else:
-					mail.store(email_id, '+X-GM-LABELS', add_label)
+					status, _ = mail.store(email_id, '+X-GM-LABELS', add_label)
+
+				if status != "OK":
+					raise Exception(f"Add label returned {status}")
 
 				# Remove old label
 				if use_uid:
-					mail.uid('store', email_id, '-X-GM-LABELS', remove_label)
+					status, _ = mail.uid('store', email_id, '-X-GM-LABELS', remove_label)
 				else:
-					mail.store(email_id, '-X-GM-LABELS', remove_label)
+					status, _ = mail.store(email_id, '-X-GM-LABELS', remove_label)
+
+				if status != "OK":
+					raise Exception(f"Remove label returned {status}")
 
 				break  # If we got here without exception, it worked
 			except Exception as e:
