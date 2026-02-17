@@ -189,9 +189,8 @@ bench restart
 - [x] Google Drive folder polling (15-min scan inbox + move to archive)
 - [x] Google Drive archiving (Year/Month/Supplier folder structure)
 - [x] Batch upload (covered by Drive scan folder — drop multiple PDFs, auto-processed)
-- [ ] OCR confidence scores from Gemini metadata
-- [ ] Custom prompt per company
-- [ ] Dashboard / statistics
+- [x] OCR confidence scores (Gemini self-reported, color-coded badge on form)
+- [x] Dashboard workspace (number cards, status chart, shortcuts, link cards)
 - [ ] Test suite
 
 ## Configuration

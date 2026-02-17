@@ -1,0 +1,116 @@
+{
+	"charts": [
+		{
+			"chart_name": "OCR Imports by Status",
+			"label": "OCR Imports by Status"
+		}
+	],
+	"content": "[{\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>OCR Import Overview</b></span>\",\"col\":12}},{\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Pending OCR Imports\",\"col\":3}},{\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Completed OCR Imports\",\"col\":3}},{\"type\":\"number_card\",\"data\":{\"number_card_name\":\"OCR Errors\",\"col\":3}},{\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Avg OCR Confidence\",\"col\":3}},{\"type\":\"chart\",\"data\":{\"chart_name\":\"OCR Imports by Status\",\"col\":12}},{\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Shortcuts</b></span>\",\"col\":12}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"OCR Import\",\"col\":4}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"OCR Settings\",\"col\":4}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Purchase Invoice\",\"col\":4}},{\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Configuration</b></span>\",\"col\":12}},{\"type\":\"card\",\"data\":{\"card_name\":\"OCR Records\",\"col\":4}},{\"type\":\"card\",\"data\":{\"card_name\":\"Matching & Aliases\",\"col\":4}},{\"type\":\"card\",\"data\":{\"card_name\":\"Settings\",\"col\":4}}]",
+	"creation": "2025-01-01 00:00:00.000000",
+	"custom_blocks": [],
+	"doctype": "Workspace",
+	"for_user": "",
+	"hide_custom": 0,
+	"icon": "file",
+	"idx": 0,
+	"is_hidden": 0,
+	"label": "ERPNext OCR",
+	"links": [
+		{
+			"label": "OCR Records",
+			"type": "Card Break"
+		},
+		{
+			"label": "OCR Import",
+			"link_to": "OCR Import",
+			"link_type": "DocType",
+			"onboard": 1,
+			"type": "Link"
+		},
+		{
+			"label": "Matching & Aliases",
+			"type": "Card Break"
+		},
+		{
+			"label": "OCR Supplier Alias",
+			"link_to": "OCR Supplier Alias",
+			"link_type": "DocType",
+			"type": "Link"
+		},
+		{
+			"label": "OCR Item Alias",
+			"link_to": "OCR Item Alias",
+			"link_type": "DocType",
+			"type": "Link"
+		},
+		{
+			"label": "OCR Service Mapping",
+			"link_to": "OCR Service Mapping",
+			"link_type": "DocType",
+			"type": "Link"
+		},
+		{
+			"label": "Settings",
+			"type": "Card Break"
+		},
+		{
+			"label": "OCR Settings",
+			"link_to": "OCR Settings",
+			"link_type": "DocType",
+			"type": "Link"
+		}
+	],
+	"modified": "2025-01-01 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "ERPNext OCR",
+	"name": "ERPNext OCR",
+	"number_cards": [
+		{
+			"number_card_name": "Pending OCR Imports",
+			"label": "Pending Review"
+		},
+		{
+			"number_card_name": "Completed OCR Imports",
+			"label": "Completed"
+		},
+		{
+			"number_card_name": "OCR Errors",
+			"label": "Errors"
+		},
+		{
+			"number_card_name": "Avg OCR Confidence",
+			"label": "Avg Confidence"
+		}
+	],
+	"owner": "Administrator",
+	"parent_page": "",
+	"public": 1,
+	"restrict_to_domain": "",
+	"roles": [],
+	"sequence_id": 25.0,
+	"shortcuts": [
+		{
+			"color": "#4DB6AC",
+			"doc_view": "List",
+			"label": "OCR Import",
+			"link_to": "OCR Import",
+			"stats_filter": "",
+			"type": "DocType"
+		},
+		{
+			"color": "#7986CB",
+			"doc_view": "",
+			"label": "OCR Settings",
+			"link_to": "OCR Settings",
+			"type": "DocType"
+		},
+		{
+			"color": "#81C784",
+			"doc_view": "List",
+			"label": "Purchase Invoice",
+			"link_to": "Purchase Invoice",
+			"type": "DocType"
+		}
+	],
+	"title": "ERPNext OCR"
+}

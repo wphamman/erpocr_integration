@@ -1,0 +1,63 @@
+[
+	{
+		"name": "Pending OCR Imports",
+		"label": "Pending Review",
+		"doctype": "Number Card",
+		"document_type": "OCR Import",
+		"function": "Count",
+		"filters_json": "[[\"OCR Import\",\"status\",\"in\",[\"Pending\",\"Needs Review\"]]]",
+		"is_public": 1,
+		"is_standard": 0,
+		"module": "ERPNext OCR",
+		"show_percentage_stats": 1,
+		"stats_time_interval": "Daily",
+		"color": "#FF6F00",
+		"type": "Document Type"
+	},
+	{
+		"name": "Completed OCR Imports",
+		"label": "Completed",
+		"doctype": "Number Card",
+		"document_type": "OCR Import",
+		"function": "Count",
+		"filters_json": "[[\"OCR Import\",\"status\",\"=\",\"Completed\"]]",
+		"is_public": 1,
+		"is_standard": 0,
+		"module": "ERPNext OCR",
+		"show_percentage_stats": 1,
+		"stats_time_interval": "Monthly",
+		"color": "#43A047",
+		"type": "Document Type"
+	},
+	{
+		"name": "OCR Errors",
+		"label": "Errors",
+		"doctype": "Number Card",
+		"document_type": "OCR Import",
+		"function": "Count",
+		"filters_json": "[[\"OCR Import\",\"status\",\"=\",\"Error\"]]",
+		"is_public": 1,
+		"is_standard": 0,
+		"module": "ERPNext OCR",
+		"show_percentage_stats": 1,
+		"stats_time_interval": "Daily",
+		"color": "#E53935",
+		"type": "Document Type"
+	},
+	{
+		"name": "Avg OCR Confidence",
+		"label": "Avg Confidence",
+		"doctype": "Number Card",
+		"document_type": "OCR Import",
+		"function": "Average",
+		"aggregate_function_based_on": "confidence",
+		"filters_json": "[[\"OCR Import\",\"status\",\"not in\",[\"Pending\",\"Error\"]]]",
+		"is_public": 1,
+		"is_standard": 0,
+		"module": "ERPNext OCR",
+		"show_percentage_stats": 1,
+		"stats_time_interval": "Monthly",
+		"color": "#1E88E5",
+		"type": "Document Type"
+	}
+]

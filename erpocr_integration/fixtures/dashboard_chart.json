@@ -1,0 +1,20 @@
+[
+	{
+		"name": "OCR Imports by Status",
+		"chart_name": "OCR Imports by Status",
+		"doctype": "Dashboard Chart",
+		"chart_type": "Count",
+		"document_type": "OCR Import",
+		"based_on": "creation",
+		"group_by_type": "Count",
+		"group_by_based_on": "status",
+		"timespan": "Last Quarter",
+		"time_interval": "Weekly",
+		"filters_json": "[]",
+		"type": "Line",
+		"is_public": 1,
+		"is_standard": 0,
+		"module": "ERPNext OCR",
+		"timeseries": 1
+	}
+]

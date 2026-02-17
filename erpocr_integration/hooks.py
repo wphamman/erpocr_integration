@@ -103,4 +103,7 @@ scheduler_events = {
 # Fixtures
 # --------
 
-fixtures = []
+fixtures = [
+	{"dt": "Number Card", "filters": [["module", "=", "ERPNext OCR"]]},
+	{"dt": "Dashboard Chart", "filters": [["module", "=", "ERPNext OCR"]]},
+]
