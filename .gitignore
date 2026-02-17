@@ -13,9 +13,9 @@ dist/
 .claude/
 nul
 
-# Test files with hardcoded API keys (local testing only)
-test_*.py
-check_logs.py
+# Ad-hoc test files in repo root (may contain API keys — local testing only)
+/test_*.py
+/check_logs.py
 
 # Google Cloud service account keys — NEVER commit
 *service-account*.json
