@@ -10,9 +10,17 @@
 		"column_break_1",
 		"email_monitoring_enabled",
 		"email_account",
+		"section_break_drive",
+		"drive_integration_enabled",
+		"drive_service_account_json",
+		"column_break_drive",
+		"drive_archive_folder_id",
+		"drive_scan_folder_id",
 		"section_break_defaults",
 		"default_company",
 		"default_warehouse",
+		"default_tax_template",
+		"non_vat_tax_template",
 		"column_break_defaults",
 		"default_expense_account",
 		"default_cost_center",
@@ -37,7 +45,8 @@
 			"fieldname": "gemini_model",
 			"fieldtype": "Select",
 			"label": "Gemini Model",
-			"options": "gemini-2.5-flash\ngemini-2.0-flash\ngemini-1.5-flash"
+			"options": "gemini-2.5-flash\ngemini-2.5-pro\ngemini-2.0-flash\ngemini-flash-latest",
+			"description": "gemini-2.5-flash is recommended (fast & cost-effective)"
 		},
 		{
 			"fieldname": "column_break_1",
@@ -58,6 +67,44 @@
 			"options": "Email Account"
 		},
 		{
+			"fieldname": "section_break_drive",
+			"fieldtype": "Section Break",
+			"label": "Google Drive Integration"
+		},
+		{
+			"default": "1",
+			"fieldname": "drive_integration_enabled",
+			"fieldtype": "Check",
+			"label": "Enable Drive Integration",
+			"description": "Archive processed invoices to Google Drive"
+		},
+		{
+			"depends_on": "eval:doc.drive_integration_enabled",
+			"fieldname": "drive_service_account_json",
+			"fieldtype": "Code",
+			"label": "Service Account JSON",
+			"options": "JSON",
+			"description": "Paste the entire JSON content from your Google Cloud service account key file"
+		},
+		{
+			"fieldname": "column_break_drive",
+			"fieldtype": "Column Break"
+		},
+		{
+			"depends_on": "eval:doc.drive_integration_enabled",
+			"fieldname": "drive_archive_folder_id",
+			"fieldtype": "Data",
+			"label": "Archive Folder ID",
+			"description": "Google Drive folder ID where invoices will be archived (e.g., from URL: drive.google.com/drive/folders/FOLDER_ID)"
+		},
+		{
+			"depends_on": "eval:doc.drive_integration_enabled",
+			"fieldname": "drive_scan_folder_id",
+			"fieldtype": "Data",
+			"label": "Scan Inbox Folder ID",
+			"description": "Folder ID where scanned invoices are uploaded for automatic processing (checked every 15 minutes)"
+		},
+		{
 			"fieldname": "section_break_defaults",
 			"fieldtype": "Section Break",
 			"label": "ERPNext Defaults"
@@ -76,6 +123,20 @@
 			"fieldtype": "Link",
 			"label": "Default Warehouse",
 			"options": "Warehouse"
+		},
+		{
+			"description": "Applied when OCR detects tax on the invoice (e.g., 1 - Standard VAT for SA 15% VAT)",
+			"fieldname": "default_tax_template",
+			"fieldtype": "Link",
+			"label": "VAT Tax Template",
+			"options": "Purchase Taxes and Charges Template"
+		},
+		{
+			"description": "Applied when no tax detected — foreign suppliers or non-VAT-registered suppliers (e.g., Z-Not Registered - CC)",
+			"fieldname": "non_vat_tax_template",
+			"fieldtype": "Link",
+			"label": "Non-VAT Tax Template",
+			"options": "Purchase Taxes and Charges Template"
 		},
 		{
 			"fieldname": "column_break_defaults",

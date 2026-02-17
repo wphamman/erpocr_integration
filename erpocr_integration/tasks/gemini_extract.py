@@ -10,21 +10,23 @@ import requests
 from frappe import _
 
 
-def extract_invoice_data(pdf_content: bytes, filename: str) -> dict:
+def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 	"""
 	Extract invoice data from PDF using Gemini 2.5 Flash API.
+
+	Supports multi-invoice PDFs — returns one result per invoice found.
 
 	Args:
 		pdf_content: Raw PDF file bytes
 		filename: Original filename for logging
 
 	Returns:
-		dict: {
+		list[dict]: Each dict contains:
 			"header_fields": {supplier_name, invoice_number, dates, amounts, ...},
 			"line_items": [{description, product_code, qty, rate, amount}, ...],
-			"raw_response": str,  # Original Gemini response
-			"source_filename": str
-		}
+			"raw_response": str,  # Original Gemini response (shared across all)
+			"source_filename": str,
+			"extraction_time": float
 
 	Raises:
 		Exception: If API call fails or returns invalid data
@@ -54,7 +56,9 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> dict:
 	# Validate response
 	is_valid, error_msg = _validate_gemini_response(response_data)
 	if not is_valid:
-		frappe.log_error(f"Invalid Gemini response for {filename}\n{error_msg}\n{json.dumps(response_data, indent=2)}")
+		# Truncate response to avoid leaking full OCR/PII data into Error Log
+		truncated = json.dumps(response_data, indent=2)[:500]
+		frappe.log_error(f"Invalid Gemini response for {filename}\n{error_msg}\n{truncated}...")
 		raise Exception(f"Invalid Gemini response: {error_msg}")
 
 	# Extract the JSON content from response
@@ -76,20 +80,35 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> dict:
 		extracted_data = json.loads(text)
 
 	except Exception as e:
-		frappe.log_error(f"Failed to parse Gemini response for {filename}\n{frappe.get_traceback()}\n{json.dumps(response_data, indent=2)}")
+		# Truncate response to avoid leaking full OCR/PII data into Error Log
+		truncated = json.dumps(response_data, indent=2)[:500]
+		frappe.log_error(f"Failed to parse Gemini response for {filename}\n{frappe.get_traceback()}\n{truncated}...")
 		raise Exception(f"Failed to parse Gemini response: {str(e)}")
 
-	# Transform to OCR Import format
-	result = _transform_to_ocr_import_format(extracted_data, filename)
-	result["raw_response"] = json.dumps(response_data, indent=2)
-	result["extraction_time"] = time.time() - start_time
+	# Extract invoices array from response
+	invoices_raw = extracted_data.get("invoices", [])
+	if not invoices_raw:
+		raise Exception("No invoices found in Gemini response")
 
-	return result
+	raw_response = json.dumps(response_data, indent=2)
+	extraction_time = time.time() - start_time
+
+	# Transform each invoice to OCR Import format
+	results = []
+	for invoice_data in invoices_raw:
+		result = _transform_to_ocr_import_format(invoice_data, filename)
+		result["raw_response"] = raw_response
+		result["extraction_time"] = extraction_time
+		results.append(result)
+
+	return results
 
 
 def _build_extraction_prompt() -> str:
 	"""Construct prompt for Gemini API invoice extraction."""
-	return """Extract the following information from this invoice PDF:
+	return """Extract ALL invoices from this PDF document. The PDF may contain one or multiple invoices.
+
+For EACH invoice found, extract:
 
 **Supplier Information:**
 - Full supplier/vendor name exactly as printed on the invoice
@@ -114,20 +133,22 @@ For each product or service line item in the invoice table, extract:
 - Line amount / Total (total for this line = quantity × unit price)
 
 **Important Instructions:**
+- If the PDF contains multiple invoices (e.g., a statement or batch), return each as a separate entry in the invoices array
+- If the PDF contains only one invoice, return an array with one entry
 - Return all dates in YYYY-MM-DD format (convert from any format you see)
 - Return all amounts as numeric values WITHOUT currency symbols (e.g., 1234.56 not R1,234.56)
 - If a field is not found or not visible, return null for that field
 - For line items, skip any header rows - only extract actual data rows
 - Product code may appear in a separate column from the description - extract both if available
-- If you see multiple tables, extract all line items from all tables
+- If you see multiple tables within a single invoice, extract all line items from all tables
 - Be precise with amounts - do not round or approximate
 
 Return the extracted data as structured JSON matching the provided schema."""
 
 
 def _build_extraction_schema() -> dict:
-	"""Build JSON schema for Gemini structured output."""
-	return {
+	"""Build JSON schema for Gemini structured output. Supports multi-invoice PDFs."""
+	invoice_schema = {
 		"type": "object",
 		"properties": {
 			"supplier_name": {
@@ -135,8 +156,8 @@ def _build_extraction_schema() -> dict:
 				"description": "Full name of the supplier/vendor"
 			},
 			"supplier_tax_id": {
-				"type": ["string", "null"],
-				"description": "Supplier's tax ID/VAT number/registration number"
+				"type": "string",
+				"description": "Supplier's tax ID/VAT number/registration number (empty string if not present)"
 			},
 			"invoice_number": {
 				"type": "string",
@@ -147,20 +168,24 @@ def _build_extraction_schema() -> dict:
 				"description": "Invoice date in YYYY-MM-DD format"
 			},
 			"due_date": {
-				"type": ["string", "null"],
-				"description": "Payment due date in YYYY-MM-DD format"
+				"type": "string",
+				"description": "Payment due date in YYYY-MM-DD format (empty string if not present)"
 			},
 			"subtotal": {
-				"type": ["number", "null"],
-				"description": "Subtotal amount before tax"
+				"type": "number",
+				"description": "Subtotal amount before tax (0 if not shown separately)"
 			},
 			"tax_amount": {
-				"type": ["number", "null"],
-				"description": "Total tax/VAT amount"
+				"type": "number",
+				"description": "Total tax/VAT amount (0 if not shown separately)"
 			},
 			"total_amount": {
 				"type": "number",
 				"description": "Final total amount of the invoice"
+			},
+			"currency": {
+				"type": "string",
+				"description": "Currency code of the invoice (e.g., USD, ZAR, EUR, GBP). If not explicitly shown, infer from context or symbols."
 			},
 			"line_items": {
 				"type": "array",
@@ -173,8 +198,8 @@ def _build_extraction_schema() -> dict:
 							"description": "Description of the item or service"
 						},
 						"product_code": {
-							"type": ["string", "null"],
-							"description": "Product code, SKU, or item code if present"
+							"type": "string",
+							"description": "Product code, SKU, or item code (empty string if not present)"
 						},
 						"quantity": {
 							"type": "number",
@@ -189,11 +214,23 @@ def _build_extraction_schema() -> dict:
 							"description": "Total for this line (quantity × unit_price)"
 						}
 					},
-					"required": ["description", "quantity", "unit_price", "amount"]
+					"required": ["description", "product_code", "quantity", "unit_price", "amount"]
 				}
 			}
 		},
-		"required": ["supplier_name", "invoice_number", "invoice_date", "total_amount", "line_items"]
+		"required": ["supplier_name", "supplier_tax_id", "invoice_number", "invoice_date", "due_date", "subtotal", "tax_amount", "total_amount", "line_items"]
+	}
+
+	return {
+		"type": "object",
+		"properties": {
+			"invoices": {
+				"type": "array",
+				"description": "Array of invoices extracted from the PDF. Most PDFs contain one invoice, but statements or batch scans may contain multiple.",
+				"items": invoice_schema
+			}
+		},
+		"required": ["invoices"]
 	}
 
 
@@ -239,17 +276,39 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 			return response.json()
 
 		except requests.exceptions.HTTPError as e:
+			# Get error response body and sanitize (truncate to prevent sensitive data leakage)
+			error_body = ""
+			try:
+				error_body = e.response.text
+			except:
+				pass
+
+			# Truncate error body to prevent sensitive invoice data from being logged
+			error_body_truncated = error_body[:500] + "..." if len(error_body) > 500 else error_body
+
 			# Rate limit (429) or server error (5xx) - retry
 			if e.response and e.response.status_code in (429, 500, 503) and attempt < max_retries - 1:
 				wait_time = 2 ** attempt  # 1s, 2s, 4s
 				frappe.log_error(
 					"Gemini API Rate Limit",
-					f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})"
+					f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}"
 				)
 				time.sleep(wait_time)
 				continue
 			else:
 				# Non-retryable error or max retries reached
+				# Log truncated error (avoid sensitive data in logs/stdout)
+				error_summary = f"HTTP {e.response.status_code if e.response else 'Unknown'} Error"
+
+				# Also try to log it (may fail if in nested error context)
+				try:
+					frappe.log_error(
+						"Gemini API Error",
+						f"{error_summary}\n\nResponse (first 500 chars):\n{error_body_truncated}\n\nRequest URL: {url}"
+					)
+				except:
+					pass  # Ignore if logging fails
+
 				raise
 
 		except requests.exceptions.Timeout:
@@ -327,6 +386,7 @@ def _transform_to_ocr_import_format(gemini_data: dict, filename: str) -> dict:
 		"subtotal": gemini_data.get("subtotal") or 0.0,
 		"tax_amount": gemini_data.get("tax_amount") or 0.0,
 		"total_amount": gemini_data.get("total_amount", 0.0),
+		"currency": (gemini_data.get("currency") or "").upper().strip(),  # Normalize to uppercase
 	}
 
 	# Extract and clean line items

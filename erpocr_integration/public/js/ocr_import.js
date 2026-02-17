@@ -2,6 +2,17 @@
 // For license information, please see license.txt
 
 frappe.ui.form.on('OCR Import', {
+	setup: function(frm) {
+		// Filter tax template by company
+		frm.set_query('tax_template', function() {
+			return {
+				filters: {
+					company: frm.doc.company
+				}
+			};
+		});
+	},
+
 	refresh: function(frm) {
 		// Add "Upload PDF" button for new records
 		if (frm.is_new()) {
@@ -78,27 +89,51 @@ frappe.ui.form.on('OCR Import', {
 			}, __('Actions'));
 		}
 
-		// Add "Retry Extraction" button for failed uploads
+		// Add retry/re-upload buttons for failed extractions
 		if (frm.doc.status === 'Error' && (frm.doc.source_type === 'Gemini Manual Upload' || frm.doc.source_type === 'Gemini Email')) {
-			frm.add_custom_button(__('Retry Extraction'), function() {
-				frappe.call({
-					method: 'erpocr_integration.api.retry_gemini_extraction',
-					args: {ocr_import: frm.doc.name},
-					callback: function(r) {
-						if (!r.exc) {
-							frm.reload_doc();
-							frappe.show_alert({
-								message: __('Retrying extraction...'),
-								indicator: 'blue'
-							});
+			if (frm.doc.drive_file_id) {
+				// PDF is in Drive — offer retry
+				frm.add_custom_button(__('Retry Extraction'), function() {
+					frappe.call({
+						method: 'erpocr_integration.api.retry_gemini_extraction',
+						args: {ocr_import: frm.doc.name},
+						callback: function(r) {
+							if (!r.exc) {
+								frm.reload_doc();
+								frappe.show_alert({
+									message: __('Retrying extraction...'),
+									indicator: 'blue'
+								});
+								poll_extraction_status(frm.doc.name);
+							}
 						}
-					}
-				});
+					});
+				}, __('Actions'));
+			} else {
+				// No PDF available — offer re-upload
+				frm.add_custom_button(__('Re-upload PDF'), function() {
+					frappe.set_route('Form', 'OCR Import', 'new');
+				}, __('Actions'));
+			}
+		}
+
+		// Add "View Original Invoice" button and make Drive link clickable
+		if (!frm.is_new() && frm.doc.drive_link) {
+			frm.add_custom_button(__('View Original Invoice'), function() {
+				window.open(frm.doc.drive_link, '_blank');
 			}, __('Actions'));
+
+			// Render drive_link as clickable HTML
+			let link_html = `<a href="${frm.doc.drive_link}" target="_blank" style="word-break: break-all;">View in Google Drive</a>`;
+			frm.fields_dict.drive_link.$wrapper.find('.like-disabled-input, .control-value').html(link_html);
 		}
 
 		// Subscribe to realtime updates for this document
 		if (!frm.is_new() && ['Pending', 'Extracting', 'Processing'].includes(frm.doc.status)) {
+			// Unbind existing handler to prevent duplicates
+			frappe.realtime.off('ocr_extraction_progress');
+
+			// Bind new handler
 			frappe.realtime.on('ocr_extraction_progress', function(data) {
 				if (data.ocr_import === frm.doc.name) {
 					// Show alert

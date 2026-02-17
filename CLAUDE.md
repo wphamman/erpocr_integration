@@ -16,31 +16,34 @@ Frappe custom app that integrates Gemini 2.5 Flash API with ERPNext for automati
 
 ### Pipeline Flow
 ```
-Manual Upload: User → Upload PDF → Gemini API → Create OCR Import → Match → PI Draft
-Email: Forward email → Hourly job → Gemini API → Create OCR Import → Match → PI Draft
-                                        ↓
-                        [Existing matching/PI creation pipeline]
+Manual Upload: User → Upload PDF → Gemini API → Create OCR Import(s) → Match → PI Draft
+Email:         Forward email → Hourly job → Gemini API → Create OCR Import(s) → Match → PI Draft
+Drive Scan:    Drop PDF in folder → 15-min poll → Gemini API → Create OCR Import(s) → Match → PI Draft
+                                                      ↓
+                                      [Multi-invoice: one PDF → multiple OCR Imports]
 ```
 
 ### Key Components
 | File | Purpose |
 |---|---|
-| `erpocr_integration/api.py` | Upload endpoint — validates user, creates OCR Import, enqueues processing |
-| `erpocr_integration/tasks/gemini_extract.py` | Gemini API integration — extracts structured invoice data from PDF |
+| `erpocr_integration/api.py` | Upload endpoint + `gemini_process()` background job (multi-invoice aware) |
+| `erpocr_integration/tasks/gemini_extract.py` | Gemini API — extracts `invoices[]` array from PDF (supports multi-invoice) |
 | `erpocr_integration/tasks/process_import.py` | Universal processing pipeline — match supplier/items, create PI |
-| `erpocr_integration/tasks/matching.py` | Supplier + item matching (alias table → exact name) |
+| `erpocr_integration/tasks/matching.py` | Supplier + item matching (alias → exact → service mapping → fuzzy) |
 | `erpocr_integration/tasks/email_monitor.py` | Email inbox polling — extracts PDFs from forwarded emails |
-| `erpocr_integration/public/js/ocr_import.js` | Upload button UI with realtime progress updates |
+| `erpocr_integration/tasks/drive_integration.py` | Google Drive — upload, download, folder scan, move-to-archive |
+| `erpocr_integration/public/js/ocr_import.js` | Upload button UI with real-time progress updates |
 | `erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py` | OCR Import class — create_purchase_invoice(), alias saving, status workflow |
 
 ### DocTypes
 | DocType | Type | Purpose |
 |---|---|---|
-| **OCR Settings** | Single | Gemini API key, email monitoring config, default company/warehouse/expense account |
+| **OCR Settings** | Single | Gemini API key, email/Drive config, default company/warehouse/tax templates |
 | **OCR Import** | Regular | Main staging record — extracted data, match status, link to created PI |
 | **OCR Import Item** | Child Table | Line items on OCR Import — description, qty, rate, matched item_code |
 | **OCR Supplier Alias** | Regular | Learning: OCR text → ERPNext Supplier |
 | **OCR Item Alias** | Regular | Learning: OCR text → ERPNext Item |
+| **OCR Service Mapping** | Regular | Pattern → item + GL account + cost center (supplier-specific or generic) |
 
 ### OCR Import Status Workflow
 Pending → Needs Review → Matched → Completed / Error
@@ -81,33 +84,44 @@ def process(raw_payload: str):
 - Failures logged to Error Log, status set to "Error"
 
 ### Matching System
-1. Check alias table (exact match — learned from previous confirmations)
-2. Check ERPNext master data by name (exact match)
-3. If no match → status "Unmatched", user resolves manually
-4. User confirmations saved as aliases for future auto-matching
+Matching runs in priority order for both suppliers and items:
+1. **Alias table** (exact match — learned from previous confirmations)
+2. **ERPNext master data** by name (exact match)
+3. **Service mapping** (pattern-based: description substring → item + GL account + cost center)
+4. **Fuzzy matching** (difflib SequenceMatcher, configurable threshold, returns "Suggested" status)
+5. If no match → status "Unmatched", user resolves manually
+6. User confirmations saved as aliases for future auto-matching
+
+Service mappings support supplier-specific patterns (higher priority) and generic patterns.
 
 ## Gemini Structured Output Schema
 ```json
 {
-  "supplier_name": "string (required)",
-  "supplier_tax_id": "string | null",
-  "invoice_number": "string (required)",
-  "invoice_date": "YYYY-MM-DD (required)",
-  "due_date": "YYYY-MM-DD | null",
-  "subtotal": "number | null",
-  "tax_amount": "number | null",
-  "total_amount": "number (required)",
-  "line_items": [
+  "invoices": [
     {
-      "description": "string (required)",
-      "product_code": "string | null",
-      "quantity": "number (required)",
-      "unit_price": "number (required)",
-      "amount": "number (required)"
+      "supplier_name": "string (required)",
+      "supplier_tax_id": "string (empty if not present)",
+      "invoice_number": "string (required)",
+      "invoice_date": "YYYY-MM-DD (required)",
+      "due_date": "YYYY-MM-DD (empty if not present)",
+      "subtotal": "number (0 if not shown)",
+      "tax_amount": "number (0 if not shown)",
+      "total_amount": "number (required)",
+      "currency": "string (e.g. USD, ZAR, EUR)",
+      "line_items": [
+        {
+          "description": "string (required)",
+          "product_code": "string (empty if not present)",
+          "quantity": "number (required)",
+          "unit_price": "number (required)",
+          "amount": "number (required)"
+        }
+      ]
     }
   ]
 }
 ```
+- Wrapped in `invoices[]` array — supports multi-invoice PDFs (one PDF → multiple OCR Imports)
 - Gemini returns data in this structure (enforced by response_schema)
 - Dates auto-converted to YYYY-MM-DD
 - Currency symbols stripped from amounts
@@ -146,7 +160,9 @@ bench restart
 # 2. Enter Gemini API Key (get from https://aistudio.google.com/apikey)
 # 3. Select Model: gemini-2.5-flash
 # 4. Configure ERPNext defaults (company, warehouse, expense account, cost center)
-# 5. Optional: Enable email monitoring and select Email Account
+# 5. Set VAT Tax Template and Non-VAT Tax Template
+# 6. Optional: Enable email monitoring and select Email Account
+# 7. Optional: Enable Google Drive Integration with service account JSON and folder IDs
 ```
 
 ## Implementation Phases
@@ -165,13 +181,16 @@ bench restart
 - [x] Error handling + logging
 - [x] Removed Nanonets code
 
-### Phase 3 (v0.3) — Polish & Future Enhancements
-- [ ] Fuzzy matching with ranked suggestions (difflib)
-- [ ] Tax template mapping (SA VAT 15% via Purchase Taxes and Charges Template)
-- [ ] Batch upload (multiple PDFs at once)
+### Phase 3 (v0.3) — Polish & Enhancements [IN PROGRESS]
+- [x] Fuzzy matching with configurable threshold (difflib SequenceMatcher)
+- [x] Tax template mapping (auto-set VAT vs non-VAT based on tax detection)
+- [x] Service mapping (OCR Service Mapping doctype — pattern → item + GL + cost center)
+- [x] Multi-invoice PDF support (one PDF → multiple OCR Imports)
+- [x] Google Drive folder polling (15-min scan inbox + move to archive)
+- [x] Google Drive archiving (Year/Month/Supplier folder structure)
+- [ ] Multi-file upload in UI (drag & drop multiple PDFs)
 - [ ] OCR confidence scores from Gemini metadata
 - [ ] Custom prompt per company
-- [ ] Google Drive folder polling
 - [ ] Dashboard / statistics
 - [ ] Test suite
 
@@ -185,9 +204,16 @@ bench restart
 
 ### OCR Settings
 - **Gemini API Key**: Your API key from Google AI Studio
-- **Gemini Model**: gemini-2.5-flash (recommended), gemini-2.0-flash, or gemini-1.5-flash
+- **Gemini Model**: gemini-2.5-flash (recommended), gemini-2.5-pro, gemini-2.0-flash
 - **Enable Email Monitoring**: Check to enable automatic email processing
 - **Email Account**: Select ERPNext Email Account to monitor for invoice PDFs
+- **Enable Drive Integration**: Archive processed invoices to Google Drive
+- **Service Account JSON**: Paste Google Cloud service account key JSON
+- **Archive Folder ID**: Google Drive folder ID for organized archive
+- **Scan Inbox Folder ID**: Google Drive folder ID polled every 15 minutes for new PDFs
+- **VAT Tax Template**: Applied when OCR detects tax on the invoice
+- **Non-VAT Tax Template**: Applied when no tax detected (foreign/non-VAT suppliers)
+- **Matching Threshold**: Minimum similarity score (0-100) for fuzzy matching (default: 80)
 
 ### Usage
 **Manual Upload**:
@@ -203,7 +229,12 @@ bench restart
 2. Hourly job automatically extracts PDFs
 3. Follow steps 4-6 above
 
+**Drive Scan (Batch)**:
+1. Drop PDF(s) into the configured Drive scan inbox folder
+2. Every 15 minutes, new PDFs are automatically downloaded and processed
+3. After extraction, PDFs are moved to the archive folder (Year/Month/Supplier)
+4. Multi-invoice PDFs (statements) are split into separate OCR Import records
+5. Failed extractions are automatically retried on the next poll
+
 ## Open Questions
-- Tax handling: Map OCR tax amounts to ERPNext Purchase Taxes and Charges Templates (SA VAT = 15%)
 - Should OCR Import be submittable (lock after PI created)?
-- Retry mechanism: Store original PDF for failed extractions?

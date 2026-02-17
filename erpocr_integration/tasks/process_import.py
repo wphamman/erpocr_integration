@@ -7,7 +7,11 @@ import re
 import frappe
 from frappe import _
 
-from erpocr_integration.tasks.matching import match_item, match_supplier
+from erpocr_integration.tasks.matching import (
+	match_item, match_item_fuzzy,
+	match_supplier, match_supplier_fuzzy,
+	match_service_item,
+)
 
 
 def _clean_ocr_text(value: str) -> str:
@@ -56,6 +60,11 @@ def process_extracted_data(extracted_data: dict, source_type: str, uploaded_by: 
 		source_filename = extracted_data.get("source_filename", "")
 		extraction_time = extracted_data.get("extraction_time", 0.0)
 
+		# Auto-set tax template based on whether tax was detected
+		settings = frappe.get_cached_doc("OCR Settings")
+		tax_amount = float(header_fields.get("tax_amount") or 0)
+		tax_template = settings.default_tax_template if tax_amount > 0 else settings.non_vat_tax_template
+
 		# Create OCR Import record
 		ocr_import = frappe.get_doc({
 			"doctype": "OCR Import",
@@ -71,6 +80,7 @@ def process_extracted_data(extracted_data: dict, source_type: str, uploaded_by: 
 			"subtotal": header_fields.get("subtotal", 0.0),
 			"tax_amount": header_fields.get("tax_amount", 0.0),
 			"total_amount": header_fields.get("total_amount", 0.0),
+			"tax_template": tax_template,
 			"raw_payload": raw_response,
 			"items": [],
 		})
@@ -89,6 +99,7 @@ def process_extracted_data(extracted_data: dict, source_type: str, uploaded_by: 
 			})
 
 		# Run supplier matching
+		fuzzy_threshold = settings.matching_threshold or 80
 		supplier_name_ocr = ocr_import.supplier_name_ocr
 		if supplier_name_ocr:
 			matched_supplier, match_status = match_supplier(supplier_name_ocr)
@@ -102,7 +113,15 @@ def process_extracted_data(extracted_data: dict, source_type: str, uploaded_by: 
 					if not existing_tax_id:
 						frappe.db.set_value("Supplier", matched_supplier, "tax_id", supplier_tax_id)
 			else:
-				ocr_import.supplier_match_status = "Unmatched"
+				# Fuzzy fallback for supplier
+				fuzzy_supplier, fuzzy_status, _score = match_supplier_fuzzy(
+					supplier_name_ocr, fuzzy_threshold
+				)
+				if fuzzy_supplier:
+					ocr_import.supplier = fuzzy_supplier
+					ocr_import.supplier_match_status = fuzzy_status  # "Suggested"
+				else:
+					ocr_import.supplier_match_status = "Unmatched"
 		else:
 			ocr_import.supplier_match_status = "Unmatched"
 
@@ -114,9 +133,37 @@ def process_extracted_data(extracted_data: dict, source_type: str, uploaded_by: 
 				matched_item, match_status = match_item(item.item_name)
 			if not matched_item and item.description_ocr:
 				matched_item, match_status = match_item(item.description_ocr)
+
+			# If no item match, try service matching (pattern → item + name + GL + CC)
+			if not matched_item and item.description_ocr:
+				service_match = match_service_item(item.description_ocr, supplier=ocr_import.supplier)
+				if service_match:
+					matched_item = service_match["item_code"]
+					match_status = service_match["match_status"]
+					item.expense_account = service_match.get("expense_account")
+					item.cost_center = service_match.get("cost_center")
+					if service_match.get("item_name"):
+						item.item_name = service_match["item_name"]
+
+			# Fuzzy fallback for item
+			if not matched_item and item.description_ocr:
+				fuzzy_item, fuzzy_status, _score = match_item_fuzzy(item.description_ocr, fuzzy_threshold)
+				if fuzzy_item:
+					matched_item = fuzzy_item
+					match_status = fuzzy_status  # "Suggested"
+
 			if matched_item:
 				item.item_code = matched_item
 				item.match_status = match_status
+
+				# Even when item matched via alias/fuzzy, check service mapping for accounting fields
+				if not item.expense_account and item.description_ocr:
+					service_match = match_service_item(item.description_ocr, supplier=ocr_import.supplier)
+					if service_match:
+						item.expense_account = service_match.get("expense_account")
+						item.cost_center = service_match.get("cost_center")
+						if service_match.get("item_name"):
+							item.item_name = service_match["item_name"]
 			else:
 				item.match_status = "Unmatched"
 

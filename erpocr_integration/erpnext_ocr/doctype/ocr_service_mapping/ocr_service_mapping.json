@@ -1,0 +1,133 @@
+{
+	"actions": [],
+	"autoname": "format:SVC-MAP-{#####}",
+	"creation": "2026-02-16 00:00:00.000000",
+	"default_view": "List",
+	"doctype": "DocType",
+	"editable_grid": 1,
+	"engine": "InnoDB",
+	"field_order": [
+		"description_pattern",
+		"item_code",
+		"item_name",
+		"column_break_1",
+		"expense_account",
+		"cost_center",
+		"section_break_2",
+		"company",
+		"supplier",
+		"source"
+	],
+	"fields": [
+		{
+			"fieldname": "description_pattern",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Description Pattern",
+			"reqd": 1,
+			"description": "Text pattern to match (e.g., 'subscription', 'delivery', 'installation')"
+		},
+		{
+			"fieldname": "item_code",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "Item Code",
+			"options": "Item",
+			"reqd": 1,
+			"description": "Service item to use (e.g., ITEM001, DELIVERY-PURCHASES)"
+		},
+		{
+			"fieldname": "item_name",
+			"fieldtype": "Data",
+			"label": "Item Name",
+			"description": "Descriptive name for the item (e.g., 'Cartrack Subscription')"
+		},
+		{
+			"fieldname": "column_break_1",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "expense_account",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "Expense Account",
+			"options": "Account",
+			"reqd": 1,
+			"description": "GL Account to post to"
+		},
+		{
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "Cost Center",
+			"options": "Cost Center",
+			"description": "Cost Center (optional)"
+		},
+		{
+			"fieldname": "section_break_2",
+			"fieldtype": "Section Break"
+		},
+		{
+			"fieldname": "company",
+			"fieldtype": "Link",
+			"label": "Company",
+			"options": "Company",
+			"reqd": 1,
+			"default": ""
+		},
+		{
+			"fieldname": "supplier",
+			"fieldtype": "Link",
+			"label": "Supplier",
+			"options": "Supplier",
+			"description": "Optional: Restrict this mapping to a specific supplier. Leave blank for generic mappings."
+		},
+		{
+			"default": "Manual",
+			"fieldname": "source",
+			"fieldtype": "Select",
+			"in_list_view": 1,
+			"label": "Source",
+			"options": "Manual\nAuto",
+			"read_only": 1,
+			"description": "How this mapping was created"
+		}
+	],
+	"index_web_pages_for_search": 1,
+	"links": [],
+	"modified": "2026-02-16 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "ERPNext OCR",
+	"name": "OCR Service Mapping",
+	"naming_rule": "By fieldname",
+	"owner": "Administrator",
+	"permissions": [
+		{
+			"create": 1,
+			"delete": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "System Manager",
+			"share": 1,
+			"write": 1
+		},
+		{
+			"create": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "Accounts User",
+			"share": 1,
+			"write": 1
+		}
+	],
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": [],
+	"track_changes": 1
+}

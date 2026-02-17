@@ -12,3 +12,10 @@ dist/
 .env
 .claude/
 nul
+
+# Test files with hardcoded API keys (local testing only)
+test_*.py
+
+# Google Cloud service account keys — NEVER commit
+*.json
+!erpocr_integration/**/*.json

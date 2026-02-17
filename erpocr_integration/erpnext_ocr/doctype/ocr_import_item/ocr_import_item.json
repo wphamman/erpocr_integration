@@ -11,6 +11,8 @@
 		"qty",
 		"rate",
 		"amount",
+		"expense_account",
+		"cost_center",
 		"match_status"
 	],
 	"fields": [
@@ -52,12 +54,26 @@
 			"label": "Amount"
 		},
 		{
+			"fieldname": "expense_account",
+			"fieldtype": "Link",
+			"label": "Expense Account",
+			"options": "Account",
+			"description": "GL Account to post to (for service items)"
+		},
+		{
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"label": "Cost Center",
+			"options": "Cost Center",
+			"description": "Cost Center (optional)"
+		},
+		{
 			"default": "Unmatched",
 			"fieldname": "match_status",
 			"fieldtype": "Select",
 			"in_list_view": 1,
 			"label": "Match Status",
-			"options": "Auto Matched\nUnmatched\nConfirmed"
+			"options": "Auto Matched\nSuggested\nUnmatched\nConfirmed"
 		}
 	],
 	"index_web_pages_for_search": 1,

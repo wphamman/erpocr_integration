@@ -10,10 +10,18 @@
 		"naming_series",
 		"status",
 		"source_filename",
+		"email_message_id",
 		"column_break_header",
 		"source_type",
 		"uploaded_by",
+		"company",
+		"currency",
 		"extraction_time",
+		"section_break_drive",
+		"drive_file_id",
+		"drive_link",
+		"column_break_drive",
+		"drive_folder_path",
 		"section_break_supplier",
 		"supplier_name_ocr",
 		"supplier",
@@ -27,6 +35,7 @@
 		"subtotal",
 		"tax_amount",
 		"total_amount",
+		"tax_template",
 		"section_break_items",
 		"items",
 		"section_break_result",
@@ -63,6 +72,14 @@
 			"read_only": 1
 		},
 		{
+			"fieldname": "email_message_id",
+			"fieldtype": "Data",
+			"label": "Email Message ID",
+			"read_only": 1,
+			"hidden": 1,
+			"description": "Unique identifier from email header (used to prevent duplicate processing)"
+		},
+		{
 			"fieldname": "column_break_header",
 			"fieldtype": "Column Break"
 		},
@@ -72,7 +89,7 @@
 			"fieldtype": "Select",
 			"in_standard_filter": 1,
 			"label": "Source Type",
-			"options": "Gemini Manual Upload\nGemini Email",
+			"options": "Gemini Manual Upload\nGemini Email\nGemini Drive Scan",
 			"read_only": 1
 		},
 		{
@@ -83,11 +100,61 @@
 			"read_only": 1
 		},
 		{
+			"fieldname": "company",
+			"fieldtype": "Link",
+			"label": "Company",
+			"options": "Company",
+			"reqd": 1,
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"description": "Company for this import (used for matching and PI creation)"
+		},
+		{
+			"fieldname": "currency",
+			"fieldtype": "Link",
+			"label": "Currency",
+			"options": "Currency",
+			"in_list_view": 1,
+			"description": "Invoice currency (e.g., USD, ZAR, EUR)"
+		},
+		{
 			"description": "Time taken by Gemini API to extract data (seconds)",
 			"fieldname": "extraction_time",
 			"fieldtype": "Float",
 			"label": "Extraction Time",
 			"read_only": 1
+		},
+		{
+			"fieldname": "section_break_drive",
+			"fieldtype": "Section Break",
+			"label": "Google Drive Archive",
+			"collapsible": 1
+		},
+		{
+			"fieldname": "drive_file_id",
+			"fieldtype": "Data",
+			"label": "Drive File ID",
+			"read_only": 1,
+			"hidden": 1,
+			"description": "Google Drive file ID for the original PDF"
+		},
+		{
+			"fieldname": "drive_link",
+			"fieldtype": "Data",
+			"label": "Drive Link",
+			"read_only": 1,
+			"description": "Shareable link to view original invoice PDF in Google Drive"
+		},
+		{
+			"fieldname": "column_break_drive",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "drive_folder_path",
+			"fieldtype": "Data",
+			"label": "Archive Folder Path",
+			"read_only": 1,
+			"description": "Google Drive folder path where PDF is stored"
 		},
 		{
 			"fieldname": "section_break_supplier",
@@ -161,6 +228,13 @@
 			"fieldtype": "Currency",
 			"label": "Total Amount",
 			"read_only": 1
+		},
+		{
+			"fieldname": "tax_template",
+			"fieldtype": "Link",
+			"label": "Tax Template",
+			"options": "Purchase Taxes and Charges Template",
+			"description": "Auto-set based on tax detection. Change before creating PI if needed."
 		},
 		{
 			"fieldname": "section_break_items",
