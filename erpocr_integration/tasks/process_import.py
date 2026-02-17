@@ -39,14 +39,14 @@ def _parse_date(value: str) -> str | None:
 	# Remove spaces before punctuation (e.g., "9 , 2026" → "9, 2026")
 	value = re.sub(r"\s+,", ",", value)
 	formats = [
-		"%Y-%m-%d",      # 2024-01-15
-		"%d/%m/%Y",      # 15/01/2024
-		"%m/%d/%Y",      # 01/15/2024
-		"%d-%m-%Y",      # 15-01-2024
-		"%d %B %Y",      # 15 January 2024
-		"%d %b %Y",      # 15 Jan 2024
-		"%B %d, %Y",     # January 15, 2024
-		"%b %d, %Y",     # Jan 15, 2024
+		"%Y-%m-%d",  # 2024-01-15
+		"%d/%m/%Y",  # 15/01/2024
+		"%m/%d/%Y",  # 01/15/2024
+		"%d-%m-%Y",  # 15-01-2024
+		"%d %B %Y",  # 15 January 2024
+		"%d %b %Y",  # 15 Jan 2024
+		"%B %d, %Y",  # January 15, 2024
+		"%b %d, %Y",  # Jan 15, 2024
 	]
 
 	for fmt in formats:

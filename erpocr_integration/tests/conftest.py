@@ -59,17 +59,38 @@ _frappe_mock = _build_frappe_mock()
 sys.modules["frappe"] = _frappe_mock
 sys.modules["frappe.utils"] = MagicMock()
 
+# Mock Google libraries so drive_integration can be imported without them installed
+for _mod_name in [
+	"google",
+	"google.oauth2",
+	"google.oauth2.service_account",
+	"googleapiclient",
+	"googleapiclient.discovery",
+	"googleapiclient.errors",
+	"googleapiclient.http",
+]:
+	if _mod_name not in sys.modules:
+		sys.modules[_mod_name] = MagicMock()
+
 
 @pytest.fixture(autouse=True)
 def reset_frappe_mock():
 	"""Reset frappe mock state between tests so tests don't leak into each other."""
 	_frappe_mock.db.get_value.reset_mock()
 	_frappe_mock.db.get_value.return_value = None
+	_frappe_mock.db.set_value.reset_mock()
 	_frappe_mock.db.exists.reset_mock()
 	_frappe_mock.db.exists.return_value = False
+	_frappe_mock.db.commit.reset_mock()
 	_frappe_mock.get_all.reset_mock()
 	_frappe_mock.get_all.return_value = []
+	_frappe_mock.get_doc.reset_mock()
 	_frappe_mock.log_error.reset_mock()
+	_frappe_mock.enqueue.reset_mock()
+	_frappe_mock.delete_doc.reset_mock()
+	_frappe_mock.throw = MagicMock(side_effect=Exception)
+	_frappe_mock.has_permission = MagicMock(return_value=True)
+	_frappe_mock.session.user = "Administrator"
 	yield _frappe_mock
 
 

@@ -205,7 +205,9 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 	return None, "Unmatched", 0
 
 
-def match_service_item(description_ocr: str, company: str = None, supplier: str = None) -> dict | None:
+def match_service_item(
+	description_ocr: str, company: str | None = None, supplier: str | None = None
+) -> dict | None:
 	"""
 	Attempt to match an OCR description to a service item mapping.
 

@@ -69,14 +69,8 @@ doctype_js = {"OCR Import": "public/js/ocr_import.js"}
 # ---------------
 
 scheduler_events = {
-	"hourly": [
-		"erpocr_integration.tasks.email_monitor.poll_email_inbox"
-	],
-	"cron": {
-		"*/15 * * * *": [
-			"erpocr_integration.tasks.drive_integration.poll_drive_scan_folder"
-		]
-	}
+	"hourly": ["erpocr_integration.tasks.email_monitor.poll_email_inbox"],
+	"cron": {"*/15 * * * *": ["erpocr_integration.tasks.drive_integration.poll_drive_scan_folder"]},
 }
 
 # Permissions

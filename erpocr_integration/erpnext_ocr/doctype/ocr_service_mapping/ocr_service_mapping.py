@@ -32,4 +32,6 @@ class OCRServiceMapping(Document):
 		if self.expense_account:
 			account_company = frappe.db.get_value("Account", self.expense_account, "company")
 			if account_company != self.company:
-				frappe.throw(f"Expense Account {self.expense_account} does not belong to company {self.company}")
+				frappe.throw(
+					f"Expense Account {self.expense_account} does not belong to company {self.company}"
+				)

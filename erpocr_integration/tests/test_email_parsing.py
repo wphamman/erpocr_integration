@@ -18,6 +18,7 @@ PDF_BYTES = b"%PDF-1.4 fake-pdf-content"
 # _extract_pdfs_from_email
 # ---------------------------------------------------------------------------
 
+
 class TestExtractPdfsFromEmail:
 	def test_single_pdf_attachment(self, sample_email_with_pdf):
 		pdfs = _extract_pdfs_from_email(sample_email_with_pdf)
@@ -51,7 +52,9 @@ class TestExtractPdfsFromEmail:
 		msg.attach(MIMEText("See attached.", "plain"))
 
 		# Attach a .xlsx file
-		xlsx_part = MIMEApplication(b"fake-xlsx", _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		xlsx_part = MIMEApplication(
+			b"fake-xlsx", _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+		)
 		xlsx_part.add_header("Content-Disposition", "attachment", filename="report.xlsx")
 		msg.attach(xlsx_part)
 
@@ -108,6 +111,7 @@ class TestExtractPdfsFromEmail:
 	def test_single_part_pdf(self):
 		"""Non-multipart email that is itself a PDF."""
 		from email.message import EmailMessage
+
 		msg = EmailMessage()
 		msg["Subject"] = "Single part PDF"
 		msg.set_content(PDF_BYTES, maintype="application", subtype="pdf")
@@ -121,6 +125,7 @@ class TestExtractPdfsFromEmail:
 # ---------------------------------------------------------------------------
 # _decode_header_value
 # ---------------------------------------------------------------------------
+
 
 class TestDecodeHeaderValue:
 	def test_plain_ascii(self):

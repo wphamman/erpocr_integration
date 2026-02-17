@@ -50,15 +50,21 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 	try:
 		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model)
 	except Exception as e:
-		frappe.log_error(title="Gemini API Error", message=f"Gemini API call failed for {filename}\n{frappe.get_traceback()}")
-		raise Exception(f"Failed to call Gemini API: {str(e)}")
+		frappe.log_error(
+			title="Gemini API Error",
+			message=f"Gemini API call failed for {filename}\n{frappe.get_traceback()}",
+		)
+		raise Exception(f"Failed to call Gemini API: {e!s}") from e
 
 	# Validate response
 	is_valid, error_msg = _validate_gemini_response(response_data)
 	if not is_valid:
 		# Truncate response to avoid leaking full OCR/PII data into Error Log
 		truncated = json.dumps(response_data, indent=2)[:500]
-		frappe.log_error(title="Invalid Gemini Response", message=f"Invalid Gemini response for {filename}\n{error_msg}\n{truncated}...")
+		frappe.log_error(
+			title="Invalid Gemini Response",
+			message=f"Invalid Gemini response for {filename}\n{error_msg}\n{truncated}...",
+		)
 		raise Exception(f"Invalid Gemini response: {error_msg}")
 
 	# Extract the JSON content from response
@@ -82,8 +88,11 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 	except Exception as e:
 		# Truncate response to avoid leaking full OCR/PII data into Error Log
 		truncated = json.dumps(response_data, indent=2)[:500]
-		frappe.log_error(title="Gemini Parse Error", message=f"Failed to parse Gemini response for {filename}\n{frappe.get_traceback()}\n{truncated}...")
-		raise Exception(f"Failed to parse Gemini response: {str(e)}")
+		frappe.log_error(
+			title="Gemini Parse Error",
+			message=f"Failed to parse Gemini response for {filename}\n{frappe.get_traceback()}\n{truncated}...",
+		)
+		raise Exception(f"Failed to parse Gemini response: {e!s}") from e
 
 	# Extract invoices array from response
 	invoices_raw = extracted_data.get("invoices", [])
@@ -130,7 +139,7 @@ For each product or service line item in the invoice table, extract:
 - Product code / SKU / Item code (if present - may be in a separate column from description)
 - Quantity (numeric quantity ordered/delivered)
 - Unit price / Rate (price per unit)
-- Line amount / Total (total for this line = quantity × unit price)
+- Line amount / Total (total for this line = quantity x unit price)
 
 **Important Instructions:**
 - If the PDF contains multiple invoices (e.g., a statement or batch), return each as a separate entry in the invoices array
@@ -158,45 +167,33 @@ def _build_extraction_schema() -> dict:
 	invoice_schema = {
 		"type": "object",
 		"properties": {
-			"supplier_name": {
-				"type": "string",
-				"description": "Full name of the supplier/vendor"
-			},
+			"supplier_name": {"type": "string", "description": "Full name of the supplier/vendor"},
 			"supplier_tax_id": {
 				"type": "string",
-				"description": "Supplier's tax ID/VAT number/registration number (empty string if not present)"
+				"description": "Supplier's tax ID/VAT number/registration number (empty string if not present)",
 			},
-			"invoice_number": {
-				"type": "string",
-				"description": "Invoice number or identifier"
-			},
-			"invoice_date": {
-				"type": "string",
-				"description": "Invoice date in YYYY-MM-DD format"
-			},
+			"invoice_number": {"type": "string", "description": "Invoice number or identifier"},
+			"invoice_date": {"type": "string", "description": "Invoice date in YYYY-MM-DD format"},
 			"due_date": {
 				"type": "string",
-				"description": "Payment due date in YYYY-MM-DD format (empty string if not present)"
+				"description": "Payment due date in YYYY-MM-DD format (empty string if not present)",
 			},
 			"subtotal": {
 				"type": "number",
-				"description": "Subtotal amount before tax (0 if not shown separately)"
+				"description": "Subtotal amount before tax (0 if not shown separately)",
 			},
 			"tax_amount": {
 				"type": "number",
-				"description": "Total tax/VAT amount (0 if not shown separately)"
+				"description": "Total tax/VAT amount (0 if not shown separately)",
 			},
-			"total_amount": {
-				"type": "number",
-				"description": "Final total amount of the invoice"
-			},
+			"total_amount": {"type": "number", "description": "Final total amount of the invoice"},
 			"currency": {
 				"type": "string",
-				"description": "Currency code of the invoice (e.g., USD, ZAR, EUR, GBP). If not explicitly shown, infer from context or symbols."
+				"description": "Currency code of the invoice (e.g., USD, ZAR, EUR, GBP). If not explicitly shown, infer from context or symbols.",
 			},
 			"confidence": {
 				"type": "number",
-				"description": "Overall extraction confidence from 0.0 (very uncertain) to 1.0 (perfectly clear)"
+				"description": "Overall extraction confidence from 0.0 (very uncertain) to 1.0 (perfectly clear)",
 			},
 			"line_items": {
 				"type": "array",
@@ -206,30 +203,35 @@ def _build_extraction_schema() -> dict:
 					"properties": {
 						"description": {
 							"type": "string",
-							"description": "Description of the item or service"
+							"description": "Description of the item or service",
 						},
 						"product_code": {
 							"type": "string",
-							"description": "Product code, SKU, or item code (empty string if not present)"
+							"description": "Product code, SKU, or item code (empty string if not present)",
 						},
-						"quantity": {
-							"type": "number",
-							"description": "Quantity ordered/delivered"
-						},
-						"unit_price": {
-							"type": "number",
-							"description": "Price per unit"
-						},
+						"quantity": {"type": "number", "description": "Quantity ordered/delivered"},
+						"unit_price": {"type": "number", "description": "Price per unit"},
 						"amount": {
 							"type": "number",
-							"description": "Total for this line (quantity × unit_price)"
-						}
+							"description": "Total for this line (quantity x unit_price)",
+						},
 					},
-					"required": ["description", "product_code", "quantity", "unit_price", "amount"]
-				}
-			}
+					"required": ["description", "product_code", "quantity", "unit_price", "amount"],
+				},
+			},
 		},
-		"required": ["supplier_name", "supplier_tax_id", "invoice_number", "invoice_date", "due_date", "subtotal", "tax_amount", "total_amount", "confidence", "line_items"]
+		"required": [
+			"supplier_name",
+			"supplier_tax_id",
+			"invoice_number",
+			"invoice_date",
+			"due_date",
+			"subtotal",
+			"tax_amount",
+			"total_amount",
+			"confidence",
+			"line_items",
+		],
 	}
 
 	return {
@@ -238,10 +240,10 @@ def _build_extraction_schema() -> dict:
 			"invoices": {
 				"type": "array",
 				"description": "Array of invoices extracted from the PDF. Most PDFs contain one invoice, but statements or batch scans may contain multiple.",
-				"items": invoice_schema
+				"items": invoice_schema,
 			}
 		},
-		"required": ["invoices"]
+		"required": ["invoices"],
 	}
 
 
@@ -253,30 +255,21 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 	url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 	# Encode PDF as base64
-	pdf_base64 = base64.b64encode(pdf_content).decode('utf-8')
+	pdf_base64 = base64.b64encode(pdf_content).decode("utf-8")
 
 	payload = {
-		"contents": [{
-			"parts": [
-				{"text": prompt},
-				{
-					"inline_data": {
-						"mime_type": "application/pdf",
-						"data": pdf_base64
-					}
-				}
-			]
-		}],
-		"generationConfig": {
-			"response_mime_type": "application/json",
-			"response_schema": schema
-		}
+		"contents": [
+			{
+				"parts": [
+					{"text": prompt},
+					{"inline_data": {"mime_type": "application/pdf", "data": pdf_base64}},
+				]
+			}
+		],
+		"generationConfig": {"response_mime_type": "application/json", "response_schema": schema},
 	}
 
-	headers = {
-		"Content-Type": "application/json",
-		"x-goog-api-key": api_key
-	}
+	headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
 	# Retry with exponential backoff
 	max_retries = 3
@@ -299,10 +292,10 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 
 			# Rate limit (429) or server error (5xx) - retry
 			if e.response and e.response.status_code in (429, 500, 503) and attempt < max_retries - 1:
-				wait_time = 2 ** attempt  # 1s, 2s, 4s
+				wait_time = 2**attempt  # 1s, 2s, 4s
 				frappe.log_error(
 					title="Gemini API Rate Limit",
-					message=f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}"
+					message=f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}",
 				)
 				time.sleep(wait_time)
 				continue
@@ -315,7 +308,7 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 				try:
 					frappe.log_error(
 						title="Gemini API Error",
-						message=f"{error_summary}\n\nResponse (first 500 chars):\n{error_body_truncated}\n\nRequest URL: {url}"
+						message=f"{error_summary}\n\nResponse (first 500 chars):\n{error_body_truncated}\n\nRequest URL: {url}",
 					)
 				except Exception:
 					pass  # Ignore if logging fails
@@ -324,8 +317,11 @@ def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str
 
 		except requests.exceptions.Timeout:
 			if attempt < max_retries - 1:
-				wait_time = 2 ** attempt
-				frappe.log_error(title="Gemini API Timeout", message=f"Request timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+				wait_time = 2**attempt
+				frappe.log_error(
+					title="Gemini API Timeout",
+					message=f"Request timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
+				)
 				time.sleep(wait_time)
 				continue
 			else:
@@ -374,7 +370,7 @@ def _validate_gemini_response(response: dict) -> tuple[bool, str]:
 	try:
 		json.loads(text)
 	except json.JSONDecodeError as e:
-		return False, f"Invalid JSON in response text: {str(e)}"
+		return False, f"Invalid JSON in response text: {e!s}"
 
 	return True, ""
 
@@ -406,13 +402,15 @@ def _transform_to_ocr_import_format(gemini_data: dict, filename: str) -> dict:
 		description = _clean_ocr_text(item.get("description", ""))
 		product_code = _clean_ocr_text(item.get("product_code", ""))
 
-		line_items.append({
-			"description": description,
-			"product_code": product_code,
-			"quantity": item.get("quantity", 1.0),
-			"unit_price": item.get("unit_price", 0.0),
-			"amount": item.get("amount", 0.0),
-		})
+		line_items.append(
+			{
+				"description": description,
+				"product_code": product_code,
+				"quantity": item.get("quantity", 1.0),
+				"unit_price": item.get("unit_price", 0.0),
+				"amount": item.get("amount", 0.0),
+			}
+		)
 
 	return {
 		"header_fields": header_fields,

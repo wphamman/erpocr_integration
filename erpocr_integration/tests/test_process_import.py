@@ -9,10 +9,10 @@ from erpocr_integration.tasks.process_import import (
 	_parse_float,
 )
 
-
 # ---------------------------------------------------------------------------
 # _clean_ocr_text
 # ---------------------------------------------------------------------------
+
 
 class TestCleanOcrText:
 	def test_none_returns_empty(self):
@@ -49,6 +49,7 @@ class TestCleanOcrText:
 # ---------------------------------------------------------------------------
 # _parse_date
 # ---------------------------------------------------------------------------
+
 
 class TestParseDate:
 	def test_none_returns_none(self):
@@ -100,6 +101,7 @@ class TestParseDate:
 # _parse_amount
 # ---------------------------------------------------------------------------
 
+
 class TestParseAmount:
 	def test_none_returns_zero(self):
 		assert _parse_amount(None) == 0.0
@@ -144,6 +146,7 @@ class TestParseAmount:
 # ---------------------------------------------------------------------------
 # _parse_float
 # ---------------------------------------------------------------------------
+
 
 class TestParseFloat:
 	def test_none_returns_zero(self):

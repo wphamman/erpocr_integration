@@ -71,12 +71,14 @@ class OCRImport(Document):
 			return
 
 		if not frappe.db.exists("OCR Supplier Alias", ocr_text):
-			frappe.get_doc({
-				"doctype": "OCR Supplier Alias",
-				"ocr_text": ocr_text,
-				"supplier": self.supplier,
-				"source": "Auto",
-			}).insert(ignore_permissions=True)
+			frappe.get_doc(
+				{
+					"doctype": "OCR Supplier Alias",
+					"ocr_text": ocr_text,
+					"supplier": self.supplier,
+					"source": "Auto",
+				}
+			).insert(ignore_permissions=True)
 
 	def _save_item_alias(self, item):
 		"""Save item alias for future auto-matching."""
@@ -85,12 +87,14 @@ class OCRImport(Document):
 			return
 
 		if not frappe.db.exists("OCR Item Alias", ocr_text):
-			frappe.get_doc({
-				"doctype": "OCR Item Alias",
-				"ocr_text": ocr_text,
-				"item_code": item.item_code,
-				"source": "Auto",
-			}).insert(ignore_permissions=True)
+			frappe.get_doc(
+				{
+					"doctype": "OCR Item Alias",
+					"ocr_text": ocr_text,
+					"item_code": item.item_code,
+					"source": "Auto",
+				}
+			).insert(ignore_permissions=True)
 
 	def _save_service_mapping(self, item):
 		"""
@@ -138,17 +142,19 @@ class OCRImport(Document):
 			doc.save(ignore_permissions=True)
 		else:
 			# Create new mapping
-			frappe.get_doc({
-				"doctype": "OCR Service Mapping",
-				"description_pattern": pattern,
-				"item_code": item.item_code,
-				"item_name": item.item_name,
-				"expense_account": item.expense_account,
-				"cost_center": item.cost_center,
-				"company": company,
-				"supplier": supplier,
-				"source": "Auto",
-			}).insert(ignore_permissions=True)
+			frappe.get_doc(
+				{
+					"doctype": "OCR Service Mapping",
+					"description_pattern": pattern,
+					"item_code": item.item_code,
+					"item_name": item.item_name,
+					"expense_account": item.expense_account,
+					"cost_center": item.cost_center,
+					"company": company,
+					"supplier": supplier,
+					"source": "Auto",
+				}
+			).insert(ignore_permissions=True)
 
 	@frappe.whitelist()
 	def create_purchase_invoice(self):
@@ -158,7 +164,9 @@ class OCRImport(Document):
 			frappe.throw(_("You don't have permission to create Purchase Invoices."))
 
 		if self.purchase_invoice:
-			frappe.throw(_("Purchase Invoice {0} already created for this import.").format(self.purchase_invoice))
+			frappe.throw(
+				_("Purchase Invoice {0} already created for this import.").format(self.purchase_invoice)
+			)
 
 		if not self.supplier:
 			frappe.throw(_("Please select a Supplier before creating a Purchase Invoice."))
@@ -220,25 +228,29 @@ class OCRImport(Document):
 			template = frappe.get_cached_doc("Purchase Taxes and Charges Template", self.tax_template)
 			# Validate template belongs to the same company
 			if template.company and template.company != self.company:
-				frappe.throw(_("Tax Template '{0}' belongs to company '{1}', not '{2}'").format(
-					self.tax_template, template.company, self.company
-				))
+				frappe.throw(
+					_("Tax Template '{0}' belongs to company '{1}', not '{2}'").format(
+						self.tax_template, template.company, self.company
+					)
+				)
 			pi_dict["taxes_and_charges"] = self.tax_template
 			pi_dict["taxes"] = []
 			for tax_row in template.taxes:
-				pi_dict["taxes"].append({
-					"category": tax_row.category,
-					"add_deduct_tax": tax_row.add_deduct_tax,
-					"charge_type": tax_row.charge_type,
-					"row_id": tax_row.row_id,
-					"account_head": tax_row.account_head,
-					"description": tax_row.description,
-					"rate": tax_row.rate,
-					"cost_center": tax_row.cost_center,
-					"account_currency": tax_row.account_currency,
-					"included_in_print_rate": tax_row.included_in_print_rate,
-					"included_in_paid_amount": tax_row.included_in_paid_amount,
-				})
+				pi_dict["taxes"].append(
+					{
+						"category": tax_row.category,
+						"add_deduct_tax": tax_row.add_deduct_tax,
+						"charge_type": tax_row.charge_type,
+						"row_id": tax_row.row_id,
+						"account_head": tax_row.account_head,
+						"description": tax_row.description,
+						"rate": tax_row.rate,
+						"cost_center": tax_row.cost_center,
+						"account_currency": tax_row.account_currency,
+						"included_in_print_rate": tax_row.included_in_print_rate,
+						"included_in_paid_amount": tax_row.included_in_paid_amount,
+					}
+				)
 
 		pi = frappe.get_doc(pi_dict)
 		# ignore_mandatory needed because OCR data may be incomplete (creating a draft for review)
@@ -248,12 +260,13 @@ class OCRImport(Document):
 		# Add comment with original invoice link (if available from Drive)
 		if self.drive_link and self.drive_link.startswith("https://"):
 			from frappe.utils import escape_html
+
 			safe_link = escape_html(self.drive_link)
 			safe_path = escape_html(self.drive_folder_path or "N/A")
 			pi.add_comment(
 				"Comment",
 				f"<b>Original Invoice PDF:</b> <a href='{safe_link}' target='_blank' rel='noopener noreferrer'>View in Google Drive</a><br>"
-				f"<small>Archive path: {safe_path}</small>"
+				f"<small>Archive path: {safe_path}</small>",
 			)
 
 		# Link PI back to this import

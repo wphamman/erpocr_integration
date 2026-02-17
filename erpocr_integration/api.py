@@ -41,7 +41,11 @@ def upload_pdf():
 
 	max_size = 10 * 1024 * 1024  # 10MB
 	if file_size > max_size:
-		frappe.throw(_("File too large. Maximum size is 10MB. Your file is {0:.2f}MB").format(file_size / (1024 * 1024)))
+		frappe.throw(
+			_("File too large. Maximum size is 10MB. Your file is {0:.2f}MB").format(
+				file_size / (1024 * 1024)
+			)
+		)
 
 	# Read file content
 	pdf_content = file.read()
@@ -52,14 +56,16 @@ def upload_pdf():
 		frappe.throw(_("Please set Default Company in OCR Settings"))
 
 	# Create placeholder OCR Import record
-	ocr_import = frappe.get_doc({
-		"doctype": "OCR Import",
-		"status": "Pending",
-		"source_filename": filename,
-		"source_type": "Gemini Manual Upload",
-		"uploaded_by": frappe.session.user,
-		"company": settings.default_company,
-	})
+	ocr_import = frappe.get_doc(
+		{
+			"doctype": "OCR Import",
+			"status": "Pending",
+			"source_filename": filename,
+			"source_type": "Gemini Manual Upload",
+			"uploaded_by": frappe.session.user,
+			"company": settings.default_company,
+		}
+	)
 	ocr_import.insert(ignore_permissions=True)
 	frappe.db.commit()
 
@@ -79,16 +85,22 @@ def upload_pdf():
 		# Enqueue failed — mark placeholder as Error so it doesn't sit as stale Pending
 		frappe.db.set_value("OCR Import", ocr_import.name, "status", "Error")
 		frappe.db.commit()
-		frappe.log_error(title="OCR Upload Error", message=f"Failed to enqueue processing for {filename}\n{frappe.get_traceback()}")
+		frappe.log_error(
+			title="OCR Upload Error",
+			message=f"Failed to enqueue processing for {filename}\n{frappe.get_traceback()}",
+		)
 		frappe.throw(_("Failed to start processing. Please try again."))
 
-	return {
-		"ocr_import": ocr_import.name,
-		"status": "processing"
-	}
+	return {"ocr_import": ocr_import.name, "status": "processing"}
 
 
-def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, source_type: str = "Gemini Manual Upload", uploaded_by: str = None):
+def gemini_process(
+	pdf_content: bytes,
+	filename: str,
+	ocr_import_name: str,
+	source_type: str = "Gemini Manual Upload",
+	uploaded_by: str | None = None,
+):
 	"""
 	Background job to process PDF via Gemini API and create OCR Import(s).
 
@@ -113,8 +125,12 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 		# Publish realtime update
 		frappe.publish_realtime(
 			event="ocr_extraction_progress",
-			message={"ocr_import": ocr_import_name, "status": "Extracting", "message": "Calling Gemini API..."},
-			user=uploaded_by
+			message={
+				"ocr_import": ocr_import_name,
+				"status": "Extracting",
+				"message": "Calling Gemini API...",
+			},
+			user=uploaded_by,
 		)
 
 		# Call Gemini API — returns list of invoices (usually 1, but may be multiple)
@@ -130,7 +146,7 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 		frappe.publish_realtime(
 			event="ocr_extraction_progress",
 			message={"ocr_import": ocr_import_name, "status": "Processing", "message": msg},
-			user=uploaded_by
+			user=uploaded_by,
 		)
 
 		settings = frappe.get_cached_doc("OCR Settings")
@@ -144,16 +160,19 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 			# Upload new file to Drive (manual upload / email)
 			try:
 				from erpocr_integration.tasks.drive_integration import upload_invoice_to_drive
+
 				drive_result = upload_invoice_to_drive(
 					pdf_content=pdf_content,
 					filename=filename,
 					supplier_name=first_header.get("supplier_name", ""),
-					invoice_date=first_header.get("invoice_date")
+					invoice_date=first_header.get("invoice_date"),
 				)
 				if drive_result.get("file_id"):
 					frappe.logger().info(f"Uploaded {filename} to Drive: {drive_result['folder_path']}")
 			except Exception as e:
-				frappe.log_error(title="Drive Upload Failed", message=f"Failed to upload {filename} to Drive: {str(e)}")
+				frappe.log_error(
+					title="Drive Upload Failed", message=f"Failed to upload {filename} to Drive: {e!s}"
+				)
 		else:
 			# Drive scan: keep file_id reference, move to archive after processing succeeds
 			drive_result = {"file_id": existing_drive_file_id, "shareable_link": None, "folder_path": None}
@@ -165,15 +184,17 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 				ocr_import = placeholder_doc
 			else:
 				# Additional invoices create new records — copy source metadata
-				ocr_import = frappe.get_doc({
-					"doctype": "OCR Import",
-					"status": "Pending",
-					"source_filename": filename,
-					"source_type": source_type,
-					"uploaded_by": uploaded_by or frappe.session.user,
-					"company": settings.default_company,
-					"email_message_id": placeholder_doc.email_message_id,
-				})
+				ocr_import = frappe.get_doc(
+					{
+						"doctype": "OCR Import",
+						"status": "Pending",
+						"source_filename": filename,
+						"source_type": source_type,
+						"uploaded_by": uploaded_by or frappe.session.user,
+						"company": settings.default_company,
+						"email_message_id": placeholder_doc.email_message_id,
+					}
+				)
 
 			_populate_ocr_import(ocr_import, extracted_data, settings, drive_result)
 			_run_matching(ocr_import, extracted_data.get("header_fields", {}), settings)
@@ -189,22 +210,31 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 		if existing_drive_file_id:
 			try:
 				from erpocr_integration.tasks.drive_integration import move_file_to_archive
+
 				drive_result = move_file_to_archive(
 					file_id=existing_drive_file_id,
 					supplier_name=first_header.get("supplier_name", ""),
-					invoice_date=first_header.get("invoice_date")
+					invoice_date=first_header.get("invoice_date"),
 				)
 				if drive_result.get("folder_path"):
 					frappe.logger().info(f"Moved {filename} to Drive archive: {drive_result['folder_path']}")
 					# Update all OCR Imports from this PDF with archive info
-					for doc_name in frappe.get_all("OCR Import", filters={"drive_file_id": existing_drive_file_id}, pluck="name"):
-						frappe.db.set_value("OCR Import", doc_name, {
-							"drive_link": drive_result.get("shareable_link"),
-							"drive_folder_path": drive_result.get("folder_path"),
-						})
+					for doc_name in frappe.get_all(
+						"OCR Import", filters={"drive_file_id": existing_drive_file_id}, pluck="name"
+					):
+						frappe.db.set_value(
+							"OCR Import",
+							doc_name,
+							{
+								"drive_link": drive_result.get("shareable_link"),
+								"drive_folder_path": drive_result.get("folder_path"),
+							},
+						)
 					frappe.db.commit()
 			except Exception as e:
-				frappe.log_error(title="Drive Move Failed", message=f"Failed to move {filename} to archive: {str(e)}")
+				frappe.log_error(
+					title="Drive Move Failed", message=f"Failed to move {filename} to archive: {e!s}"
+				)
 
 		# Publish realtime update
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
@@ -214,24 +244,30 @@ def gemini_process(pdf_content: bytes, filename: str, ocr_import_name: str, sour
 		frappe.publish_realtime(
 			event="ocr_extraction_progress",
 			message={"ocr_import": ocr_import_name, "status": ocr_import_first.status, "message": msg},
-			user=uploaded_by
+			user=uploaded_by,
 		)
 
 	except Exception as e:
 		# Update status to Error
 		try:
-			error_log = frappe.log_error(title="OCR Integration Error", message=f"Gemini extraction failed for {filename}\n{frappe.get_traceback()}")
-			frappe.db.set_value("OCR Import", ocr_import_name, {
-				"status": "Error",
-				"error_log": error_log.name
-			})
+			error_log = frappe.log_error(
+				title="OCR Integration Error",
+				message=f"Gemini extraction failed for {filename}\n{frappe.get_traceback()}",
+			)
+			frappe.db.set_value(
+				"OCR Import", ocr_import_name, {"status": "Error", "error_log": error_log.name}
+			)
 			frappe.db.commit()
 
 			# Publish realtime update
 			frappe.publish_realtime(
 				event="ocr_extraction_progress",
-				message={"ocr_import": ocr_import_name, "status": "Error", "message": f"Extraction failed: {str(e)}"},
-				user=uploaded_by
+				message={
+					"ocr_import": ocr_import_name,
+					"status": "Error",
+					"message": f"Extraction failed: {e!s}",
+				},
+				user=uploaded_by,
 			)
 		except Exception:
 			# Even error handling failed
@@ -271,14 +307,17 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 	for line in line_items:
 		description = line.get("description", "")
 		product_code = line.get("product_code", "")
-		ocr_import.append("items", {
-			"description_ocr": description,
-			"item_name": product_code or description,
-			"qty": line.get("quantity", 1.0),
-			"rate": line.get("unit_price", 0.0),
-			"amount": line.get("amount", 0.0),
-			"match_status": "Unmatched",
-		})
+		ocr_import.append(
+			"items",
+			{
+				"description_ocr": description,
+				"item_name": product_code or description,
+				"qty": line.get("quantity", 1.0),
+				"rate": line.get("unit_price", 0.0),
+				"amount": line.get("amount", 0.0),
+				"match_status": "Unmatched",
+			},
+		)
 
 	# Drive info (shared across all invoices from same PDF)
 	if drive_result.get("file_id"):
@@ -290,9 +329,11 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 def _run_matching(ocr_import, header_fields: dict, settings):
 	"""Run supplier and item matching on an OCR Import record."""
 	from erpocr_integration.tasks.matching import (
-		match_item, match_item_fuzzy,
-		match_supplier, match_supplier_fuzzy,
+		match_item,
+		match_item_fuzzy,
 		match_service_item,
+		match_supplier,
+		match_supplier_fuzzy,
 	)
 
 	fuzzy_threshold = settings.matching_threshold or 80
@@ -334,7 +375,9 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 
 		# If no item match, try service matching (pattern → item + name + GL + CC)
 		if not matched_item and item.description_ocr:
-			service_match = match_service_item(item.description_ocr, company=ocr_import.company, supplier=ocr_import.supplier)
+			service_match = match_service_item(
+				item.description_ocr, company=ocr_import.company, supplier=ocr_import.supplier
+			)
 			if service_match:
 				matched_item = service_match["item_code"]
 				match_status = service_match["match_status"]
@@ -356,7 +399,9 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 
 			# Even when item matched via alias/fuzzy, check service mapping for accounting fields
 			if not item.expense_account and item.description_ocr:
-				service_match = match_service_item(item.description_ocr, company=ocr_import.company, supplier=ocr_import.supplier)
+				service_match = match_service_item(
+					item.description_ocr, company=ocr_import.company, supplier=ocr_import.supplier
+				)
 				if service_match:
 					item.expense_account = service_match.get("expense_account")
 					item.cost_center = service_match.get("cost_center")

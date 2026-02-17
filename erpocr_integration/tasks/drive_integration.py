@@ -12,18 +12,20 @@ This module handles:
 """
 
 import json
+
 import frappe
 from frappe import _
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaInMemoryUpload
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaInMemoryUpload
+
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
-SCOPES = ['https://www.googleapis.com/auth/drive']
-
-
-def upload_invoice_to_drive(pdf_content: bytes, filename: str, supplier_name: str = None, invoice_date: str = None) -> dict:
+def upload_invoice_to_drive(
+	pdf_content: bytes, filename: str, supplier_name: str | None = None, invoice_date: str | None = None
+) -> dict:
 	"""
 	Upload invoice PDF to Google Drive with organized folder structure.
 
@@ -46,12 +48,18 @@ def upload_invoice_to_drive(pdf_content: bytes, filename: str, supplier_name: st
 	settings = frappe.get_single("OCR Settings")
 
 	if not settings.drive_integration_enabled:
-		frappe.log_error(title="Drive Integration Disabled", message="Attempted to upload to Drive but integration is disabled")
+		frappe.log_error(
+			title="Drive Integration Disabled",
+			message="Attempted to upload to Drive but integration is disabled",
+		)
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 	sa_json = settings.get_password("drive_service_account_json")
 	if not sa_json or not settings.drive_archive_folder_id:
-		frappe.log_error(title="Drive Configuration Missing", message="Drive integration enabled but credentials or folder ID not configured")
+		frappe.log_error(
+			title="Drive Configuration Missing",
+			message="Drive integration enabled but credentials or folder ID not configured",
+		)
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 	try:
@@ -60,35 +68,28 @@ def upload_invoice_to_drive(pdf_content: bytes, filename: str, supplier_name: st
 
 		# Build folder path: Archive Root / Year / Month / Supplier
 		folder_path, parent_folder_id = _build_folder_structure(
-			service,
-			settings.drive_archive_folder_id,
-			supplier_name,
-			invoice_date
+			service, settings.drive_archive_folder_id, supplier_name, invoice_date
 		)
 
 		# Upload PDF to the target folder
-		file_metadata = {
-			'name': filename,
-			'parents': [parent_folder_id]
-		}
+		file_metadata = {"name": filename, "parents": [parent_folder_id]}
 
-		media = MediaInMemoryUpload(pdf_content, mimetype='application/pdf', resumable=True)
+		media = MediaInMemoryUpload(pdf_content, mimetype="application/pdf", resumable=True)
 
-		file = service.files().create(
-			body=file_metadata,
-			media_body=media,
-			fields='id, webViewLink',
-			supportsAllDrives=True
-		).execute()
+		file = (
+			service.files()
+			.create(body=file_metadata, media_body=media, fields="id, webViewLink", supportsAllDrives=True)
+			.execute()
+		)
 
-		file_id = file.get('id')
-		web_view_link = file.get('webViewLink')
+		file_id = file.get("id")
+		web_view_link = file.get("webViewLink")
 
 		# Grant read access to anyone with the link (so ERPNext users can view)
 		try:
 			service.permissions().create(
 				fileId=file_id,
-				body={'type': 'anyone', 'role': 'reader'},
+				body={"type": "anyone", "role": "reader"},
 				supportsAllDrives=True,
 			).execute()
 		except HttpError:
@@ -97,18 +98,16 @@ def upload_invoice_to_drive(pdf_content: bytes, filename: str, supplier_name: st
 
 		frappe.logger().info(f"Drive: Uploaded {filename} to {folder_path} (ID: {file_id})")
 
-		return {
-			"file_id": file_id,
-			"shareable_link": web_view_link,
-			"folder_path": folder_path
-		}
+		return {"file_id": file_id, "shareable_link": web_view_link, "folder_path": folder_path}
 
 	except HttpError as e:
-		frappe.log_error(title="Drive Upload Failed", message=f"Google Drive API error: {str(e)}")
+		frappe.log_error(title="Drive Upload Failed", message=f"Google Drive API error: {e!s}")
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 	except Exception as e:
-		frappe.log_error(title="Drive Upload Failed", message=f"Drive upload error: {str(e)}\n{frappe.get_traceback()}")
+		frappe.log_error(
+			title="Drive Upload Failed", message=f"Drive upload error: {e!s}\n{frappe.get_traceback()}"
+		)
 		return {"file_id": None, "shareable_link": None, "folder_path": None}
 
 
@@ -128,21 +127,20 @@ def _get_drive_service(service_account_json: str):
 	"""
 	try:
 		credentials_dict = json.loads(service_account_json)
-		credentials = service_account.Credentials.from_service_account_info(
-			credentials_dict,
-			scopes=SCOPES
-		)
-		service = build('drive', 'v3', credentials=credentials)
+		credentials = service_account.Credentials.from_service_account_info(credentials_dict, scopes=SCOPES)
+		service = build("drive", "v3", credentials=credentials)
 		return service
 
 	except json.JSONDecodeError as e:
-		raise ValueError(f"Invalid service account JSON: {str(e)}")
+		raise ValueError(f"Invalid service account JSON: {e!s}") from e
 
 	except Exception as e:
-		raise Exception(f"Failed to authenticate with Google Drive: {str(e)}")
+		raise Exception(f"Failed to authenticate with Google Drive: {e!s}") from e
 
 
-def _build_folder_structure(service, root_folder_id: str, supplier_name: str = None, invoice_date: str = None) -> tuple:
+def _build_folder_structure(
+	service, root_folder_id: str, supplier_name: str | None = None, invoice_date: str | None = None
+) -> tuple:
 	"""
 	Create folder hierarchy: Archive Root / Year / Month / Supplier
 
@@ -186,7 +184,7 @@ def _build_folder_structure(service, root_folder_id: str, supplier_name: str = N
 	# Create Supplier folder (e.g., "Google") if supplier name provided
 	if supplier_name:
 		# Clean supplier name for folder (remove special characters)
-		clean_supplier = "".join(c for c in supplier_name if c.isalnum() or c in (' ', '-', '_')).strip()
+		clean_supplier = "".join(c for c in supplier_name if c.isalnum() or c in (" ", "-", "_")).strip()
 		if not clean_supplier:
 			clean_supplier = "Unknown"
 
@@ -217,33 +215,45 @@ def _get_or_create_folder(service, folder_name: str, parent_folder_id: str) -> s
 	query = f"name='{folder_name}' and '{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
 
 	try:
-		results = service.files().list(q=query, fields='files(id, name)', supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
-		files = results.get('files', [])
+		results = (
+			service.files()
+			.list(q=query, fields="files(id, name)", supportsAllDrives=True, includeItemsFromAllDrives=True)
+			.execute()
+		)
+		files = results.get("files", [])
 
 		if files:
 			# Folder exists, return its ID
-			return files[0]['id']
+			return files[0]["id"]
 
 		# Folder doesn't exist, create it
 		file_metadata = {
-			'name': folder_name,
-			'mimeType': 'application/vnd.google-apps.folder',
-			'parents': [parent_folder_id]
+			"name": folder_name,
+			"mimeType": "application/vnd.google-apps.folder",
+			"parents": [parent_folder_id],
 		}
 
 		try:
-			folder = service.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
-			return folder.get('id')
+			folder = service.files().create(body=file_metadata, fields="id", supportsAllDrives=True).execute()
+			return folder.get("id")
 		except HttpError:
 			# Race condition: another job may have created the folder — re-search
-			results = service.files().list(q=query, fields='files(id, name)', supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
-			files = results.get('files', [])
+			results = (
+				service.files()
+				.list(
+					q=query, fields="files(id, name)", supportsAllDrives=True, includeItemsFromAllDrives=True
+				)
+				.execute()
+			)
+			files = results.get("files", [])
 			if files:
-				return files[0]['id']
+				return files[0]["id"]
 			raise  # Re-raise if still no folder found
 
 	except HttpError as e:
-		frappe.log_error(title="Drive Folder Creation Error", message=f"Failed to create folder {folder_name}: {str(e)}")
+		frappe.log_error(
+			title="Drive Folder Creation Error", message=f"Failed to create folder {folder_name}: {e!s}"
+		)
 		raise
 
 
@@ -265,6 +275,7 @@ def download_file_from_drive(file_id: str) -> bytes | None:
 
 	try:
 		from io import BytesIO
+
 		from googleapiclient.http import MediaIoBaseDownload
 
 		service = _get_drive_service(sa_json)
@@ -275,12 +286,12 @@ def download_file_from_drive(file_id: str) -> bytes | None:
 
 		done = False
 		while not done:
-			_, done = downloader.next_chunk()
+			_status, done = downloader.next_chunk()
 
 		return buffer.getvalue()
 
 	except Exception as e:
-		frappe.log_error(title="Drive Download Failed", message=f"Failed to download file {file_id}: {str(e)}")
+		frappe.log_error(title="Drive Download Failed", message=f"Failed to download file {file_id}: {e!s}")
 		return None
 
 
@@ -303,7 +314,7 @@ def poll_drive_scan_folder():
 		service = _get_drive_service(sa_json)
 		files = _list_pdf_files(service, settings.drive_scan_folder_id)
 	except Exception as e:
-		frappe.log_error(title="Drive Scan Error", message=f"Failed to list scan folder: {str(e)}")
+		frappe.log_error(title="Drive Scan Error", message=f"Failed to list scan folder: {e!s}")
 		return
 
 	if not files:
@@ -315,7 +326,9 @@ def poll_drive_scan_folder():
 		try:
 			_process_scan_file(service, file_info, settings)
 		except Exception as e:
-			frappe.log_error(title="Drive Scan Error", message=f"Failed to process {file_info.get('name', '?')}: {str(e)}")
+			frappe.log_error(
+				title="Drive Scan Error", message=f"Failed to process {file_info.get('name', '?')}: {e!s}"
+			)
 			continue
 
 
@@ -343,7 +356,9 @@ def _process_scan_file(service, file_info: dict, settings):
 			for row in existing_rows:
 				frappe.delete_doc("OCR Import", row.name, force=True, ignore_permissions=True)
 			frappe.db.commit()  # nosemgrep
-			frappe.logger().info(f"Drive scan: Retrying previously failed {filename} ({len(existing_rows)} record(s) cleared)")
+			frappe.logger().info(
+				f"Drive scan: Retrying previously failed {filename} ({len(existing_rows)} record(s) cleared)"
+			)
 		else:
 			# At least one record succeeded or is still processing — skip
 			return
@@ -355,15 +370,17 @@ def _process_scan_file(service, file_info: dict, settings):
 		return
 
 	# Create OCR Import placeholder with drive_file_id for dedup
-	ocr_import = frappe.get_doc({
-		"doctype": "OCR Import",
-		"status": "Pending",
-		"source_filename": filename,
-		"source_type": "Gemini Drive Scan",
-		"uploaded_by": "Administrator",
-		"company": settings.default_company,
-		"drive_file_id": drive_file_id,
-	})
+	ocr_import = frappe.get_doc(
+		{
+			"doctype": "OCR Import",
+			"status": "Pending",
+			"source_filename": filename,
+			"source_type": "Gemini Drive Scan",
+			"uploaded_by": "Administrator",
+			"company": settings.default_company,
+			"drive_file_id": drive_file_id,
+		}
+	)
 	ocr_import.insert(ignore_permissions=True)
 	frappe.db.commit()  # nosemgrep
 
@@ -384,7 +401,7 @@ def _process_scan_file(service, file_info: dict, settings):
 		# Delete placeholder so next poll can retry this file
 		frappe.delete_doc("OCR Import", ocr_import.name, force=True, ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
-		frappe.log_error(title="Drive Scan Enqueue Failed", message=f"Failed to enqueue {filename}: {str(e)}")
+		frappe.log_error(title="Drive Scan Enqueue Failed", message=f"Failed to enqueue {filename}: {e!s}")
 
 
 def _list_pdf_files(service, folder_id: str) -> list[dict]:
@@ -403,17 +420,21 @@ def _list_pdf_files(service, folder_id: str) -> list[dict]:
 	page_token = None
 
 	while True:
-		results = service.files().list(
-			q=query,
-			fields='nextPageToken, files(id, name)',
-			pageSize=100,
-			pageToken=page_token,
-			supportsAllDrives=True,
-			includeItemsFromAllDrives=True,
-		).execute()
+		results = (
+			service.files()
+			.list(
+				q=query,
+				fields="nextPageToken, files(id, name)",
+				pageSize=100,
+				pageToken=page_token,
+				supportsAllDrives=True,
+				includeItemsFromAllDrives=True,
+			)
+			.execute()
+		)
 
-		all_files.extend(results.get('files', []))
-		page_token = results.get('nextPageToken')
+		all_files.extend(results.get("files", []))
+		page_token = results.get("nextPageToken")
 		if not page_token:
 			break
 
@@ -432,6 +453,7 @@ def _download_file(service, file_id: str) -> bytes | None:
 		bytes: File content, or None on failure
 	"""
 	from io import BytesIO
+
 	from googleapiclient.http import MediaIoBaseDownload
 
 	request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
@@ -441,12 +463,14 @@ def _download_file(service, file_id: str) -> bytes | None:
 
 	done = False
 	while not done:
-		_, done = downloader.next_chunk()
+		_status, done = downloader.next_chunk()
 
 	return buffer.getvalue()
 
 
-def move_file_to_archive(file_id: str, supplier_name: str = None, invoice_date: str = None) -> dict:
+def move_file_to_archive(
+	file_id: str, supplier_name: str | None = None, invoice_date: str | None = None
+) -> dict:
 	"""
 	Move a file from the scan inbox folder to the archive folder structure.
 
@@ -475,38 +499,39 @@ def move_file_to_archive(file_id: str, supplier_name: str = None, invoice_date: 
 
 		# Build archive folder structure (Year/Month/Supplier)
 		folder_path, target_folder_id = _build_folder_structure(
-			service,
-			settings.drive_archive_folder_id,
-			supplier_name,
-			invoice_date
+			service, settings.drive_archive_folder_id, supplier_name, invoice_date
 		)
 
 		# Get current parent(s) and link
-		file_info = service.files().get(
-			fileId=file_id,
-			fields='parents, webViewLink',
-			supportsAllDrives=True
-		).execute()
+		file_info = (
+			service.files()
+			.get(fileId=file_id, fields="parents, webViewLink", supportsAllDrives=True)
+			.execute()
+		)
 
-		previous_parents = ",".join(file_info.get('parents', []))
-		web_view_link = file_info.get('webViewLink')
+		previous_parents = ",".join(file_info.get("parents", []))
+		web_view_link = file_info.get("webViewLink")
 
 		# Move file: remove old parent(s), add archive folder
-		updated = service.files().update(
-			fileId=file_id,
-			addParents=target_folder_id,
-			removeParents=previous_parents,
-			supportsAllDrives=True,
-			fields='id, webViewLink'
-		).execute()
+		updated = (
+			service.files()
+			.update(
+				fileId=file_id,
+				addParents=target_folder_id,
+				removeParents=previous_parents,
+				supportsAllDrives=True,
+				fields="id, webViewLink",
+			)
+			.execute()
+		)
 
-		web_view_link = updated.get('webViewLink') or web_view_link
+		web_view_link = updated.get("webViewLink") or web_view_link
 
 		# Grant read access (in case not already set)
 		try:
 			service.permissions().create(
 				fileId=file_id,
-				body={'type': 'anyone', 'role': 'reader'},
+				body={"type": "anyone", "role": "reader"},
 				supportsAllDrives=True,
 			).execute()
 		except HttpError:
@@ -514,14 +539,10 @@ def move_file_to_archive(file_id: str, supplier_name: str = None, invoice_date: 
 
 		frappe.logger().info(f"Drive: Moved {file_id} to archive: {folder_path}")
 
-		return {
-			"file_id": file_id,
-			"shareable_link": web_view_link,
-			"folder_path": folder_path
-		}
+		return {"file_id": file_id, "shareable_link": web_view_link, "folder_path": folder_path}
 
 	except Exception as e:
-		frappe.log_error(title="Drive Move Error", message=f"Failed to move {file_id} to archive: {str(e)}")
+		frappe.log_error(title="Drive Move Error", message=f"Failed to move {file_id} to archive: {e!s}")
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 
 
@@ -546,15 +567,16 @@ def test_drive_connection():
 		service = _get_drive_service(sa_json)
 
 		# Try to get the root folder details
-		folder = service.files().get(fileId=settings.drive_archive_folder_id, fields='id, name', supportsAllDrives=True).execute()
+		folder = (
+			service.files()
+			.get(fileId=settings.drive_archive_folder_id, fields="id, name", supportsAllDrives=True)
+			.execute()
+		)
 
 		return {
 			"success": True,
-			"message": f"Connection successful! Archive folder: {folder.get('name')} (ID: {folder.get('id')})"
+			"message": f"Connection successful! Archive folder: {folder.get('name')} (ID: {folder.get('id')})",
 		}
 
 	except Exception as e:
-		return {
-			"success": False,
-			"message": f"Connection failed: {str(e)}"
-		}
+		return {"success": False, "message": f"Connection failed: {e!s}"}

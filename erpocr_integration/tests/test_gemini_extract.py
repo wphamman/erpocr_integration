@@ -11,10 +11,10 @@ from erpocr_integration.tasks.gemini_extract import (
 	_validate_gemini_response,
 )
 
-
 # ---------------------------------------------------------------------------
 # _build_extraction_schema
 # ---------------------------------------------------------------------------
+
 
 class TestBuildExtractionSchema:
 	def test_returns_dict(self):
@@ -60,6 +60,7 @@ class TestBuildExtractionSchema:
 # _build_extraction_prompt
 # ---------------------------------------------------------------------------
 
+
 class TestBuildExtractionPrompt:
 	def test_returns_non_empty_string(self):
 		prompt = _build_extraction_prompt()
@@ -87,6 +88,7 @@ class TestBuildExtractionPrompt:
 # _validate_gemini_response
 # ---------------------------------------------------------------------------
 
+
 class TestValidateGeminiResponse:
 	def test_valid_response(self, sample_gemini_api_response):
 		is_valid, error = _validate_gemini_response(sample_gemini_api_response)
@@ -99,11 +101,11 @@ class TestValidateGeminiResponse:
 		assert error  # Has some error message
 
 	def test_none_response(self):
-		is_valid, error = _validate_gemini_response(None)
+		is_valid, _error = _validate_gemini_response(None)
 		assert is_valid is False
 
 	def test_empty_candidates(self):
-		is_valid, error = _validate_gemini_response({"candidates": []})
+		is_valid, _error = _validate_gemini_response({"candidates": []})
 		assert is_valid is False
 
 	def test_missing_content(self):
@@ -113,12 +115,12 @@ class TestValidateGeminiResponse:
 
 	def test_empty_parts(self):
 		response = {"candidates": [{"content": {"parts": []}}]}
-		is_valid, error = _validate_gemini_response(response)
+		is_valid, _error = _validate_gemini_response(response)
 		assert is_valid is False
 
 	def test_empty_text(self):
 		response = {"candidates": [{"content": {"parts": [{"text": ""}]}}]}
-		is_valid, error = _validate_gemini_response(response)
+		is_valid, _error = _validate_gemini_response(response)
 		assert is_valid is False
 
 	def test_invalid_json_text(self):
@@ -129,13 +131,14 @@ class TestValidateGeminiResponse:
 
 	def test_valid_json_text(self):
 		response = {"candidates": [{"content": {"parts": [{"text": '{"invoices": []}'}]}}]}
-		is_valid, error = _validate_gemini_response(response)
+		is_valid, _error = _validate_gemini_response(response)
 		assert is_valid is True
 
 
 # ---------------------------------------------------------------------------
 # _transform_to_ocr_import_format
 # ---------------------------------------------------------------------------
+
 
 class TestTransformToOcrImportFormat:
 	def test_basic_transform(self):
@@ -150,13 +153,15 @@ class TestTransformToOcrImportFormat:
 			"total_amount": 1150.0,
 			"currency": "zar",
 			"confidence": 0.9,
-			"line_items": [{
-				"description": "Widget",
-				"product_code": "W-01",
-				"quantity": 5,
-				"unit_price": 200.0,
-				"amount": 1000.0,
-			}],
+			"line_items": [
+				{
+					"description": "Widget",
+					"product_code": "W-01",
+					"quantity": 5,
+					"unit_price": 200.0,
+					"amount": 1000.0,
+				}
+			],
 		}
 		result = _transform_to_ocr_import_format(gemini_data, "test.pdf")
 
@@ -220,13 +225,15 @@ class TestTransformToOcrImportFormat:
 			"total_amount": 100.0,
 			"currency": "",
 			"confidence": 0.5,
-			"line_items": [{
-				"description": "Item",
-				"product_code": "",
-				"quantity": 1.0,
-				"unit_price": 100.0,
-				"amount": 100.0,
-			}],
+			"line_items": [
+				{
+					"description": "Item",
+					"product_code": "",
+					"quantity": 1.0,
+					"unit_price": 100.0,
+					"amount": 100.0,
+				}
+			],
 		}
 		result = _transform_to_ocr_import_format(gemini_data, "test.pdf")
 		item = result["line_items"][0]

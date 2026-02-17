@@ -7,10 +7,10 @@ import pytest
 
 from erpocr_integration.api import _populate_ocr_import
 
-
 # ---------------------------------------------------------------------------
 # _populate_ocr_import
 # ---------------------------------------------------------------------------
+
 
 class TestPopulateOcrImport:
 	def _make_ocr_import_mock(self):
@@ -139,8 +139,20 @@ class TestPopulateOcrImport:
 		data = {
 			"header_fields": {"total_amount": 100.00, "confidence": 0.8},
 			"line_items": [
-				{"description": "Widget A", "product_code": "WA-01", "quantity": 1, "unit_price": 50, "amount": 50},
-				{"description": "Service Fee", "product_code": "", "quantity": 1, "unit_price": 50, "amount": 50},
+				{
+					"description": "Widget A",
+					"product_code": "WA-01",
+					"quantity": 1,
+					"unit_price": 50,
+					"amount": 50,
+				},
+				{
+					"description": "Service Fee",
+					"product_code": "",
+					"quantity": 1,
+					"unit_price": 50,
+					"amount": 50,
+				},
 			],
 		}
 
