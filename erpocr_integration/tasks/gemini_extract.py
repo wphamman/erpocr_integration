@@ -143,6 +143,13 @@ For each product or service line item in the invoice table, extract:
 - If you see multiple tables within a single invoice, extract all line items from all tables
 - Be precise with amounts - do not round or approximate
 
+**Confidence Rating:**
+For each invoice, rate your overall extraction confidence from 0.0 to 1.0:
+- 1.0 = perfectly clear, all fields extracted with high certainty
+- 0.7-0.9 = most fields clear, minor uncertainty on some values
+- 0.4-0.6 = moderate quality, some fields may be incorrect or missing
+- Below 0.4 = poor quality scan, significant uncertainty
+
 Return the extracted data as structured JSON matching the provided schema."""
 
 
@@ -187,6 +194,10 @@ def _build_extraction_schema() -> dict:
 				"type": "string",
 				"description": "Currency code of the invoice (e.g., USD, ZAR, EUR, GBP). If not explicitly shown, infer from context or symbols."
 			},
+			"confidence": {
+				"type": "number",
+				"description": "Overall extraction confidence from 0.0 (very uncertain) to 1.0 (perfectly clear)"
+			},
 			"line_items": {
 				"type": "array",
 				"description": "Array of line items from the invoice",
@@ -218,7 +229,7 @@ def _build_extraction_schema() -> dict:
 				}
 			}
 		},
-		"required": ["supplier_name", "supplier_tax_id", "invoice_number", "invoice_date", "due_date", "subtotal", "tax_amount", "total_amount", "line_items"]
+		"required": ["supplier_name", "supplier_tax_id", "invoice_number", "invoice_date", "due_date", "subtotal", "tax_amount", "total_amount", "confidence", "line_items"]
 	}
 
 	return {
@@ -387,6 +398,7 @@ def _transform_to_ocr_import_format(gemini_data: dict, filename: str) -> dict:
 		"tax_amount": gemini_data.get("tax_amount") or 0.0,
 		"total_amount": gemini_data.get("total_amount", 0.0),
 		"currency": (gemini_data.get("currency") or "").upper().strip(),  # Normalize to uppercase
+		"confidence": gemini_data.get("confidence", 0.0),
 	}
 
 	# Extract and clean line items

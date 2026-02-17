@@ -245,6 +245,8 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 	ocr_import.tax_amount = header_fields.get("tax_amount", 0.0)
 	ocr_import.total_amount = header_fields.get("total_amount", 0.0)
 	ocr_import.currency = header_fields.get("currency", "")
+	raw_confidence = float(header_fields.get("confidence") or 0.0)
+	ocr_import.confidence = max(0.0, min(100.0, raw_confidence * 100))  # Clamp to 0-100
 	ocr_import.raw_payload = extracted_data.get("raw_response", "")
 
 	# Auto-set tax template based on whether tax was detected

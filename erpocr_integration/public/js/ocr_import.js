@@ -128,6 +128,24 @@ frappe.ui.form.on('OCR Import', {
 			frm.fields_dict.drive_link.$wrapper.find('.like-disabled-input, .control-value').html(link_html);
 		}
 
+		// Color-code confidence indicator
+		if (!frm.is_new() && frm.doc.confidence != null) {
+			let conf = frm.doc.confidence;
+			let color, label;
+			if (conf >= 80) {
+				color = 'green';
+				label = 'High';
+			} else if (conf >= 50) {
+				color = 'orange';
+				label = 'Medium';
+			} else {
+				color = 'red';
+				label = 'Low';
+			}
+			let badge = `<span class="indicator-pill whitespace-nowrap ${color}">${Math.round(conf)}% — ${label}</span>`;
+			frm.fields_dict.confidence.$wrapper.find('.like-disabled-input, .control-value').html(badge);
+		}
+
 		// Subscribe to realtime updates for this document
 		if (!frm.is_new() && ['Pending', 'Extracting', 'Processing'].includes(frm.doc.status)) {
 			// Unbind existing handler to prevent duplicates

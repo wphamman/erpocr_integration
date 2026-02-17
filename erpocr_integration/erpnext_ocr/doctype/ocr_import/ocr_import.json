@@ -17,6 +17,7 @@
 		"company",
 		"currency",
 		"extraction_time",
+		"confidence",
 		"section_break_drive",
 		"drive_file_id",
 		"drive_link",
@@ -122,6 +123,13 @@
 			"fieldname": "extraction_time",
 			"fieldtype": "Float",
 			"label": "Extraction Time",
+			"read_only": 1
+		},
+		{
+			"description": "Gemini's self-reported extraction confidence (0-100%)",
+			"fieldname": "confidence",
+			"fieldtype": "Percent",
+			"label": "Confidence",
 			"read_only": 1
 		},
 		{
