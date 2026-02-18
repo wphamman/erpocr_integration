@@ -62,8 +62,8 @@ frappe.ui.form.on('OCR Import', {
 									// Navigate to created OCR Import
 									frappe.set_route('Form', 'OCR Import', ocr_import_name);
 
-									// Poll for status updates
-									poll_extraction_status(ocr_import_name);
+									// Poll for status updates (frm not passed — realtime handler covers reload after navigate)
+									poll_extraction_status(null, ocr_import_name);
 								}
 							} catch (e) {
 								frappe.msgprint(__('Error parsing response'));
@@ -104,7 +104,7 @@ frappe.ui.form.on('OCR Import', {
 									message: __('Retrying extraction...'),
 									indicator: 'blue'
 								});
-								poll_extraction_status(frm.doc.name);
+								poll_extraction_status(frm, frm.doc.name);
 							}
 						}
 					});
@@ -173,7 +173,7 @@ frappe.ui.form.on('OCR Import', {
 	}
 });
 
-function poll_extraction_status(ocr_import_name) {
+function poll_extraction_status(frm, ocr_import_name) {
 	let poll_count = 0;
 	let max_polls = 60;  // 60 * 2s = 2 minutes max
 
@@ -195,9 +195,10 @@ function poll_extraction_status(ocr_import_name) {
 					if (!['Pending', 'Extracting', 'Processing'].includes(status) || poll_count >= max_polls) {
 						clearInterval(interval);
 
-						// Reload form
-						if (cur_frm && cur_frm.doc.name === ocr_import_name) {
-							cur_frm.reload_doc();
+						// Reload form (fall back to open form when frm was not passed)
+						let active_frm = frm || frappe.ui.form.get_open_form();
+						if (active_frm && active_frm.doc && active_frm.doc.name === ocr_import_name) {
+							active_frm.reload_doc();
 						}
 
 						// Show final status message
