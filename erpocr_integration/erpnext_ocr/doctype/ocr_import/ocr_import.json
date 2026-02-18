@@ -25,6 +25,7 @@
 		"drive_folder_path",
 		"section_break_supplier",
 		"supplier_name_ocr",
+		"supplier_tax_id",
 		"supplier",
 		"column_break_supplier",
 		"supplier_match_status",
@@ -177,6 +178,13 @@
 			"read_only": 1
 		},
 		{
+			"fieldname": "supplier_tax_id",
+			"fieldtype": "Data",
+			"label": "Supplier Tax ID (OCR)",
+			"read_only": 1,
+			"description": "Tax ID extracted from invoice. Review and update Supplier master manually if needed."
+		},
+		{
 			"fieldname": "supplier",
 			"fieldtype": "Link",
 			"in_list_view": 1,
@@ -289,7 +297,8 @@
 			"fieldtype": "Code",
 			"label": "Raw Payload",
 			"options": "JSON",
-			"read_only": 1
+			"read_only": 1,
+			"permlevel": 1
 		}
 	],
 	"index_web_pages_for_search": 1,
@@ -315,7 +324,6 @@
 		{
 			"create": 1,
 			"email": 1,
-			"export": 1,
 			"print": 1,
 			"read": 1,
 			"report": 1,
@@ -325,12 +333,17 @@
 		},
 		{
 			"email": 1,
-			"export": 1,
 			"print": 1,
 			"read": 1,
 			"report": 1,
 			"role": "Accounts Manager",
 			"share": 1,
+			"write": 1
+		},
+		{
+			"permlevel": 1,
+			"read": 1,
+			"role": "System Manager",
 			"write": 1
 		}
 	],

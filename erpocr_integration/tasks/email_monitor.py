@@ -10,6 +10,7 @@ from frappe import _
 
 TERMINAL_SUCCESS_STATUSES = {"Needs Review", "Matched", "Completed"}
 IN_PROGRESS_STATUSES = {"Pending", "Extracting", "Processing"}
+MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
 
 def poll_email_inbox():
@@ -210,6 +211,14 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 						f"Email monitoring: PDF '{filename}' failed {error_count} times, giving up"
 					)
 					continue
+
+			# Enforce same size limit as manual upload
+			if len(pdf_content) > MAX_PDF_SIZE_BYTES:
+				frappe.log_error(
+					title="Email Monitoring Error",
+					message=f"PDF too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+				)
+				continue
 
 			pdfs_to_process += 1
 			ocr_import = None
@@ -412,7 +421,7 @@ def _decode_header_value(header_value: str) -> str:
 		return header_value
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def trigger_email_check():
 	"""Manual trigger for email monitoring (for testing)."""
 	frappe.only_for("System Manager")

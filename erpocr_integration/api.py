@@ -4,6 +4,25 @@
 import frappe
 from frappe import _
 
+MAX_PENDING_IMPORTS_PER_USER = 5
+
+
+def _enforce_pending_import_limit(user: str | None):
+	"""Reject if user already has too many in-flight OCR imports in the queue."""
+	if not user or user == "Guest":
+		return
+	pending_count = frappe.db.count(
+		"OCR Import",
+		filters={"uploaded_by": user, "status": ["in", ["Pending", "Needs Review"]]},
+	)
+	if int(pending_count or 0) >= MAX_PENDING_IMPORTS_PER_USER:
+		frappe.throw(
+			_(
+				"You already have {0} pending OCR imports. "
+				"Please wait for some to finish before uploading more."
+			).format(MAX_PENDING_IMPORTS_PER_USER)
+		)
+
 
 @frappe.whitelist(methods=["POST"])
 def upload_pdf():
@@ -20,6 +39,8 @@ def upload_pdf():
 	# Validate user has permission (Accounts User or System Manager)
 	if not frappe.has_permission("OCR Import", "create"):
 		frappe.throw(_("You do not have permission to upload invoices"))
+
+	_enforce_pending_import_limit(frappe.session.user)
 
 	# Get uploaded file
 	if not frappe.request or not frappe.request.files:
@@ -115,7 +136,9 @@ def gemini_process(
 		source_type: "Gemini Manual Upload", "Gemini Email", or "Gemini Drive Scan"
 		uploaded_by: User who initiated the upload
 	"""
-	frappe.set_user("Administrator")
+	# Run as the uploading user (not Administrator) for audit trail.
+	# Individual calls use ignore_permissions where needed.
+	frappe.set_user(uploaded_by or "Administrator")
 
 	try:
 		# Update status to "Extracting"
@@ -220,7 +243,10 @@ def gemini_process(
 					frappe.logger().info(f"Moved {filename} to Drive archive: {drive_result['folder_path']}")
 					# Update all OCR Imports from this PDF with archive info
 					for doc_name in frappe.get_all(
-						"OCR Import", filters={"drive_file_id": existing_drive_file_id}, pluck="name"
+						"OCR Import",
+						filters={"drive_file_id": existing_drive_file_id},
+						pluck="name",
+						ignore_permissions=True,
 					):
 						frappe.db.set_value(
 							"OCR Import",
@@ -281,6 +307,7 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 
 	ocr_import.extraction_time = extracted_data.get("extraction_time", 0.0)
 	ocr_import.supplier_name_ocr = header_fields.get("supplier_name", "")
+	ocr_import.supplier_tax_id = header_fields.get("supplier_tax_id", "")
 	ocr_import.invoice_number = header_fields.get("invoice_number", "")
 	ocr_import.invoice_date = header_fields.get("invoice_date")
 	ocr_import.due_date = header_fields.get("due_date")
@@ -344,12 +371,6 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 		if matched_supplier:
 			ocr_import.supplier = matched_supplier
 			ocr_import.supplier_match_status = match_status
-			# Update supplier tax_id if we have it and the supplier doesn't
-			supplier_tax_id = header_fields.get("supplier_tax_id", "")
-			if supplier_tax_id:
-				existing_tax_id = frappe.db.get_value("Supplier", matched_supplier, "tax_id")
-				if not existing_tax_id:
-					frappe.db.set_value("Supplier", matched_supplier, "tax_id", supplier_tax_id)
 		else:
 			# Fuzzy fallback for supplier
 			fuzzy_supplier, fuzzy_status, _score = match_supplier_fuzzy(
@@ -411,7 +432,7 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 			item.match_status = "Unmatched"
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def retry_gemini_extraction(ocr_import: str):
 	"""
 	Retry Gemini extraction for a failed OCR Import.
@@ -429,6 +450,8 @@ def retry_gemini_extraction(ocr_import: str):
 
 	if ocr_import_doc.source_type not in ("Gemini Manual Upload", "Gemini Email", "Gemini Drive Scan"):
 		frappe.throw(_("Can only retry Gemini extractions"))
+
+	_enforce_pending_import_limit(frappe.session.user)
 
 	# Download PDF from Drive if available
 	if not ocr_import_doc.drive_file_id:

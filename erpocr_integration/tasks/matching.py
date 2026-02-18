@@ -116,6 +116,7 @@ def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | No
 		filters={"disabled": 0},
 		fields=["name", "supplier_name"],
 		limit_page_length=0,
+		ignore_permissions=True,
 	)
 
 	for s in suppliers:
@@ -132,6 +133,7 @@ def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | No
 		"OCR Supplier Alias",
 		fields=["ocr_text", "supplier"],
 		limit_page_length=0,
+		ignore_permissions=True,
 	)
 	for a in aliases:
 		if not a.ocr_text:
@@ -174,6 +176,7 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 		filters={"disabled": 0},
 		fields=["name", "item_name"],
 		limit_page_length=0,
+		ignore_permissions=True,
 	)
 
 	for i in items:
@@ -190,6 +193,7 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 		"OCR Item Alias",
 		fields=["ocr_text", "item_code"],
 		limit_page_length=0,
+		ignore_permissions=True,
 	)
 	for a in aliases:
 		if not a.ocr_text:
@@ -246,6 +250,7 @@ def match_service_item(
 			filters={"company": company, "supplier": supplier},
 			fields=["description_pattern", "item_code", "item_name", "expense_account", "cost_center"],
 			order_by="LENGTH(description_pattern) DESC",
+			ignore_permissions=True,
 		)
 
 		for mapping in supplier_mappings:
@@ -265,6 +270,7 @@ def match_service_item(
 		filters={"company": company, "supplier": ["is", "not set"]},
 		fields=["description_pattern", "item_code", "item_name", "expense_account", "cost_center"],
 		order_by="LENGTH(description_pattern) DESC",
+		ignore_permissions=True,
 	)
 
 	for mapping in generic_mappings:

@@ -21,6 +21,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
+MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
 
 def upload_invoice_to_drive(
@@ -84,17 +85,6 @@ def upload_invoice_to_drive(
 
 		file_id = file.get("id")
 		web_view_link = file.get("webViewLink")
-
-		# Grant read access to anyone with the link (so ERPNext users can view)
-		try:
-			service.permissions().create(
-				fileId=file_id,
-				body={"type": "anyone", "role": "reader"},
-				supportsAllDrives=True,
-			).execute()
-		except HttpError:
-			# Permission grant failed — link still works for Shared Drive members
-			frappe.logger().warning(f"Drive: Could not set sharing permissions for {file_id}")
 
 		frappe.logger().info(f"Drive: Uploaded {filename} to {folder_path} (ID: {file_id})")
 
@@ -369,6 +359,14 @@ def _process_scan_file(service, file_info: dict, settings):
 		frappe.log_error(title="Drive Scan Error", message=f"Empty content for {filename}")
 		return
 
+	# Enforce same size limit as manual upload
+	if len(pdf_content) > MAX_PDF_SIZE_BYTES:
+		frappe.log_error(
+			title="Drive Scan Error",
+			message=f"PDF too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+		)
+		return
+
 	# Create OCR Import placeholder with drive_file_id for dedup
 	ocr_import = frappe.get_doc(
 		{
@@ -527,16 +525,6 @@ def move_file_to_archive(
 
 		web_view_link = updated.get("webViewLink") or web_view_link
 
-		# Grant read access (in case not already set)
-		try:
-			service.permissions().create(
-				fileId=file_id,
-				body={"type": "anyone", "role": "reader"},
-				supportsAllDrives=True,
-			).execute()
-		except HttpError:
-			pass  # Permission may already exist
-
 		frappe.logger().info(f"Drive: Moved {file_id} to archive: {folder_path}")
 
 		return {"file_id": file_id, "shareable_link": web_view_link, "folder_path": folder_path}
@@ -546,7 +534,7 @@ def move_file_to_archive(
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def test_drive_connection():
 	"""Test Drive connection and credentials. Returns folder list or error."""
 	frappe.only_for("System Manager")
