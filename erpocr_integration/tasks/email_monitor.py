@@ -41,22 +41,8 @@ def poll_email_inbox():
 
 		# Select the OCR Invoices label/folder (for Gmail labels with spaces, use quotes)
 		folder_name = '"OCR Invoices"'
-		try:
-			status, _data = mail.select(folder_name)
-			if status != "OK":
-				# Try without quotes as fallback
-				status, _data = mail.select("OCR Invoices")
-				if status != "OK":
-					status, folders = mail.list()
-					frappe.log_error(
-						title="Email Monitoring Error",
-						message=f"Failed to select folder '{folder_name}'. Make sure the Gmail label 'OCR Invoices' exists.\n\nAvailable folders: {folders}",
-					)
-					return
-		except Exception as e:
-			frappe.log_error(
-				title="Email Monitoring Error", message=f"Failed to select folder '{folder_name}': {e!s}"
-			)
+		resolved_folder = _select_folder(mail, folder_name, readonly=True)
+		if not resolved_folder:
 			return
 
 		# Search for UNSEEN emails only (reduces load on growing folders)
@@ -74,10 +60,16 @@ def poll_email_inbox():
 
 		frappe.logger().info(f"Email monitoring: Found {len(email_uids)} email(s) in OCR Invoices folder")
 
-		# Process each email (using UIDs for better Gmail compatibility)
+		# Phase 1: Read-only — fetch and process emails.
+		# Folder is opened with EXAMINE (readonly=True) so no flags can be
+		# modified.  This prevents Gmail from marking messages as \Seen which
+		# would propagate to the Inbox (Gmail \Seen is per-message, not per-label).
+		uids_to_move = []
 		for email_uid in email_uids:
 			try:
-				_process_email(mail, email_uid, email_account, settings, use_uid=True)
+				should_move = _process_email(mail, email_uid, email_account, settings, use_uid=True)
+				if should_move:
+					uids_to_move.append(email_uid)
 			except Exception:
 				# Log error but continue with other emails
 				frappe.log_error(
@@ -85,11 +77,52 @@ def poll_email_inbox():
 					message=f"Failed to process email UID {email_uid}\n{frappe.get_traceback()}",
 				)
 
-		# Expunge deleted messages (if any were marked for deletion)
-		try:
-			mail.expunge()
-		except Exception:
-			pass  # Expunge might fail if no messages were deleted
+		# Phase 2: Read-write — move processed emails to "OCR Processed".
+		# Re-select the folder in read-write mode so STORE commands work.
+		if uids_to_move:
+			mail.close()
+			if not _select_folder(mail, folder_name, readonly=False):
+				frappe.log_error(
+					title="Email Monitoring Error",
+					message="Could not re-select folder in read-write mode for moving emails",
+				)
+				return
+
+			# Validate UIDs still exist after re-select.  Handles two edge cases:
+			# - UIDVALIDITY changed between phases (all UIDs become invalid)
+			# - Messages moved/deleted between phases (individual UIDs gone)
+			uid_csv = b",".join(uids_to_move).decode()
+			status, data = mail.uid("search", None, f"UID {uid_csv}")
+			if status == "OK" and data[0]:
+				valid_uids = set(data[0].split())
+				stale = [u for u in uids_to_move if u not in valid_uids]
+				if stale:
+					frappe.logger().warning(
+						f"Email monitoring: {len(stale)} email(s) no longer in folder "
+						f"(moved between phases), skipping"
+					)
+				uids_to_move = [u for u in uids_to_move if u in valid_uids]
+			else:
+				# Search failed or returned empty — none of the UIDs are valid
+				frappe.logger().warning(
+					"Email monitoring: UID validation returned no results, skipping all moves"
+				)
+				uids_to_move = []
+
+			for email_uid in uids_to_move:
+				try:
+					_move_to_processed_folder(mail, email_uid, use_uid=True)
+				except Exception:
+					frappe.log_error(
+						title="Email Monitoring Error",
+						message=f"Failed to move email UID {email_uid} to processed\n{frappe.get_traceback()}",
+					)
+
+			# Expunge deleted messages (if any were marked for deletion)
+			try:
+				mail.expunge()
+			except Exception:
+				pass  # Expunge might fail if no messages were deleted
 
 		# Close connection
 		mail.close()
@@ -107,6 +140,38 @@ def poll_email_inbox():
 				mail.logout()
 			except Exception:
 				pass
+
+
+def _select_folder(mail, folder_name, readonly=False):
+	"""
+	Select an IMAP folder, trying quoted and unquoted variants.
+
+	Args:
+		mail: IMAP connection.
+		folder_name: Folder name (e.g. '"OCR Invoices"').
+		readonly: If True, open with EXAMINE (no flag modifications possible).
+
+	Returns:
+		The folder name variant that worked, or None on failure.
+	"""
+	for variant in (folder_name, folder_name.strip('"')):
+		try:
+			status, _data = mail.select(variant, readonly=readonly)
+			if status == "OK":
+				return variant
+		except Exception:
+			continue
+
+	# All variants failed
+	try:
+		_status, folders = mail.list()
+	except Exception:
+		folders = "(unavailable)"
+	frappe.log_error(
+		title="Email Monitoring Error",
+		message=f"Failed to select folder '{folder_name}'. Make sure the Gmail label 'OCR Invoices' exists.\n\nAvailable folders: {folders}",
+	)
+	return None
 
 
 def _connect_imap(email_account):
@@ -130,7 +195,13 @@ def _connect_imap(email_account):
 
 
 def _process_email(mail, email_id, email_account, settings, use_uid=False):
-	"""Process a single email and extract PDF attachments."""
+	"""
+	Process a single email and extract PDF attachments.
+
+	Returns:
+		True if the email should be moved to "OCR Processed" (all PDFs handled),
+		False if it should stay in the folder (failures or in-progress jobs).
+	"""
 	try:
 		# Fetch email using BODY.PEEK[] to avoid marking as \Seen (read).
 		# RFC822 is equivalent to BODY[] which auto-sets \Seen flag.
@@ -142,7 +213,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 			status, msg_data = mail.fetch(email_id, "(BODY.PEEK[])")
 		if status != "OK":
 			frappe.logger().error(f"Email monitoring: Failed to fetch email {email_id}, status: {status}")
-			return
+			return False
 
 		# Initialize variables
 		pdfs = []
@@ -167,12 +238,11 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 				frappe.logger().info(f"Email monitoring: Found {len(pdfs)} PDF(s) in email '{subject}'")
 
 		if not pdfs:
-			# No PDFs in this email, move to OCR Processed
+			# No PDFs in this email — should be moved to OCR Processed
 			frappe.logger().info(
-				f"Email monitoring: No PDFs found in email '{subject}', moving to OCR Processed"
+				f"Email monitoring: No PDFs found in email '{subject}', will move to OCR Processed"
 			)
-			_move_to_processed_folder(mail, email_id, use_uid=use_uid)
-			return
+			return True
 
 		# Determine uploaded_by — use email_id only if it's a valid User, else Administrator
 		uploaded_by = "Administrator"
@@ -285,22 +355,24 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 						message=f"Failed to update error status for {filename}",
 					)
 
-		# Move to processed if all PDFs were handled (success or skipped)
+		# Decide whether the email should be moved to "OCR Processed"
 		if all_succeeded and not has_in_progress:
-			_move_to_processed_folder(mail, email_id, use_uid=use_uid)
-		elif pdfs_to_process == 0 and not has_in_progress:
+			return True
+		if pdfs_to_process == 0 and not has_in_progress:
 			# All PDFs were already processed or permanently failed — move on
-			_move_to_processed_folder(mail, email_id, use_uid=use_uid)
-		else:
-			frappe.logger().warning(
-				f"Email monitoring: Not moving email '{subject}' to processed due to failures or in-progress jobs "
-				f"(will retry next poll)"
-			)
+			return True
+
+		frappe.logger().warning(
+			f"Email monitoring: Not moving email '{subject}' to processed due to failures or in-progress jobs "
+			f"(will retry next poll)"
+		)
+		return False
 	except Exception:
 		frappe.log_error(
 			title="Email Monitoring Error",
 			message=f"Failed to process email {email_id}\n{frappe.get_traceback()}",
 		)
+		return False
 
 
 def _move_to_processed_folder(mail, email_id, use_uid=False):
