@@ -1,0 +1,11 @@
+[
+	{
+		"doctype": "Role",
+		"name": "OCR Manager",
+		"role_name": "OCR Manager",
+		"is_custom": 1,
+		"desk_access": 1,
+		"search_bar": 1,
+		"notifications": 1
+	}
+]
