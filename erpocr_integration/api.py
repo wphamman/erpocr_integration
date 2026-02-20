@@ -276,7 +276,11 @@ def gemini_process(
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
 		msg = "Extraction complete!"
 		if ocr_import_first.status == "Completed":
-			doc_label = "Purchase Receipt" if ocr_import_first.document_type == "Purchase Receipt" else "Purchase Invoice"
+			doc_label = (
+				"Purchase Receipt"
+				if ocr_import_first.document_type == "Purchase Receipt"
+				else "Purchase Invoice"
+			)
 			msg = f"Extraction complete! {doc_label} draft created."
 		elif invoice_count > 1:
 			msg = f"Extraction complete! {invoice_count} invoices created."

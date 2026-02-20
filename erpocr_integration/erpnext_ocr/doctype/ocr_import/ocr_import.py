@@ -165,8 +165,11 @@ class OCRImport(Document):
 
 		# Row-lock to prevent duplicate creation from concurrent calls (manual + auto)
 		current = frappe.db.get_value(
-			"OCR Import", self.name, ["purchase_invoice", "purchase_receipt"],
-			as_dict=True, for_update=True,
+			"OCR Import",
+			self.name,
+			["purchase_invoice", "purchase_receipt"],
+			as_dict=True,
+			for_update=True,
 		)
 		if current.purchase_invoice:
 			frappe.throw(
@@ -174,9 +177,9 @@ class OCRImport(Document):
 			)
 		if current.purchase_receipt:
 			frappe.throw(
-				_("Purchase Receipt {0} already exists for this import. Cannot also create a Purchase Invoice.").format(
-					current.purchase_receipt
-				)
+				_(
+					"Purchase Receipt {0} already exists for this import. Cannot also create a Purchase Invoice."
+				).format(current.purchase_receipt)
 			)
 
 		if not self.supplier:
@@ -305,8 +308,11 @@ class OCRImport(Document):
 
 		# Row-lock to prevent duplicate creation from concurrent calls (manual + auto)
 		current = frappe.db.get_value(
-			"OCR Import", self.name, ["purchase_invoice", "purchase_receipt"],
-			as_dict=True, for_update=True,
+			"OCR Import",
+			self.name,
+			["purchase_invoice", "purchase_receipt"],
+			as_dict=True,
+			for_update=True,
 		)
 		if current.purchase_receipt:
 			frappe.throw(
@@ -314,9 +320,9 @@ class OCRImport(Document):
 			)
 		if current.purchase_invoice:
 			frappe.throw(
-				_("Purchase Invoice {0} already exists for this import. Cannot also create a Purchase Receipt.").format(
-					current.purchase_invoice
-				)
+				_(
+					"Purchase Invoice {0} already exists for this import. Cannot also create a Purchase Receipt."
+				).format(current.purchase_invoice)
 			)
 
 		if not self.supplier:
@@ -357,8 +363,10 @@ class OCRImport(Document):
 
 		if not pr_items:
 			frappe.throw(
-				_("No matched items to create Purchase Receipt. "
-				  "Match items first, or change Document Type to Purchase Invoice.")
+				_(
+					"No matched items to create Purchase Receipt. "
+					"Match items first, or change Document Type to Purchase Invoice."
+				)
 			)
 
 		pr_dict = {
