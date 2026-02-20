@@ -262,10 +262,15 @@ def gemini_process(
 					title="Drive Move Failed", message=f"Failed to move {filename} to archive: {e!s}"
 				)
 
+		# Auto-create Purchase Invoice drafts for fully matched imports
+		_auto_create_purchase_invoices(ocr_import_name, invoice_list, uploaded_by)
+
 		# Publish realtime update
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
 		msg = "Extraction complete!"
-		if invoice_count > 1:
+		if ocr_import_first.status == "Completed":
+			msg = "Extraction complete! Purchase Invoice draft created."
+		elif invoice_count > 1:
 			msg = f"Extraction complete! {invoice_count} invoices created."
 		frappe.publish_realtime(
 			event="ocr_extraction_progress",
@@ -430,6 +435,41 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 						item.item_name = service_match["item_name"]
 		else:
 			item.match_status = "Unmatched"
+
+
+def _auto_create_purchase_invoices(ocr_import_name: str, invoice_list: list, uploaded_by: str | None):
+	"""Auto-create PI drafts for all OCR Imports that reached 'Matched' status."""
+	# Collect all OCR Import names created from this PDF
+	first_doc = frappe.get_doc("OCR Import", ocr_import_name)
+	all_names = [first_doc.name]
+	if len(invoice_list) > 1:
+		siblings = frappe.get_all(
+			"OCR Import",
+			filters={
+				"source_filename": first_doc.source_filename,
+				"uploaded_by": first_doc.uploaded_by,
+				"name": ["!=", first_doc.name],
+				"status": "Matched",
+			},
+			pluck="name",
+			ignore_permissions=True,
+		)
+		all_names.extend(siblings)
+
+	for doc_name in all_names:
+		try:
+			doc = frappe.get_doc("OCR Import", doc_name)
+			if doc.status != "Matched" or doc.purchase_invoice:
+				continue
+			doc.create_purchase_invoice()
+			frappe.db.commit()  # nosemgrep
+			frappe.logger().info(f"Auto-created PI {doc.purchase_invoice} for {doc_name}")
+		except Exception:
+			# PI creation failed — leave at "Matched" for manual review
+			frappe.log_error(
+				title="Auto PI Creation Failed",
+				message=f"Failed to auto-create PI for {doc_name}\n{frappe.get_traceback()}",
+			)
 
 
 @frappe.whitelist(methods=["POST"])

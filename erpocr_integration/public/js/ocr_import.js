@@ -89,6 +89,25 @@ frappe.ui.form.on('OCR Import', {
 			}, __('Actions'));
 		}
 
+		// Add "Create Purchase Invoice" button for matched records without a PI
+		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status) && !frm.doc.purchase_invoice) {
+			frm.add_custom_button(__('Create Purchase Invoice'), function() {
+				frappe.call({
+					method: 'create_purchase_invoice',
+					doc: frm.doc,
+					callback: function(r) {
+						if (!r.exc) {
+							frm.reload_doc();
+							frappe.show_alert({
+								message: __('Purchase Invoice draft created.'),
+								indicator: 'green'
+							}, 5);
+						}
+					}
+				});
+			}, __('Actions'));
+		}
+
 		// Add retry/re-upload buttons for failed extractions
 		if (frm.doc.status === 'Error' && ['Gemini Manual Upload', 'Gemini Email', 'Gemini Drive Scan'].includes(frm.doc.source_type)) {
 			if (frm.doc.drive_file_id) {
