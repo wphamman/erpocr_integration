@@ -16,11 +16,12 @@ Frappe custom app that integrates Gemini 2.5 Flash API with ERPNext for automati
 
 ### Pipeline Flow
 ```
-Manual Upload: User → Upload PDF → Gemini API → Create OCR Import(s) → Match → PI Draft
-Email:         Forward email → Hourly job → Gemini API → Create OCR Import(s) → Match → PI Draft
-Drive Scan:    Drop PDF in folder → 15-min poll → Gemini API → Create OCR Import(s) → Match → PI Draft
+Manual Upload: User → Upload PDF → Gemini API → Create OCR Import(s) → Match → PI/PR Draft
+Email:         Forward email → Hourly job → Gemini API → Create OCR Import(s) → Match → PI/PR Draft
+Drive Scan:    Drop PDF in folder → 15-min poll → Gemini API → Create OCR Import(s) → Match → PI/PR Draft
                                                       ↓
                                       [Multi-invoice: one PDF → multiple OCR Imports]
+                                      [Document type auto-detected: stock items → PR, service items → PI]
 ```
 
 ### Key Components
@@ -33,13 +34,13 @@ Drive Scan:    Drop PDF in folder → 15-min poll → Gemini API → Create OCR 
 | `erpocr_integration/tasks/email_monitor.py` | Email inbox polling — extracts PDFs from forwarded emails |
 | `erpocr_integration/tasks/drive_integration.py` | Google Drive — upload, download, folder scan, move-to-archive |
 | `erpocr_integration/public/js/ocr_import.js` | Upload button UI with real-time progress updates |
-| `erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py` | OCR Import class — create_purchase_invoice(), alias saving, status workflow |
+| `erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py` | OCR Import class — create_purchase_invoice(), create_purchase_receipt(), alias saving, status workflow |
 
 ### DocTypes
 | DocType | Type | Purpose |
 |---|---|---|
-| **OCR Settings** | Single | Gemini API key, email/Drive config, default company/warehouse/tax templates |
-| **OCR Import** | Regular | Main staging record — extracted data, match status, link to created PI |
+| **OCR Settings** | Single | Gemini API key, email/Drive config, default company/warehouse/tax templates, default item |
+| **OCR Import** | Regular | Main staging record — extracted data, match status, document type (PI/PR), links to created PI/PR |
 | **OCR Import Item** | Child Table | Line items on OCR Import — description, qty, rate, matched item_code |
 | **OCR Supplier Alias** | Regular | Learning: OCR text → ERPNext Supplier |
 | **OCR Item Alias** | Regular | Learning: OCR text → ERPNext Item |
@@ -65,11 +66,13 @@ def process(raw_payload: str):
 - Retry logic with exponential backoff for rate limits (429 errors)
 - Extraction time: 3-15 seconds depending on invoice complexity
 
-### PI Creation
-- `pi.flags.ignore_mandatory = True` for partial data
+### PI/PR Creation
+- `document_type` field on OCR Import: auto-detected (all stock → PR, any service/unmatched → PI), user-editable
+- `pi.flags.ignore_mandatory = True` / `pr.flags.ignore_mandatory = True` for partial data
 - `pi.insert(ignore_permissions=True)` — background job runs as Administrator
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
 - ERPNext overrides `posting_date` to today unless `set_posting_time=1`
+- `default_item` in OCR Settings: used for unmatched items (non-stock item, OCR description set as item description)
 
 ### Upload Security
 - Permission check: User must have "create" permission on OCR Import
@@ -191,6 +194,10 @@ bench restart
 - [x] Batch upload (covered by Drive scan folder — drop multiple PDFs, auto-processed)
 - [x] OCR confidence scores (Gemini self-reported, color-coded badge on form)
 - [x] Dashboard workspace (number cards, status chart, shortcuts, link cards)
+- [x] PI vs PR auto-detection (document_type field — stock items → PR, service items → PI)
+- [x] Default Item for unmatched lines (configurable in OCR Settings)
+- [x] Purchase Receipt creation method (create_purchase_receipt)
+- [x] OCR Manager role for access control
 - [ ] Test suite
 
 ## Configuration
@@ -212,6 +219,7 @@ bench restart
 - **Scan Inbox Folder ID**: Google Drive folder ID polled every 15 minutes for new PDFs
 - **VAT Tax Template**: Applied when OCR detects tax on the invoice
 - **Non-VAT Tax Template**: Applied when no tax detected (foreign/non-VAT suppliers)
+- **Default Item**: Non-stock item used for unmatched line items (OCR description becomes the item description)
 - **Matching Threshold**: Minimum similarity score (0-100) for fuzzy matching (default: 80)
 
 ### Usage
@@ -221,7 +229,8 @@ bench restart
 3. Select PDF file (max 10MB)
 4. Wait 5-30 seconds for extraction
 5. Review/confirm supplier and item matches
-6. PI draft auto-created if all matched
+6. Check Document Type (Purchase Invoice or Purchase Receipt — auto-detected, changeable)
+7. PI/PR draft auto-created if all matched
 
 **Email Upload**:
 1. Forward invoice email to configured email address
@@ -236,4 +245,4 @@ bench restart
 5. Failed extractions are automatically retried on the next poll
 
 ## Open Questions
-- Should OCR Import be submittable (lock after PI created)?
+- Should OCR Import be submittable (lock after PI/PR created)?

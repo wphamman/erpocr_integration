@@ -98,13 +98,15 @@ For unmatched or incorrect items:
 4. Change **Match Status** to **Confirmed**
 5. Click **Save**
 
-### Purchase Invoice Creation
+### Document Creation (Purchase Invoice or Purchase Receipt)
 
-**Automatic:** When the system matches everything automatically (supplier + all items), a draft Purchase Invoice is created straight away — no action needed from you. The status jumps to **Completed**.
+The system auto-detects whether to create a **Purchase Invoice** (for services and expenses) or a **Purchase Receipt** (for stock items arriving at the warehouse). You can change this in the **Document Type** field before creating the document.
 
-**Manual (after review):** If you had to confirm or fix matches, click **Actions > Create Purchase Invoice** after saving. A draft PI is created and the status changes to **Completed**.
+**Automatic:** When the system matches everything automatically (supplier + all items), a draft is created straight away — no action needed from you. The status jumps to **Completed**.
 
-Either way, the Purchase Invoice is saved as a **draft** — open it, check the details, and submit it when you're happy.
+**Manual (after review):** If you had to confirm or fix matches, click **Actions > Create Purchase Invoice** (or **Create Purchase Receipt**) after saving. A draft is created and the status changes to **Completed**.
+
+Either way, the document is saved as a **draft** — open it, check the details, and submit it when you're happy.
 
 ---
 
@@ -122,8 +124,8 @@ The more invoices you process, the less manual work is needed.
 |---|---|---|
 | **Pending** | Waiting to be processed | Nothing — it starts automatically |
 | **Needs Review** | Data extracted, needs checking | Review supplier and items, then confirm |
-| **Matched** | Everything matched, PI auto-created | Check the draft PI |
-| **Completed** | Purchase Invoice created | All done |
+| **Matched** | Everything matched, document auto-created | Check the draft PI/PR |
+| **Completed** | Purchase Invoice or Purchase Receipt created | All done |
 | **Error** | Something went wrong | Let your administrator know |
 
 ---

@@ -89,23 +89,43 @@ frappe.ui.form.on('OCR Import', {
 			}, __('Actions'));
 		}
 
-		// Add "Create Purchase Invoice" button for matched records without a PI
-		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status) && !frm.doc.purchase_invoice) {
-			frm.add_custom_button(__('Create Purchase Invoice'), function() {
-				frappe.call({
-					method: 'create_purchase_invoice',
-					doc: frm.doc,
-					callback: function(r) {
-						if (!r.exc) {
-							frm.reload_doc();
-							frappe.show_alert({
-								message: __('Purchase Invoice draft created.'),
-								indicator: 'green'
-							}, 5);
+		// Add "Create Purchase Invoice" or "Create Purchase Receipt" button based on document_type
+		// PR requires Matched status (all items must be resolved); PI allows Needs Review for manual override
+		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status)) {
+			if (frm.doc.document_type === 'Purchase Receipt' && !frm.doc.purchase_receipt && frm.doc.status === 'Matched') {
+				frm.add_custom_button(__('Create Purchase Receipt'), function() {
+					frappe.call({
+						method: 'create_purchase_receipt',
+						doc: frm.doc,
+						callback: function(r) {
+							if (!r.exc) {
+								frm.reload_doc();
+								frappe.show_alert({
+									message: __('Purchase Receipt draft created.'),
+									indicator: 'green'
+								}, 5);
+							}
 						}
-					}
-				});
-			}, __('Actions'));
+					});
+				}, __('Actions'));
+			}
+			if ((!frm.doc.document_type || frm.doc.document_type === 'Purchase Invoice') && !frm.doc.purchase_invoice) {
+				frm.add_custom_button(__('Create Purchase Invoice'), function() {
+					frappe.call({
+						method: 'create_purchase_invoice',
+						doc: frm.doc,
+						callback: function(r) {
+							if (!r.exc) {
+								frm.reload_doc();
+								frappe.show_alert({
+									message: __('Purchase Invoice draft created.'),
+									indicator: 'green'
+								}, 5);
+							}
+						}
+					});
+				}, __('Actions'));
+			}
 		}
 
 		// Add retry/re-upload buttons for failed extractions
@@ -229,7 +249,7 @@ function poll_extraction_status(frm, ocr_import_name) {
 							});
 						} else if (status === 'Completed') {
 							frappe.show_alert({
-								message: __('Extraction complete! Purchase Invoice created.'),
+								message: __('Extraction complete! Document draft created.'),
 								indicator: 'green'
 							}, 5);
 						} else if (status === 'Matched') {

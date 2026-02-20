@@ -24,6 +24,7 @@
 		"column_break_defaults",
 		"default_expense_account",
 		"default_cost_center",
+		"default_item",
 		"section_break_matching",
 		"matching_threshold"
 	],
@@ -154,6 +155,13 @@
 			"fieldtype": "Link",
 			"label": "Default Cost Center",
 			"options": "Cost Center"
+		},
+		{
+			"description": "Default non-stock item used for unmatched line items. The OCR description is set as the item description on the Purchase Invoice.",
+			"fieldname": "default_item",
+			"fieldtype": "Link",
+			"label": "Default Item",
+			"options": "Item"
 		},
 		{
 			"fieldname": "section_break_matching",

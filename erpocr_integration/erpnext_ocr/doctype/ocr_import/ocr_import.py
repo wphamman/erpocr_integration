@@ -16,8 +16,8 @@ class OCRImport(Document):
 		if self.status in ("Completed", "Error"):
 			return
 
-		# If PI already created, mark completed
-		if self.purchase_invoice:
+		# If PI or PR already created, mark completed
+		if self.purchase_invoice or self.purchase_receipt:
 			self.status = "Completed"
 			return
 
@@ -163,9 +163,20 @@ class OCRImport(Document):
 		if not frappe.has_permission("Purchase Invoice", "create"):
 			frappe.throw(_("You don't have permission to create Purchase Invoices."))
 
-		if self.purchase_invoice:
+		# Row-lock to prevent duplicate creation from concurrent calls (manual + auto)
+		current = frappe.db.get_value(
+			"OCR Import", self.name, ["purchase_invoice", "purchase_receipt"],
+			as_dict=True, for_update=True,
+		)
+		if current.purchase_invoice:
 			frappe.throw(
-				_("Purchase Invoice {0} already created for this import.").format(self.purchase_invoice)
+				_("Purchase Invoice {0} already created for this import.").format(current.purchase_invoice)
+			)
+		if current.purchase_receipt:
+			frappe.throw(
+				_("Purchase Receipt {0} already exists for this import. Cannot also create a Purchase Invoice.").format(
+					current.purchase_receipt
+				)
 			)
 
 		if not self.supplier:
@@ -183,8 +194,11 @@ class OCRImport(Document):
 
 			if item.item_code:
 				pi_item["item_code"] = item.item_code
+			elif settings.default_item:
+				# Use configured default item, keep OCR description
+				pi_item["item_code"] = settings.default_item
 			else:
-				# No matched item — use description
+				# No matched item and no default — use description only
 				pi_item["item_name"] = item.item_name or item.description_ocr or "OCR Imported Item"
 
 			# Row-level accounting fields (from service mapping) take precedence over defaults
@@ -282,3 +296,139 @@ class OCRImport(Document):
 		)
 
 		return pi.name
+
+	@frappe.whitelist()
+	def create_purchase_receipt(self):
+		"""Create a Purchase Receipt draft from this OCR Import record."""
+		if not frappe.has_permission("Purchase Receipt", "create"):
+			frappe.throw(_("You don't have permission to create Purchase Receipts."))
+
+		# Row-lock to prevent duplicate creation from concurrent calls (manual + auto)
+		current = frappe.db.get_value(
+			"OCR Import", self.name, ["purchase_invoice", "purchase_receipt"],
+			as_dict=True, for_update=True,
+		)
+		if current.purchase_receipt:
+			frappe.throw(
+				_("Purchase Receipt {0} already created for this import.").format(current.purchase_receipt)
+			)
+		if current.purchase_invoice:
+			frappe.throw(
+				_("Purchase Invoice {0} already exists for this import. Cannot also create a Purchase Receipt.").format(
+					current.purchase_invoice
+				)
+			)
+
+		if not self.supplier:
+			frappe.throw(_("Please select a Supplier before creating a Purchase Receipt."))
+
+		settings = frappe.get_cached_doc("OCR Settings")
+
+		pr_items = []
+		non_stock_warnings = []
+		skipped_unmatched = 0
+		for item in self.items:
+			if not item.item_code:
+				# Skip unmatched rows — PRs require actual items
+				skipped_unmatched += 1
+				continue
+
+			pr_item = {
+				"item_code": item.item_code,
+				"qty": item.qty or 1,
+				"rate": item.rate or 0,
+				"description": item.description_ocr or item.item_name or "OCR Imported Item",
+			}
+
+			# Warn if non-stock item is on a PR
+			is_stock = frappe.db.get_value("Item", item.item_code, "is_stock_item")
+			if not is_stock:
+				non_stock_warnings.append(item.item_code)
+
+			if item.cost_center:
+				pr_item["cost_center"] = item.cost_center
+			elif settings.default_cost_center:
+				pr_item["cost_center"] = settings.default_cost_center
+
+			if settings.default_warehouse:
+				pr_item["warehouse"] = settings.default_warehouse
+
+			pr_items.append(pr_item)
+
+		if not pr_items:
+			frappe.throw(
+				_("No matched items to create Purchase Receipt. "
+				  "Match items first, or change Document Type to Purchase Invoice.")
+			)
+
+		pr_dict = {
+			"doctype": "Purchase Receipt",
+			"supplier": self.supplier,
+			"company": self.company,
+			"currency": self.currency or frappe.get_cached_value("Company", self.company, "default_currency"),
+			"posting_date": self.invoice_date or frappe.utils.today(),
+			"items": pr_items,
+		}
+
+		# Apply tax template from OCR Import
+		if self.tax_template:
+			template = frappe.get_cached_doc("Purchase Taxes and Charges Template", self.tax_template)
+			if template.company and template.company != self.company:
+				frappe.throw(
+					_("Tax Template '{0}' belongs to company '{1}', not '{2}'").format(
+						self.tax_template, template.company, self.company
+					)
+				)
+			pr_dict["taxes_and_charges"] = self.tax_template
+			pr_dict["taxes"] = []
+			for tax_row in template.taxes:
+				pr_dict["taxes"].append(
+					{
+						"category": tax_row.category,
+						"add_deduct_tax": tax_row.add_deduct_tax,
+						"charge_type": tax_row.charge_type,
+						"row_id": tax_row.row_id,
+						"account_head": tax_row.account_head,
+						"description": tax_row.description,
+						"rate": tax_row.rate,
+						"cost_center": tax_row.cost_center,
+						"account_currency": tax_row.account_currency,
+						"included_in_print_rate": tax_row.included_in_print_rate,
+						"included_in_paid_amount": tax_row.included_in_paid_amount,
+					}
+				)
+
+		pr = frappe.get_doc(pr_dict)
+		pr.flags.ignore_mandatory = True
+		pr.insert()
+
+		# Add comment with original invoice link (if available from Drive)
+		if self.drive_link and self.drive_link.startswith("https://"):
+			from frappe.utils import escape_html
+
+			safe_link = escape_html(self.drive_link)
+			safe_path = escape_html(self.drive_folder_path or "N/A")
+			pr.add_comment(
+				"Comment",
+				f"<b>Original Invoice PDF:</b> <a href='{safe_link}' target='_blank' rel='noopener noreferrer'>View in Google Drive</a><br>"
+				f"<small>Archive path: {safe_path}</small>",
+			)
+
+		# Link PR back to this import
+		self.purchase_receipt = pr.name
+		self.status = "Completed"
+		self.save()
+
+		msg = _("Purchase Receipt {0} created as draft.").format(
+			frappe.utils.get_link_to_form("Purchase Receipt", pr.name)
+		)
+		warnings = []
+		if skipped_unmatched:
+			warnings.append(_("{0} unmatched row(s) skipped").format(skipped_unmatched))
+		if non_stock_warnings:
+			warnings.append(_("Non-stock items included: {0}").format(", ".join(non_stock_warnings)))
+		if warnings:
+			msg += "<br><br>" + _("Warning: {0}. Review the draft carefully.").format("; ".join(warnings))
+		frappe.msgprint(msg, indicator="green" if not warnings else "orange")
+
+		return pr.name

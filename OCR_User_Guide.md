@@ -33,6 +33,7 @@ Before testing, an administrator needs to configure OCR Settings.
 | **Default Warehouse** | Your main receiving warehouse (e.g. "Stores - SP") |
 | **Default Expense Account** | A general expense account for service items (e.g. "Cost of Goods Sold - SP") |
 | **Default Cost Center** | Your main cost center (e.g. "Main - SP") |
+| **Default Item** | A non-stock item used for unmatched line items (e.g. a generic "Services" item). The OCR description is used as the item description on the Purchase Invoice. |
 | **VAT Tax Template** | South Africa Tax - SP |
 | **Non-VAT Tax Template** | Z - Not Registered for VAT - SP |
 | **Matching Threshold** | Leave at **80** (this controls how closely item names need to match — 80% is a good starting point) |
@@ -70,6 +71,7 @@ This is the simplest way to test. You upload a PDF directly.
 | **Total Amount** | Should match the invoice total |
 | **Tax Amount** | Should match the VAT amount (if applicable) |
 | **Tax Template** | Should be auto-set: "South Africa Tax" for invoices with VAT, "Not Registered for VAT" for invoices without |
+| **Document Type** | Auto-detected: "Purchase Invoice" for service items, "Purchase Receipt" for stock items. You can change this before creating the document. |
 | **Confidence** | A colour-coded badge: Green (high) / Orange (medium) / Red (low) |
 | **Items table** | Each line item from the invoice should appear with description, quantity, rate, and amount |
 
@@ -108,13 +110,21 @@ This is the simplest way to test. You upload a PDF directly.
    - Change the **Match Status** to **Confirmed**
 3. Click **Save**
 
+**Check the Document Type:**
+
+Before creating the document, check the **Document Type** field:
+- **Purchase Invoice** — for service invoices, subscriptions, and general expenses
+- **Purchase Receipt** — for receiving physical stock items into the warehouse
+
+The system auto-detects this based on the matched item types. You can change it if needed.
+
 **Once all items are matched and the status shows "Matched":**
 
-If everything was auto-matched during extraction, a draft Purchase Invoice is created automatically — the status will already be "Completed" with a link to the PI.
+If everything was auto-matched during extraction, a draft Purchase Invoice or Purchase Receipt is created automatically — the status will already be "Completed" with a link to the document.
 
-If you had to manually confirm matches, click **Actions > Create Purchase Invoice** after saving. The system creates a draft PI and the status changes to "Completed".
+If you had to manually confirm matches, click **Actions > Create Purchase Invoice** (or **Create Purchase Receipt**) after saving. The system creates a draft and the status changes to "Completed".
 
-**Pass criteria:** A draft Purchase Invoice is created with the correct supplier, line items, amounts, and tax template. The PI is in draft status (not submitted).
+**Pass criteria:** A draft Purchase Invoice or Purchase Receipt is created with the correct supplier, line items, amounts, and tax template. The document is in draft status (not submitted).
 
 ---
 
@@ -204,6 +214,7 @@ Once you're comfortable with the system, the daily workflow looks like this:
 | See all imports | OCR Import list (filter by status) |
 | Review pending imports | OCR Import list > filter: Status = Needs Review |
 | See created Purchase Invoices | Click the **Purchase Invoice** link on any Completed OCR Import |
+| See created Purchase Receipts | Click the **Purchase Receipt** link on any Completed OCR Import |
 | View saved supplier aliases | OCR Supplier Alias list |
 | View saved item aliases | OCR Item Alias list |
 | View service mappings | OCR Service Mapping list |
@@ -218,8 +229,8 @@ Once you're comfortable with the system, the daily workflow looks like this:
 |---|---|---|
 | **Pending** | Just uploaded, waiting to be processed | Wait — processing starts automatically |
 | **Needs Review** | Data extracted, but supplier or items need manual matching | Review and confirm matches |
-| **Matched** | All suppliers and items matched, PI auto-created | Check the draft PI |
-| **Completed** | Purchase Invoice created | Nothing — all done |
+| **Matched** | All suppliers and items matched, PI/PR auto-created | Check the draft document |
+| **Completed** | Purchase Invoice or Purchase Receipt created | Nothing — all done |
 | **Error** | Something went wrong during extraction | Check the error details, retry or re-upload |
 
 ---

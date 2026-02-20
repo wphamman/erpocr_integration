@@ -71,6 +71,10 @@ def upload_pdf():
 	# Read file content
 	pdf_content = file.read()
 
+	# Validate PDF magic bytes (%PDF- header)
+	if not pdf_content[:5] == b"%PDF-":
+		frappe.throw(_("File does not appear to be a valid PDF"))
+
 	# Get company from OCR Settings
 	settings = frappe.get_single("OCR Settings")
 	if not settings.default_company:
@@ -200,8 +204,9 @@ def gemini_process(
 			# Drive scan: keep file_id reference, move to archive after processing succeeds
 			drive_result = {"file_id": existing_drive_file_id, "shareable_link": None, "folder_path": None}
 
-		# Process each invoice
+		# Process each invoice and collect all created OCR Import names
 		placeholder_doc = frappe.get_doc("OCR Import", ocr_import_name)
+		all_ocr_import_names = []
 		for idx, extracted_data in enumerate(invoice_list):
 			if idx == 0:
 				ocr_import = placeholder_doc
@@ -226,6 +231,8 @@ def gemini_process(
 				ocr_import.save(ignore_permissions=True)
 			else:
 				ocr_import.insert(ignore_permissions=True)
+
+			all_ocr_import_names.append(ocr_import.name)
 
 		frappe.db.commit()
 
@@ -262,14 +269,15 @@ def gemini_process(
 					title="Drive Move Failed", message=f"Failed to move {filename} to archive: {e!s}"
 				)
 
-		# Auto-create Purchase Invoice drafts for fully matched imports
-		_auto_create_purchase_invoices(ocr_import_name, invoice_list, uploaded_by)
+		# Auto-create PI/PR drafts for fully matched imports
+		_auto_create_documents(all_ocr_import_names)
 
 		# Publish realtime update
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
 		msg = "Extraction complete!"
 		if ocr_import_first.status == "Completed":
-			msg = "Extraction complete! Purchase Invoice draft created."
+			doc_label = "Purchase Receipt" if ocr_import_first.document_type == "Purchase Receipt" else "Purchase Invoice"
+			msg = f"Extraction complete! {doc_label} draft created."
 		elif invoice_count > 1:
 			msg = f"Extraction complete! {invoice_count} invoices created."
 		frappe.publish_realtime(
@@ -436,39 +444,65 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 		else:
 			item.match_status = "Unmatched"
 
+	# Auto-detect document type based on matched item types
+	_detect_document_type(ocr_import)
 
-def _auto_create_purchase_invoices(ocr_import_name: str, invoice_list: list, uploaded_by: str | None):
-	"""Auto-create PI drafts for all OCR Imports that reached 'Matched' status."""
-	# Collect all OCR Import names created from this PDF
-	first_doc = frappe.get_doc("OCR Import", ocr_import_name)
-	all_names = [first_doc.name]
-	if len(invoice_list) > 1:
-		siblings = frappe.get_all(
-			"OCR Import",
-			filters={
-				"source_filename": first_doc.source_filename,
-				"uploaded_by": first_doc.uploaded_by,
-				"name": ["!=", first_doc.name],
-				"status": "Matched",
-			},
-			pluck="name",
-			ignore_permissions=True,
-		)
-		all_names.extend(siblings)
 
-	for doc_name in all_names:
+def _detect_document_type(ocr_import):
+	"""Auto-detect whether to create a Purchase Invoice or Purchase Receipt.
+
+	Logic:
+	- If ALL matched items are stock items → Purchase Receipt
+	- If ANY item is non-stock or unmatched → Purchase Invoice (safer default)
+	- Default: Purchase Invoice
+	"""
+	matched_items = [item for item in ocr_import.items if item.item_code]
+	if not matched_items:
+		ocr_import.document_type = "Purchase Invoice"
+		return
+
+	all_stock = True
+	for item in matched_items:
+		is_stock = frappe.db.get_value("Item", item.item_code, "is_stock_item")
+		if not is_stock:
+			all_stock = False
+			break
+
+	# Only suggest PR when ALL matched items are stock items and ALL items are matched
+	has_unmatched = any(not item.item_code for item in ocr_import.items)
+	if all_stock and not has_unmatched:
+		ocr_import.document_type = "Purchase Receipt"
+	else:
+		ocr_import.document_type = "Purchase Invoice"
+
+
+def _auto_create_documents(ocr_import_names: list[str]):
+	"""Auto-create PI/PR drafts for OCR Imports that reached 'Matched' status.
+
+	Args:
+		ocr_import_names: Explicit list of OCR Import names from this batch
+			(collected during processing — no heuristic sibling lookup).
+	"""
+	for doc_name in ocr_import_names:
 		try:
 			doc = frappe.get_doc("OCR Import", doc_name)
-			if doc.status != "Matched" or doc.purchase_invoice:
+			if doc.status != "Matched":
 				continue
-			doc.create_purchase_invoice()
-			frappe.db.commit()  # nosemgrep
-			frappe.logger().info(f"Auto-created PI {doc.purchase_invoice} for {doc_name}")
+			if doc.purchase_invoice or doc.purchase_receipt:
+				continue
+
+			if doc.document_type == "Purchase Receipt":
+				doc.create_purchase_receipt()
+				frappe.db.commit()  # nosemgrep
+				frappe.logger().info(f"Auto-created PR {doc.purchase_receipt} for {doc_name}")
+			else:
+				doc.create_purchase_invoice()
+				frappe.db.commit()  # nosemgrep
+				frappe.logger().info(f"Auto-created PI {doc.purchase_invoice} for {doc_name}")
 		except Exception:
-			# PI creation failed — leave at "Matched" for manual review
 			frappe.log_error(
-				title="Auto PI Creation Failed",
-				message=f"Failed to auto-create PI for {doc_name}\n{frappe.get_traceback()}",
+				title="Auto Document Creation Failed",
+				message=f"Failed to auto-create document for {doc_name}\n{frappe.get_traceback()}",
 			)
 
 
@@ -508,15 +542,25 @@ def retry_gemini_extraction(ocr_import: str):
 	frappe.db.commit()
 
 	# Re-enqueue extraction
-	frappe.enqueue(
-		"erpocr_integration.api.gemini_process",
-		queue="long",
-		timeout=300,
-		pdf_content=pdf_content,
-		filename=ocr_import_doc.source_filename,
-		ocr_import_name=ocr_import_doc.name,
-		source_type=ocr_import_doc.source_type,
-		uploaded_by=frappe.session.user,
-	)
+	try:
+		frappe.enqueue(
+			"erpocr_integration.api.gemini_process",
+			queue="long",
+			timeout=300,
+			pdf_content=pdf_content,
+			filename=ocr_import_doc.source_filename,
+			ocr_import_name=ocr_import_doc.name,
+			source_type=ocr_import_doc.source_type,
+			uploaded_by=frappe.session.user,
+		)
+	except Exception:
+		# Enqueue failed — revert to Error so it doesn't sit as stale Pending
+		ocr_import_doc.db_set("status", "Error")
+		frappe.db.commit()
+		frappe.log_error(
+			title="OCR Retry Enqueue Error",
+			message=f"Failed to enqueue retry for {ocr_import_doc.name}\n{frappe.get_traceback()}",
+		)
+		frappe.throw(_("Failed to start retry. Please try again."))
 
 	return {"message": _("Retry queued. The extraction will run in the background.")}

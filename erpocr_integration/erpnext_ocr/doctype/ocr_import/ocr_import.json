@@ -41,8 +41,10 @@
 		"section_break_items",
 		"items",
 		"section_break_result",
+		"document_type",
 		"purchase_invoice",
 		"column_break_result",
+		"purchase_receipt",
 		"error_log",
 		"section_break_raw",
 		"raw_payload"
@@ -269,6 +271,16 @@
 			"label": "Result"
 		},
 		{
+			"default": "Purchase Invoice",
+			"fieldname": "document_type",
+			"fieldtype": "Select",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"label": "Document Type",
+			"options": "Purchase Invoice\nPurchase Receipt",
+			"description": "Auto-detected based on item types. Change before creating the document if needed."
+		},
+		{
 			"fieldname": "purchase_invoice",
 			"fieldtype": "Link",
 			"label": "Purchase Invoice",
@@ -278,6 +290,13 @@
 		{
 			"fieldname": "column_break_result",
 			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "purchase_receipt",
+			"fieldtype": "Link",
+			"label": "Purchase Receipt",
+			"options": "Purchase Receipt",
+			"read_only": 1
 		},
 		{
 			"fieldname": "error_log",
