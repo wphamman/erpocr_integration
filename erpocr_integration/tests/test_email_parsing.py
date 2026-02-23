@@ -23,9 +23,10 @@ class TestExtractPdfsFromEmail:
 	def test_single_pdf_attachment(self, sample_email_with_pdf):
 		pdfs = _extract_pdfs_from_email(sample_email_with_pdf)
 		assert len(pdfs) == 1
-		content, filename = pdfs[0]
+		content, filename, content_type = pdfs[0]
 		assert filename == "INV-2024-0042.pdf"
 		assert content == b"%PDF-1.4 fake-pdf-content-for-testing"
+		assert content_type == "application/pdf"
 
 	def test_no_pdf_attachments(self, sample_email_no_pdf):
 		pdfs = _extract_pdfs_from_email(sample_email_no_pdf)
@@ -43,7 +44,7 @@ class TestExtractPdfsFromEmail:
 
 		pdfs = _extract_pdfs_from_email(msg)
 		assert len(pdfs) == 2
-		filenames = {f for _, f in pdfs}
+		filenames = {f for _, f, _ in pdfs}
 		assert filenames == {"invoice1.pdf", "invoice2.pdf"}
 
 	def test_non_pdf_attachment_skipped(self):
@@ -62,7 +63,7 @@ class TestExtractPdfsFromEmail:
 		assert len(pdfs) == 0
 
 	def test_mixed_attachments(self):
-		"""PDF + non-PDF in same email — only PDF extracted."""
+		"""PDF + image in same email — both extracted as supported types."""
 		msg = MIMEMultipart()
 		msg["Subject"] = "Mixed"
 		msg.attach(MIMEText("Body", "plain"))
@@ -78,8 +79,11 @@ class TestExtractPdfsFromEmail:
 		msg.attach(img_part)
 
 		pdfs = _extract_pdfs_from_email(msg)
-		assert len(pdfs) == 1
+		assert len(pdfs) == 2
 		assert pdfs[0][1] == "invoice.pdf"
+		assert pdfs[0][2] == "application/pdf"
+		assert pdfs[1][1] == "logo.png"
+		assert pdfs[1][2] == "application/png"
 
 	def test_inline_pdf(self):
 		"""PDFs with Content-Disposition: inline should also be extracted."""
@@ -107,6 +111,27 @@ class TestExtractPdfsFromEmail:
 
 		pdfs = _extract_pdfs_from_email(msg)
 		assert len(pdfs) == 1
+		# Content-Type header value is preserved even when detection was by filename
+		assert pdfs[0][2] == "application/octet-stream"
+
+	def test_content_type_header_returned_for_images(self):
+		"""Image content_type from email header is carried through, not inferred from filename."""
+		msg = MIMEMultipart()
+		msg["Subject"] = "JPEG invoice"
+		msg.attach(MIMEText("Body", "plain"))
+
+		# JPEG with correct Content-Type but no extension in filename
+		from email.mime.image import MIMEImage
+
+		img_part = MIMEImage(b"\xff\xd8\xff fake-jpeg", _subtype="jpeg")
+		img_part.add_header("Content-Disposition", "attachment", filename="scan_001")
+		msg.attach(img_part)
+
+		pdfs = _extract_pdfs_from_email(msg)
+		assert len(pdfs) == 1
+		_, filename, content_type = pdfs[0]
+		assert filename == "scan_001"
+		assert content_type == "image/jpeg"
 
 	def test_single_part_pdf(self):
 		"""Non-multipart email that is itself a PDF."""

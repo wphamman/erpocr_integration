@@ -1,7 +1,7 @@
 # ERPNext OCR Integration (erpocr_integration)
 
 ## Project Overview
-Frappe custom app that integrates Gemini 2.5 Flash API with ERPNext for automatic invoice data extraction and import.
+Frappe custom app that integrates Gemini 2.5 Flash API with ERPNext for automatic invoice data extraction and import. Supports PDF, JPEG, and PNG files.
 
 **Repository goal**: A `bench get-app` installable Frappe app that works on both self-hosted and Frappe Cloud ERPNext instances.
 
@@ -16,32 +16,42 @@ Frappe custom app that integrates Gemini 2.5 Flash API with ERPNext for automati
 
 ### Pipeline Flow
 ```
-Manual Upload: User → Upload PDF → Gemini API → Create OCR Import(s) → Match → PI/PR Draft
-Email:         Forward email → Hourly job → Gemini API → Create OCR Import(s) → Match → PI/PR Draft
-Drive Scan:    Drop PDF in folder → 15-min poll → Gemini API → Create OCR Import(s) → Match → PI/PR Draft
+Manual Upload: User → Upload PDF/Image → Gemini API → Create OCR Import(s) → Match → User Review
+Email:         Forward email → Hourly job → Gemini API → Create OCR Import(s) → Match → User Review
+Drive Scan:    Drop file in folder → 15-min poll → Gemini API → Create OCR Import(s) → Match → User Review
                                                       ↓
                                       [Multi-invoice: one PDF → multiple OCR Imports]
-                                      [Document type auto-detected: stock items → PR, service items → PI]
+
+User Review:   Review matches → Select Document Type → (optional) Link PO/PR → Create Document
+               ├─ Purchase Invoice  (with optional PO + PR references)
+               ├─ Purchase Receipt  (with optional PO reference)
+               └─ Journal Entry     (expense receipts — restaurant bills, tolls, etc.)
 ```
+
+### Design Philosophy
+- **Reduce data entry**: system extracts data and suggests matches
+- **Shift focus to review**: user reviews every suggestion before committing
+- **No auto-creation**: documents are only created by explicit user action
+- **Full override**: user can change any suggestion (supplier, items, document type, PO link)
 
 ### Key Components
 | File | Purpose |
 |---|---|
 | `erpocr_integration/api.py` | Upload endpoint + `gemini_process()` background job (multi-invoice aware) |
-| `erpocr_integration/tasks/gemini_extract.py` | Gemini API — extracts `invoices[]` array from PDF (supports multi-invoice) |
+| `erpocr_integration/tasks/gemini_extract.py` | Gemini API — extracts `invoices[]` array from PDF/image (supports multi-invoice PDFs) |
 | `erpocr_integration/tasks/process_import.py` | Universal processing pipeline — match supplier/items, create PI |
 | `erpocr_integration/tasks/matching.py` | Supplier + item matching (alias → exact → service mapping → fuzzy) |
-| `erpocr_integration/tasks/email_monitor.py` | Email inbox polling — extracts PDFs from forwarded emails |
-| `erpocr_integration/tasks/drive_integration.py` | Google Drive — upload, download, folder scan, move-to-archive |
+| `erpocr_integration/tasks/email_monitor.py` | Email inbox polling — extracts PDF/image attachments from forwarded emails |
+| `erpocr_integration/tasks/drive_integration.py` | Google Drive — upload, download, folder scan (PDF + images), move-to-archive |
 | `erpocr_integration/public/js/ocr_import.js` | Upload button UI with real-time progress updates |
 | `erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py` | OCR Import class — create_purchase_invoice(), create_purchase_receipt(), alias saving, status workflow |
 
 ### DocTypes
 | DocType | Type | Purpose |
 |---|---|---|
-| **OCR Settings** | Single | Gemini API key, email/Drive config, default company/warehouse/tax templates, default item |
-| **OCR Import** | Regular | Main staging record — extracted data, match status, document type (PI/PR), links to created PI/PR |
-| **OCR Import Item** | Child Table | Line items on OCR Import — description, qty, rate, matched item_code |
+| **OCR Settings** | Single | Gemini API key, email/Drive config, default company/warehouse/tax templates, default item, default credit account |
+| **OCR Import** | Regular | Main staging record — extracted data, match status, document type (PI/PR/JE), links to PO, PR, created PI/PR/JE |
+| **OCR Import Item** | Child Table | Line items — description, qty, rate, matched item_code, PO item ref, PR item ref |
 | **OCR Supplier Alias** | Regular | Learning: OCR text → ERPNext Supplier |
 | **OCR Item Alias** | Regular | Learning: OCR text → ERPNext Item |
 | **OCR Service Mapping** | Regular | Pattern → item + GL account + cost center (supplier-specific or generic) |
@@ -62,21 +72,43 @@ def process(raw_payload: str):
 
 ### Gemini API Integration
 - Uses Gemini 2.5 Flash API with structured output (JSON schema)
-- PDF sent as base64-encoded inline data (max 10MB currently, can increase to 20MB)
+- Files sent as base64-encoded inline data with correct MIME type (max 10MB)
+- Supported formats: PDF (`application/pdf`), JPEG (`image/jpeg`), PNG (`image/png`)
 - Retry logic with exponential backoff for rate limits (429 errors)
 - Extraction time: 3-15 seconds depending on invoice complexity
 
-### PI/PR Creation
-- `document_type` field on OCR Import: auto-detected (all stock → PR, any service/unmatched → PI), user-editable
-- `pi.flags.ignore_mandatory = True` / `pr.flags.ignore_mandatory = True` for partial data
-- `pi.insert(ignore_permissions=True)` — background job runs as Administrator
+### Document Creation (PI / PR / JE)
+- `document_type` field on OCR Import: **blank by default** — user must explicitly select before creating
+- Three options: Purchase Invoice, Purchase Receipt, Journal Entry
+- **No auto-creation** — user clicks "Create" button after reviewing all matches
+- `flags.ignore_mandatory = True` on all created documents (drafts may have incomplete data)
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
-- ERPNext overrides `posting_date` to today unless `set_posting_time=1`
-- `default_item` in OCR Settings: used for unmatched items (non-stock item, OCR description set as item description)
+- `default_item` in OCR Settings: used for unmatched PI items (non-stock item, OCR description set as item description)
+
+### Purchase Order / Purchase Receipt Linking
+- Optional: user can link OCR Import to an existing PO via "Find Open POs" button
+- When PO selected, "Match PO Items" auto-matches OCR items to PO items by item_code (user reviews before applying)
+- If PO has existing PRs, system surfaces them for selection — PR field constrained to PRs against the selected PO only
+- PI items get both PO refs (`purchase_order` + `po_detail`) and PR refs (`purchase_receipt` + `pr_detail`) — closes full PO→PR→PI chain
+- PR items get PO refs (`purchase_order` + `purchase_order_item`) — different field names from PI (ERPNext v15 schema)
+- Stale field clearing: changing supplier clears PO/PR; changing PO clears PR and all item-level refs
+
+### Journal Entry Creation
+- For expense receipts (restaurant bills, toll slips, entertainment) that don't need PI/PR
+- Requires: expense_account on items + credit_account (from field or OCR Settings default)
+- Builds balanced JE: debit lines per item → expense accounts, credit line → bank/payable
+- Tax handled as separate debit line to VAT input account (if tax detected)
+- Account validation: all accounts must belong to company, not be group or disabled
+
+### Server-Side Guards
+- **Document type enforcement**: each create method validates `document_type` matches (prevents API bypass)
+- **Cross-document lock**: row-lock checks all three output fields (PI, PR, JE) — only one document per OCR Import
+- **PO/PR linkage validation**: at create time, re-verifies PR belongs to selected PO (server-side, not just UI)
+- **Account validation (JE)**: credit/expense/tax accounts checked for company, is_group=0, disabled=0
 
 ### Upload Security
 - Permission check: User must have "create" permission on OCR Import
-- File validation: PDF only, max 10MB
+- File validation: PDF, JPEG, PNG only; max 10MB; magic bytes verified
 - Whitelisted endpoint: `@frappe.whitelist(methods=["POST"])`
 
 ### Background Processing
@@ -124,7 +156,7 @@ Service mappings support supplier-specific patterns (higher priority) and generi
   ]
 }
 ```
-- Wrapped in `invoices[]` array — supports multi-invoice PDFs (one PDF → multiple OCR Imports)
+- Wrapped in `invoices[]` array — supports multi-invoice PDFs (one PDF → multiple OCR Imports); images always produce a single invoice
 - Gemini returns data in this structure (enforced by response_schema)
 - Dates auto-converted to YYYY-MM-DD
 - Currency symbols stripped from amounts
@@ -184,7 +216,7 @@ bench restart
 - [x] Error handling + logging
 - [x] Removed Nanonets code
 
-### Phase 3 (v0.3) — Polish & Enhancements [IN PROGRESS]
+### Phase 3 (v0.3) — Polish & Enhancements [COMPLETE]
 - [x] Fuzzy matching with configurable threshold (difflib SequenceMatcher)
 - [x] Tax template mapping (auto-set VAT vs non-VAT based on tax detection)
 - [x] Service mapping (OCR Service Mapping doctype — pattern → item + GL + cost center)
@@ -194,11 +226,22 @@ bench restart
 - [x] Batch upload (covered by Drive scan folder — drop multiple PDFs, auto-processed)
 - [x] OCR confidence scores (Gemini self-reported, color-coded badge on form)
 - [x] Dashboard workspace (number cards, status chart, shortcuts, link cards)
-- [x] PI vs PR auto-detection (document_type field — stock items → PR, service items → PI)
+- [x] ~~PI vs PR auto-detection~~ (replaced by user-driven selection in Phase 4)
 - [x] Default Item for unmatched lines (configurable in OCR Settings)
 - [x] Purchase Receipt creation method (create_purchase_receipt)
 - [x] OCR Manager role for access control
-- [ ] Test suite
+
+### Phase 4 (v0.4) — User-Driven Workflow + PO Linking + JE [COMPLETE]
+- [x] Blank document_type default (user must select PI/PR/JE)
+- [x] Remove auto-creation of documents (no _auto_create_documents, no _detect_document_type)
+- [x] Journal Entry creation for expense receipts (with account validation)
+- [x] Purchase Order linking (find open POs, match items, apply refs)
+- [x] Purchase Receipt linking for PI creation (constrained by PO, closes full chain)
+- [x] Hardened server-side guards (document_type enforcement, cross-doc duplicate lock)
+- [x] Stale field clearing (supplier/PO/PR cascade)
+- [x] Migration patch (normalize document_type on in-flight records)
+- [x] Test suite (174 tests — unit tests + integration workflow tests)
+- [x] Image support: JPEG and PNG accepted alongside PDF (upload, email, Drive scan)
 
 ## Configuration
 
@@ -220,29 +263,39 @@ bench restart
 - **VAT Tax Template**: Applied when OCR detects tax on the invoice
 - **Non-VAT Tax Template**: Applied when no tax detected (foreign/non-VAT suppliers)
 - **Default Item**: Non-stock item used for unmatched line items (OCR description becomes the item description)
+- **Default Credit Account**: Default credit account for Journal Entries (e.g., Accounts Payable, Petty Cash, Bank)
 - **Matching Threshold**: Minimum similarity score (0-100) for fuzzy matching (default: 80)
 
 ### Usage
+
 **Manual Upload**:
 1. Go to: OCR Import > New
-2. Click "Upload PDF" button
-3. Select PDF file (max 10MB)
-4. Wait 5-30 seconds for extraction
-5. Review/confirm supplier and item matches
-6. Check Document Type (Purchase Invoice or Purchase Receipt — auto-detected, changeable)
-7. PI/PR draft auto-created if all matched
+2. Click "Upload File" button → select PDF, JPEG, or PNG file (max 10MB)
+3. Wait 5-30 seconds for extraction
+4. Review/confirm supplier and item matches (change status to "Confirmed" to save aliases)
+5. **(Optional)** Link to Purchase Order: click "Find Open POs" → select PO → "Match PO Items" → review → apply
+6. **(Optional)** If PO has existing PR: select it to link the full PO→PR→PI chain
+7. Select Document Type: Purchase Invoice, Purchase Receipt, or Journal Entry
+8. For Journal Entry: set expense accounts on items + credit account
+9. Click the "Create" button → document draft created for final review in ERPNext
 
 **Email Upload**:
 1. Forward invoice email to configured email address
-2. Hourly job automatically extracts PDFs
-3. Follow steps 4-6 above
+2. Hourly job automatically extracts PDF and image attachments
+3. Follow steps 3-9 above
 
 **Drive Scan (Batch)**:
-1. Drop PDF(s) into the configured Drive scan inbox folder
-2. Every 15 minutes, new PDFs are automatically downloaded and processed
-3. After extraction, PDFs are moved to the archive folder (Year/Month/Supplier)
+1. Drop PDF or image files into the configured Drive scan inbox folder
+2. Every 15 minutes, new files (PDF/JPEG/PNG) are automatically downloaded and processed
+3. After extraction, files are moved to the archive folder (Year/Month/Supplier)
 4. Multi-invoice PDFs (statements) are split into separate OCR Import records
 5. Failed extractions are automatically retried on the next poll
+6. Follow steps 3-9 from Manual Upload for each created OCR Import
 
-## Open Questions
-- Should OCR Import be submittable (lock after PI/PR created)?
+**Supported Workflows**:
+| Scenario | Document Type | PO Link? | PR Link? |
+|---|---|---|---|
+| Raw materials with PO, delivery received, invoice arrives | Purchase Invoice | Yes | Yes (existing PR) |
+| Raw materials with PO, creating receipt from delivery note | Purchase Receipt | Yes | N/A |
+| Service/subscription invoice, no PO | Purchase Invoice | No | No |
+| Restaurant receipt, toll slip, entertainment expense | Journal Entry | No | No |

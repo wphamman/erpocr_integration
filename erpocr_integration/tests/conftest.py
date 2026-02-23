@@ -57,7 +57,44 @@ def _build_frappe_mock():
 # Install frappe mock into sys.modules BEFORE any test module imports
 _frappe_mock = _build_frappe_mock()
 sys.modules["frappe"] = _frappe_mock
-sys.modules["frappe.utils"] = MagicMock()
+
+
+# Mock frappe.model.document so OCRImport can inherit from Document
+class _MockDocument:
+	"""Minimal Document base class for test imports."""
+
+	def save(self):
+		pass
+
+	def get(self, key, default=None):
+		return getattr(self, key, default)
+
+
+_frappe_model_document_mock = MagicMock()
+_frappe_model_document_mock.Document = _MockDocument
+sys.modules["frappe.model"] = MagicMock()
+sys.modules["frappe.model.document"] = _frappe_model_document_mock
+
+
+# Mock frappe.utils with a working flt function (needed for JE amount math)
+def _mock_flt(value, precision=None):
+	if value is None:
+		return 0.0
+	try:
+		v = float(value)
+	except (ValueError, TypeError):
+		return 0.0
+	if precision is not None:
+		return round(v, int(precision))
+	return v
+
+
+_frappe_utils_mock = MagicMock()
+_frappe_utils_mock.flt = _mock_flt
+_frappe_utils_mock.today = MagicMock(return_value="2025-01-15")
+_frappe_utils_mock.escape_html = MagicMock(side_effect=lambda x: x)
+_frappe_utils_mock.get_link_to_form = MagicMock(side_effect=lambda dt, name: f"{dt}/{name}")
+sys.modules["frappe.utils"] = _frappe_utils_mock
 
 # Mock Google libraries so drive_integration can be imported without them installed
 for _mod_name in [
@@ -82,12 +119,21 @@ def reset_frappe_mock():
 	_frappe_mock.db.exists.reset_mock()
 	_frappe_mock.db.exists.return_value = False
 	_frappe_mock.db.commit.reset_mock()
+	_frappe_mock.db.sql.reset_mock()
+	_frappe_mock.db.sql.return_value = []
 	_frappe_mock.get_all.reset_mock()
 	_frappe_mock.get_all.return_value = []
+	_frappe_mock.get_all.side_effect = None
+	_frappe_mock.get_list.reset_mock()
+	_frappe_mock.get_list.return_value = []
+	_frappe_mock.get_list.side_effect = None
 	_frappe_mock.get_doc.reset_mock()
+	_frappe_mock.get_cached_doc.reset_mock()
+	_frappe_mock.get_cached_doc.side_effect = None
 	_frappe_mock.log_error.reset_mock()
 	_frappe_mock.enqueue.reset_mock()
 	_frappe_mock.delete_doc.reset_mock()
+	_frappe_mock.msgprint = MagicMock()
 	_frappe_mock.throw = MagicMock(side_effect=Exception)
 	_frappe_mock.has_permission = MagicMock(return_value=True)
 	_frappe_mock.session.user = "Administrator"
@@ -266,16 +312,25 @@ def sample_email_no_pdf():
 	return msg
 
 
+class _MockSettings(SimpleNamespace):
+	"""Settings mock that supports both attribute access and .get()."""
+
+	def get(self, key, default=None):
+		return getattr(self, key, default)
+
+
 @pytest.fixture
 def sample_settings():
 	"""Mock OCR Settings object."""
-	return SimpleNamespace(
+	return _MockSettings(
 		default_company="Test Company",
 		default_warehouse="Stores - TC",
 		default_expense_account="5000 - Cost of Goods Sold - TC",
 		default_cost_center="Main - TC",
 		default_tax_template="SA VAT 15%",
 		non_vat_tax_template="Non-VAT",
+		default_item=None,
+		default_credit_account="2100 - Accounts Payable - TC",
 		matching_threshold=80,
 		gemini_api_key="fake-key",
 		gemini_model="gemini-2.5-flash",

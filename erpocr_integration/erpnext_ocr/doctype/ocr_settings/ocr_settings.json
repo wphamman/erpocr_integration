@@ -25,6 +25,7 @@
 		"default_expense_account",
 		"default_cost_center",
 		"default_item",
+		"default_credit_account",
 		"section_break_matching",
 		"matching_threshold"
 	],
@@ -162,6 +163,13 @@
 			"fieldtype": "Link",
 			"label": "Default Item",
 			"options": "Item"
+		},
+		{
+			"description": "Default credit account for Journal Entries (e.g., Accounts Payable, Petty Cash, Bank).",
+			"fieldname": "default_credit_account",
+			"fieldtype": "Link",
+			"label": "Default Credit Account",
+			"options": "Account"
 		},
 		{
 			"fieldname": "section_break_matching",

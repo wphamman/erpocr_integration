@@ -10,15 +10,16 @@ import requests
 from frappe import _
 
 
-def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
+def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "application/pdf") -> list[dict]:
 	"""
-	Extract invoice data from PDF using Gemini 2.5 Flash API.
+	Extract invoice data from PDF or image using Gemini 2.5 Flash API.
 
 	Supports multi-invoice PDFs — returns one result per invoice found.
 
 	Args:
-		pdf_content: Raw PDF file bytes
+		pdf_content: Raw file bytes (PDF or image)
 		filename: Original filename for logging
+		mime_type: MIME type for Gemini API (e.g., "application/pdf", "image/jpeg", "image/png")
 
 	Returns:
 		list[dict]: Each dict contains:
@@ -48,7 +49,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 
 	# Call Gemini API with retry logic
 	try:
-		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model)
+		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
 	except Exception as e:
 		frappe.log_error(
 			title="Gemini API Error",
@@ -115,7 +116,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str) -> list[dict]:
 
 def _build_extraction_prompt() -> str:
 	"""Construct prompt for Gemini API invoice extraction."""
-	return """Extract ALL invoices from this PDF document. The PDF may contain one or multiple invoices.
+	return """Extract ALL invoices from this document. The document may be a PDF (possibly containing multiple invoices) or a photograph/scan of a single invoice.
 
 For EACH invoice found, extract:
 
@@ -142,8 +143,8 @@ For each product or service line item in the invoice table, extract:
 - Line amount / Total (total for this line = quantity x unit price)
 
 **Important Instructions:**
-- If the PDF contains multiple invoices (e.g., a statement or batch), return each as a separate entry in the invoices array
-- If the PDF contains only one invoice, return an array with one entry
+- If the document contains multiple invoices (e.g., a statement or batch PDF), return each as a separate entry in the invoices array
+- If the document contains only one invoice (or is a photograph of a single invoice), return an array with one entry
 - Return all dates in YYYY-MM-DD format (convert from any format you see)
 - Return all amounts as numeric values WITHOUT currency symbols (e.g., 1234.56 not R1,234.56)
 - If a field is not found or not visible, return null for that field
@@ -163,7 +164,7 @@ Return the extracted data as structured JSON matching the provided schema."""
 
 
 def _build_extraction_schema() -> dict:
-	"""Build JSON schema for Gemini structured output. Supports multi-invoice PDFs."""
+	"""Build JSON schema for Gemini structured output. Supports multi-invoice PDFs and images."""
 	invoice_schema = {
 		"type": "object",
 		"properties": {
@@ -239,7 +240,7 @@ def _build_extraction_schema() -> dict:
 		"properties": {
 			"invoices": {
 				"type": "array",
-				"description": "Array of invoices extracted from the PDF. Most PDFs contain one invoice, but statements or batch scans may contain multiple.",
+				"description": "Array of invoices extracted from the document. Most documents contain one invoice, but multi-page PDFs or statements may contain multiple.",
 				"items": invoice_schema,
 			}
 		},
@@ -247,22 +248,29 @@ def _build_extraction_schema() -> dict:
 	}
 
 
-def _call_gemini_api(pdf_content: bytes, prompt: str, schema: dict, api_key: str, model: str) -> dict:
+def _call_gemini_api(
+	pdf_content: bytes,
+	prompt: str,
+	schema: dict,
+	api_key: str,
+	model: str,
+	mime_type: str = "application/pdf",
+) -> dict:
 	"""
-	Call Gemini API with PDF and prompt, return parsed JSON response.
+	Call Gemini API with file content and prompt, return parsed JSON response.
 	Includes retry logic for rate limits.
 	"""
 	url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-	# Encode PDF as base64
-	pdf_base64 = base64.b64encode(pdf_content).decode("utf-8")
+	# Encode file as base64
+	file_base64 = base64.b64encode(pdf_content).decode("utf-8")
 
 	payload = {
 		"contents": [
 			{
 				"parts": [
 					{"text": prompt},
-					{"inline_data": {"mime_type": "application/pdf", "data": pdf_base64}},
+					{"inline_data": {"mime_type": mime_type, "data": file_base64}},
 				]
 			}
 		],

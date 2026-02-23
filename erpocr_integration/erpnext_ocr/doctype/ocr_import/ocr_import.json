@@ -40,11 +40,17 @@
 		"tax_template",
 		"section_break_items",
 		"items",
+		"section_break_po",
+		"purchase_order",
+		"column_break_po",
+		"purchase_receipt_link",
 		"section_break_result",
 		"document_type",
+		"credit_account",
 		"purchase_invoice",
 		"column_break_result",
 		"purchase_receipt",
+		"journal_entry",
 		"error_log",
 		"section_break_raw",
 		"raw_payload"
@@ -266,19 +272,51 @@
 			"options": "OCR Import Item"
 		},
 		{
+			"collapsible": 1,
+			"depends_on": "eval:doc.supplier",
+			"fieldname": "section_break_po",
+			"fieldtype": "Section Break",
+			"label": "Purchase Order"
+		},
+		{
+			"fieldname": "purchase_order",
+			"fieldtype": "Link",
+			"label": "Purchase Order",
+			"options": "Purchase Order"
+		},
+		{
+			"fieldname": "column_break_po",
+			"fieldtype": "Column Break"
+		},
+		{
+			"depends_on": "eval:doc.purchase_order",
+			"description": "Only PRs against the selected PO are shown.",
+			"fieldname": "purchase_receipt_link",
+			"fieldtype": "Link",
+			"label": "Purchase Receipt",
+			"options": "Purchase Receipt"
+		},
+		{
 			"fieldname": "section_break_result",
 			"fieldtype": "Section Break",
 			"label": "Result"
 		},
 		{
-			"default": "Purchase Invoice",
 			"fieldname": "document_type",
 			"fieldtype": "Select",
 			"in_list_view": 1,
 			"in_standard_filter": 1,
 			"label": "Document Type",
-			"options": "Purchase Invoice\nPurchase Receipt",
-			"description": "Auto-detected based on item types. Change before creating the document if needed."
+			"options": "\nPurchase Invoice\nPurchase Receipt\nJournal Entry",
+			"description": "Select the type of document to create."
+		},
+		{
+			"depends_on": "eval:doc.document_type=='Journal Entry'",
+			"description": "Credit account for the Journal Entry (e.g., Accounts Payable, Petty Cash, Bank).",
+			"fieldname": "credit_account",
+			"fieldtype": "Link",
+			"label": "Credit Account",
+			"options": "Account"
 		},
 		{
 			"fieldname": "purchase_invoice",
@@ -296,6 +334,13 @@
 			"fieldtype": "Link",
 			"label": "Purchase Receipt",
 			"options": "Purchase Receipt",
+			"read_only": 1
+		},
+		{
+			"fieldname": "journal_entry",
+			"fieldtype": "Link",
+			"label": "Journal Entry",
+			"options": "Journal Entry",
 			"read_only": 1
 		},
 		{

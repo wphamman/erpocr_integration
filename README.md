@@ -18,26 +18,30 @@
 
 ---
 
-A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 2.5 Flash** API to extract structured invoice data from PDFs and create Purchase Invoice drafts in ERPNext. Essentially free at small volume (~$0.0001 per invoice).
+A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 2.5 Flash** API to extract structured invoice data from PDFs and images, and create Purchase Invoice, Purchase Receipt, or Journal Entry drafts in ERPNext. Essentially free at small volume (~$0.0001 per invoice).
 
 ## Features
 
-- **PDF Upload** — Manual upload via the OCR Import form
+- **File Upload** — Upload PDF, JPEG, or PNG invoices via the OCR Import form
 - **Email Monitoring** — Forward invoice emails to a monitored inbox for automatic processing
-- **Google Drive Scanning** — Drop PDFs into a Drive folder for batch processing every 15 minutes
+- **Google Drive Scanning** — Drop files into a Drive folder for batch processing every 15 minutes
 - **Multi-Invoice PDFs** — Handles statements/batch scans with multiple invoices per PDF
 - **Gemini AI Extraction** — Structured JSON output with supplier, line items, amounts, dates, and currency
 - **Smart Matching** — Exact match, fuzzy match (difflib), service item mappings, and a learning alias system
 - **Tax Template Mapping** — Auto-selects VAT or non-VAT template based on detected tax amounts
-- **Purchase Invoice Drafts** — Automatically creates PI drafts when all items are matched
-- **Google Drive Archiving** — Organizes processed PDFs into Year/Month/Supplier folders
-- **Confidence Scoring** — Gemini self-reports extraction confidence (displayed as color-coded badge)
+- **User-Driven Document Creation** — Review extraction, confirm matches, then choose what to create:
+  - **Purchase Invoice** — with optional Purchase Order and Purchase Receipt linking
+  - **Purchase Receipt** — with optional Purchase Order linking
+  - **Journal Entry** — for expense receipts (restaurant bills, tolls, entertainment)
+- **Purchase Order Linking** — Match OCR items to PO items, link PRs, close the full PO→PR→PI chain
+- **Google Drive Archiving** — Organises processed files into Year/Month/Supplier folders
+- **Confidence Scoring** — Gemini self-reports extraction confidence (displayed as colour-coded badge)
 - **Dashboard** — Workspace with KPI number cards, status chart, and quick links
 
 ## How It Works
 
 ```
-PDF Input (Upload / Email / Drive)
+File Input (Upload PDF/Image, Email, or Drive)
     ↓
 Gemini 2.5 Flash API (structured JSON extraction)
     ↓
@@ -45,8 +49,12 @@ OCR Import Record (staging — extracted data)
     ↓
 Matching Engine (supplier aliases → item aliases → fuzzy → service mappings)
     ↓
-Purchase Invoice Draft (auto-created when fully matched)
+User Review (confirm matches, select document type, optional PO linking)
+    ↓
+Create Document (Purchase Invoice, Purchase Receipt, or Journal Entry draft)
 ```
+
+No documents are created automatically — every decision is made by the user.
 
 ## Requirements
 
@@ -72,14 +80,16 @@ Navigate to **Setup > OCR Settings** in your ERPNext instance:
 | Setting | Description |
 |---------|-------------|
 | **Gemini API Key** | Get from [Google AI Studio](https://aistudio.google.com/apikey) |
-| **Default Company** | Company for Purchase Invoice creation |
+| **Default Company** | Company for document creation |
 
 ### Recommended
 | Setting | Description |
 |---------|-------------|
-| **Default Warehouse** | Warehouse for PI line items |
+| **Default Warehouse** | Warehouse for PI/PR line items |
 | **Default Expense Account** | Fallback GL account for unmatched items |
-| **Default Cost Center** | Cost center for PI line items |
+| **Default Cost Center** | Cost center for line items |
+| **Default Credit Account** | Credit account for Journal Entries (e.g. Accounts Payable, Bank) |
+| **Default Item** | Non-stock fallback item for unmatched line items |
 | **VAT Tax Template** | Applied when tax is detected (e.g., SA 15% VAT) |
 | **Non-VAT Tax Template** | Applied when no tax detected |
 | **Matching Threshold** | Minimum fuzzy match score (0-100, default: 80) |
@@ -87,12 +97,29 @@ Navigate to **Setup > OCR Settings** in your ERPNext instance:
 ### Optional: Email Monitoring
 1. Enable **Email Monitoring** in OCR Settings
 2. Select an ERPNext **Email Account** to monitor
-3. Create Gmail labels: `OCR Invoices` (inbox) and `OCR Processed` (archive)
-4. Forward invoice emails to the monitored address
+3. Forward invoice emails (with PDF or image attachments) to the monitored address
+
+### Email Security (Required in Production)
+
+Do **not** use an unrestricted mailbox or alias for OCR ingestion.  
+Use only invoice addresses where you can enforce a sender allowlist (Google Workspace or equivalent), otherwise external senders can trigger unwanted OCR jobs and API costs.
+
+#### Google Workspace Allowlist Template (example)
+1. Create an address list in Admin Console (for example: `OCR Invoice Allowed Senders`)
+2. Add approved senders (specific addresses and/or trusted domains)
+3. Create a Gmail routing rule with:
+   - **Scope**: inbound mail
+   - **Recipient condition**: envelope recipient matches your invoice mailbox address(es)
+     - Example regex: `^invoices@(yourdomain\.com|subsidiary\.com)$`
+   - **Action for sender NOT in allowlist**: reject message
+   - **Action for sender in allowlist**: allow normal delivery
+4. Test with one approved and one unapproved sender before going live
+
+If your current alias setup cannot enforce sender restrictions cleanly, route `invoices@...` to a dedicated Google Group and restrict posting permissions there.
 
 ### Optional: Google Drive Integration
 1. Create a [Google Cloud service account](https://cloud.google.com/iam/docs/service-accounts-create)
-2. Share your Drive archive folder with the service account email
+2. Share your Drive folders with the service account email
 3. Enable **Drive Integration** in OCR Settings
 4. Paste the service account JSON (stored encrypted)
 5. Set the **Archive Folder ID** and optionally a **Scan Inbox Folder ID**
@@ -101,28 +128,30 @@ Navigate to **Setup > OCR Settings** in your ERPNext instance:
 
 ### Manual Upload
 1. Go to **OCR Import > New**
-2. Click **Actions > Upload PDF**
+2. Click **Actions > Upload File** (accepts PDF, JPEG, PNG — max 10 MB)
 3. Wait 5-30 seconds for Gemini extraction
-4. Review supplier and item matches
-5. PI draft is auto-created when fully matched
+4. Review and confirm supplier and item matches
+5. Select a **Document Type** (Purchase Invoice, Purchase Receipt, or Journal Entry)
+6. Optionally link to a Purchase Order (and Purchase Receipt)
+7. Click the **Create** button — draft document is created for final review
 
 ### Email
 1. Forward invoice emails to the configured address
-2. Emails are checked hourly
-3. PDFs are automatically extracted and processed
+2. Emails are checked hourly — PDF and image attachments are processed
+3. Review and create documents from the OCR Import list
 
 ### Drive Scan
-1. Drop PDF files into the configured Drive scan folder
+1. Drop PDF or image files into the configured Drive scan folder
 2. Files are checked every 15 minutes
-3. After processing, files are moved to the archive folder
+3. After processing, files are moved to the archive folder (Year/Month/Supplier)
 
 ## DocTypes
 
 | DocType | Purpose |
 |---------|---------|
 | **OCR Settings** | App configuration (API keys, defaults, thresholds) |
-| **OCR Import** | Main staging record — extracted data, match status, PI link |
-| **OCR Import Item** | Line items on OCR Import |
+| **OCR Import** | Main staging record — extracted data, match status, PO/PR links, created document links |
+| **OCR Import Item** | Line items on OCR Import (with PO item and PR item references) |
 | **OCR Supplier Alias** | Learned mapping: OCR text &rarr; ERPNext Supplier |
 | **OCR Item Alias** | Learned mapping: OCR text &rarr; ERPNext Item |
 | **OCR Service Mapping** | Pattern-based mapping: description &rarr; Item + GL account |
@@ -135,10 +164,10 @@ Pending → Needs Review → Matched → Completed
               Error
 ```
 
-- **Pending** — PDF uploaded, waiting for extraction
-- **Needs Review** — Extracted but not all items matched
-- **Matched** — All suppliers and items matched; PI auto-created
-- **Completed** — Purchase Invoice created
+- **Pending** — File uploaded, waiting for extraction
+- **Needs Review** — Extracted, but supplier or items need review
+- **Matched** — All suppliers and items matched; ready for document creation
+- **Completed** — Document (PI/PR/JE) created
 - **Error** — Extraction or processing failed (check Error Log)
 
 ## Architecture
@@ -147,20 +176,27 @@ This is a standard Frappe custom app — no external middleware or separate serv
 
 ```
 erpocr_integration/
-├── api.py                          # Upload endpoint + background processing
+├── api.py                          # Upload endpoint, PO/PR matching endpoints, background processing
 ├── hooks.py                        # Scheduled jobs, fixtures
 ├── tasks/
-│   ├── gemini_extract.py           # Gemini API integration
+│   ├── gemini_extract.py           # Gemini API integration (PDF + image support)
 │   ├── matching.py                 # Supplier + item matching (exact, fuzzy, service)
 │   ├── process_import.py           # OCR text cleaning + parsing utilities
-│   ├── email_monitor.py            # IMAP email polling
-│   └── drive_integration.py        # Google Drive upload/download/scan
+│   ├── email_monitor.py            # IMAP email polling (PDF + image attachments)
+│   └── drive_integration.py        # Google Drive upload/download/scan (PDF + images)
 ├── erpnext_ocr/
 │   └── doctype/                    # All DocType definitions
+│       └── ocr_import/ocr_import.py  # Document creation (PI, PR, JE) with guards
 ├── public/
-│   └── js/ocr_import.js            # Upload button + real-time progress UI
+│   └── js/ocr_import.js            # Upload UI, PO matching dialogs, real-time progress
+├── patches/                        # Migration patches
 └── fixtures/                       # Dashboard charts + number cards
 ```
+
+## Documentation
+
+- [Uploader Guide](OCR_Quick_Start_Guide.md) — For anyone sending invoices into the system
+- [Accountant Guide](OCR_User_Guide.md) — For accounting team: setup, review, and document creation
 
 ## Contributing
 

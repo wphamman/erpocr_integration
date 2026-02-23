@@ -4,6 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import flt
 
 
 class OCRImport(Document):
@@ -16,8 +17,8 @@ class OCRImport(Document):
 		if self.status in ("Completed", "Error"):
 			return
 
-		# If PI or PR already created, mark completed
-		if self.purchase_invoice or self.purchase_receipt:
+		# If PI, PR, or JE already created, mark completed
+		if self.purchase_invoice or self.purchase_receipt or self.journal_entry:
 			self.status = "Completed"
 			return
 
@@ -159,33 +160,43 @@ class OCRImport(Document):
 	@frappe.whitelist()
 	def create_purchase_invoice(self):
 		"""Create a Purchase Invoice draft from this OCR Import record."""
-		# Verify the calling user has PI create permission (background jobs use Administrator)
 		if not frappe.has_permission("Purchase Invoice", "create"):
 			frappe.throw(_("You don't have permission to create Purchase Invoices."))
 
-		# Row-lock to prevent duplicate creation from concurrent calls (manual + auto)
+		# Document type enforcement
+		if self.document_type != "Purchase Invoice":
+			frappe.throw(_("Document Type must be 'Purchase Invoice' to create a Purchase Invoice."))
+
+		# Row-lock to prevent duplicate creation from concurrent calls
 		current = frappe.db.get_value(
 			"OCR Import",
 			self.name,
-			["purchase_invoice", "purchase_receipt"],
+			["purchase_invoice", "purchase_receipt", "journal_entry"],
 			as_dict=True,
 			for_update=True,
 		)
-		if current.purchase_invoice:
-			frappe.throw(
-				_("Purchase Invoice {0} already created for this import.").format(current.purchase_invoice)
-			)
-		if current.purchase_receipt:
-			frappe.throw(
-				_(
-					"Purchase Receipt {0} already exists for this import. Cannot also create a Purchase Invoice."
-				).format(current.purchase_receipt)
-			)
+		if current.purchase_invoice or current.purchase_receipt or current.journal_entry:
+			frappe.throw(_("A document has already been created for this import."))
 
 		if not self.supplier:
 			frappe.throw(_("Please select a Supplier before creating a Purchase Invoice."))
 
 		settings = frappe.get_cached_doc("OCR Settings")
+
+		# Validate PO/PR linkage integrity before building items
+		if self.purchase_receipt_link and not self.purchase_order:
+			frappe.throw(_("Cannot link Purchase Receipt without a Purchase Order. Select a PO first."))
+		if self.purchase_receipt_link and self.purchase_order:
+			pr_has_po_link = frappe.db.exists(
+				"Purchase Receipt Item",
+				{"parent": self.purchase_receipt_link, "purchase_order": self.purchase_order},
+			)
+			if not pr_has_po_link:
+				frappe.throw(
+					_("Purchase Receipt '{0}' is not linked to Purchase Order '{1}'.").format(
+						self.purchase_receipt_link, self.purchase_order
+					)
+				)
 
 		pi_items = []
 		for item in self.items:
@@ -218,6 +229,16 @@ class OCRImport(Document):
 
 			if settings.default_warehouse:
 				pi_item["warehouse"] = settings.default_warehouse
+
+			# PO refs (links PI item back to PO item — marks PO as billed)
+			if self.purchase_order and item.purchase_order_item:
+				pi_item["purchase_order"] = self.purchase_order
+				pi_item["po_detail"] = item.purchase_order_item
+
+			# PR refs — only valid when a PO is also set (PR must be against the PO)
+			if self.purchase_receipt_link and self.purchase_order and item.pr_detail:
+				pi_item["purchase_receipt"] = self.purchase_receipt_link
+				pi_item["pr_detail"] = item.pr_detail
 
 			pi_items.append(pi_item)
 
@@ -306,24 +327,20 @@ class OCRImport(Document):
 		if not frappe.has_permission("Purchase Receipt", "create"):
 			frappe.throw(_("You don't have permission to create Purchase Receipts."))
 
-		# Row-lock to prevent duplicate creation from concurrent calls (manual + auto)
+		# Document type enforcement
+		if self.document_type != "Purchase Receipt":
+			frappe.throw(_("Document Type must be 'Purchase Receipt' to create a Purchase Receipt."))
+
+		# Row-lock to prevent duplicate creation from concurrent calls
 		current = frappe.db.get_value(
 			"OCR Import",
 			self.name,
-			["purchase_invoice", "purchase_receipt"],
+			["purchase_invoice", "purchase_receipt", "journal_entry"],
 			as_dict=True,
 			for_update=True,
 		)
-		if current.purchase_receipt:
-			frappe.throw(
-				_("Purchase Receipt {0} already created for this import.").format(current.purchase_receipt)
-			)
-		if current.purchase_invoice:
-			frappe.throw(
-				_(
-					"Purchase Invoice {0} already exists for this import. Cannot also create a Purchase Receipt."
-				).format(current.purchase_invoice)
-			)
+		if current.purchase_invoice or current.purchase_receipt or current.journal_entry:
+			frappe.throw(_("A document has already been created for this import."))
 
 		if not self.supplier:
 			frappe.throw(_("Please select a Supplier before creating a Purchase Receipt."))
@@ -358,6 +375,12 @@ class OCRImport(Document):
 
 			if settings.default_warehouse:
 				pr_item["warehouse"] = settings.default_warehouse
+
+			# PO refs (links PR item back to PO item — marks PO as received)
+			# Note: PR uses field name `purchase_order_item`, not `po_detail` (ERPNext v15 schema)
+			if self.purchase_order and item.purchase_order_item:
+				pr_item["purchase_order"] = self.purchase_order
+				pr_item["purchase_order_item"] = item.purchase_order_item
 
 			pr_items.append(pr_item)
 
@@ -440,3 +463,185 @@ class OCRImport(Document):
 		frappe.msgprint(msg, indicator="green" if not warnings else "orange")
 
 		return pr.name
+
+	@frappe.whitelist()
+	def create_journal_entry(self):
+		"""Create a Journal Entry draft from this OCR Import record."""
+		if not frappe.has_permission("Journal Entry", "create"):
+			frappe.throw(_("You don't have permission to create Journal Entries."))
+
+		# Document type enforcement
+		if self.document_type != "Journal Entry":
+			frappe.throw(_("Document Type must be 'Journal Entry' to create a Journal Entry."))
+
+		# Row-lock to prevent duplicate creation from concurrent calls
+		current = frappe.db.get_value(
+			"OCR Import",
+			self.name,
+			["purchase_invoice", "purchase_receipt", "journal_entry"],
+			as_dict=True,
+			for_update=True,
+		)
+		if current.purchase_invoice or current.purchase_receipt or current.journal_entry:
+			frappe.throw(_("A document has already been created for this import."))
+
+		if not self.supplier:
+			frappe.throw(_("Please select a Supplier before creating a Journal Entry."))
+
+		settings = frappe.get_cached_doc("OCR Settings")
+
+		# Determine credit account
+		credit_account = self.credit_account or settings.get("default_credit_account")
+		if not credit_account:
+			frappe.throw(
+				_(
+					"Please set a Credit Account on this import or configure "
+					"Default Credit Account in OCR Settings."
+				)
+			)
+
+		# Validate credit account
+		self._validate_account(credit_account, _("Credit Account"))
+
+		# Build debit lines
+		accounts = []
+		total_debit = 0
+
+		for item in self.items:
+			expense_account = item.expense_account or settings.get("default_expense_account")
+			if not expense_account:
+				frappe.throw(
+					_(
+						"Item '{0}' has no expense account. Set an expense account on each "
+						"item or configure Default Expense Account in OCR Settings."
+					).format(item.description_ocr or item.item_name or "Unknown")
+				)
+
+			self._validate_account(
+				expense_account,
+				_("Expense Account for '{0}'").format(item.description_ocr or item.item_name),
+			)
+
+			amount = flt(item.amount or (item.qty or 1) * (item.rate or 0), 2)
+			total_debit += amount
+
+			debit_line = {
+				"account": expense_account,
+				"debit_in_account_currency": amount,
+				"credit_in_account_currency": 0,
+				"cost_center": item.cost_center or settings.get("default_cost_center"),
+			}
+
+			# Add party info if account is payable/receivable type
+			account_type = frappe.db.get_value("Account", expense_account, "account_type")
+			if account_type in ("Payable", "Receivable"):
+				debit_line["party_type"] = "Supplier"
+				debit_line["party"] = self.supplier
+
+			accounts.append(debit_line)
+
+		if not accounts:
+			frappe.throw(_("No line items to create Journal Entry."))
+
+		# Tax line (if tax detected)
+		if self.tax_template and flt(self.tax_amount) > 0:
+			template = frappe.get_cached_doc("Purchase Taxes and Charges Template", self.tax_template)
+			tax_account = None
+			for tax_row in template.taxes:
+				if tax_row.account_head:
+					tax_account = tax_row.account_head
+					break
+
+			if tax_account:
+				self._validate_account(tax_account, _("Tax Account"))
+				tax_amt = flt(self.tax_amount, 2)
+				total_debit += tax_amt
+				accounts.append(
+					{
+						"account": tax_account,
+						"debit_in_account_currency": tax_amt,
+						"credit_in_account_currency": 0,
+						"cost_center": settings.get("default_cost_center"),
+					}
+				)
+
+		# Credit line (balances total debits)
+		credit_line = {
+			"account": credit_account,
+			"debit_in_account_currency": 0,
+			"credit_in_account_currency": flt(total_debit, 2),
+		}
+
+		# Add party info if credit account is payable/receivable type
+		credit_account_type = frappe.db.get_value("Account", credit_account, "account_type")
+		if credit_account_type in ("Payable", "Receivable"):
+			credit_line["party_type"] = "Supplier"
+			credit_line["party"] = self.supplier
+
+		if settings.get("default_cost_center"):
+			credit_line["cost_center"] = settings.default_cost_center
+
+		accounts.append(credit_line)
+
+		je = frappe.get_doc(
+			{
+				"doctype": "Journal Entry",
+				"voucher_type": "Journal Entry",
+				"company": self.company,
+				"posting_date": self.invoice_date or frappe.utils.today(),
+				"cheque_no": self.invoice_number,
+				"cheque_date": self.invoice_date,
+				"user_remark": f"OCR Import: {self.name} — {self.supplier_name_ocr or self.supplier}",
+				"accounts": accounts,
+			}
+		)
+		je.flags.ignore_mandatory = True
+		je.insert()
+
+		# Add comment with original invoice link (if available from Drive)
+		if self.drive_link and self.drive_link.startswith("https://"):
+			from frappe.utils import escape_html
+
+			safe_link = escape_html(self.drive_link)
+			safe_path = escape_html(self.drive_folder_path or "N/A")
+			je.add_comment(
+				"Comment",
+				f"<b>Original Invoice PDF:</b> <a href='{safe_link}' target='_blank' rel='noopener noreferrer'>View in Google Drive</a><br>"
+				f"<small>Archive path: {safe_path}</small>",
+			)
+
+		# Link JE back to this import
+		self.journal_entry = je.name
+		self.status = "Completed"
+		self.save()
+
+		frappe.msgprint(
+			_("Journal Entry {0} created as draft.").format(
+				frappe.utils.get_link_to_form("Journal Entry", je.name)
+			),
+			indicator="green",
+		)
+
+		return je.name
+
+	def _validate_account(self, account, label):
+		"""Validate that an account belongs to this company, is not a group, and is not disabled."""
+		account_details = frappe.db.get_value(
+			"Account", account, ["company", "is_group", "disabled"], as_dict=True
+		)
+		if not account_details:
+			frappe.throw(_("{0}: Account '{1}' does not exist.").format(label, account))
+		if account_details.company != self.company:
+			frappe.throw(
+				_("{0}: Account '{1}' belongs to company '{2}', not '{3}'.").format(
+					label, account, account_details.company, self.company
+				)
+			)
+		if account_details.is_group:
+			frappe.throw(
+				_("{0}: Account '{1}' is a group account. Please select a ledger account.").format(
+					label, account
+				)
+			)
+		if account_details.disabled:
+			frappe.throw(_("{0}: Account '{1}' is disabled.").format(label, account))

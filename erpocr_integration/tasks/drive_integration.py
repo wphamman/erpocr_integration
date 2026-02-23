@@ -2,13 +2,14 @@
 # For license information, please see license.txt
 
 """
-Google Drive integration for archiving invoice PDFs.
+Google Drive integration for archiving invoice files.
 
 This module handles:
-- Uploading PDFs to Google Drive
+- Uploading invoice files (PDF/JPEG/PNG) to Google Drive
 - Creating folder structures (Year/Month/Supplier)
 - Generating shareable links
 - Service account authentication
+- Scanning a Drive inbox folder for new invoice files
 """
 
 import json
@@ -24,15 +25,26 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
 
+def _mime_type_from_filename(filename: str) -> str:
+	"""Determine MIME type from filename extension."""
+	ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+	return {
+		".pdf": "application/pdf",
+		".jpg": "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png": "image/png",
+	}.get(ext, "application/pdf")
+
+
 def upload_invoice_to_drive(
 	pdf_content: bytes, filename: str, supplier_name: str | None = None, invoice_date: str | None = None
 ) -> dict:
 	"""
-	Upload invoice PDF to Google Drive with organized folder structure.
+	Upload invoice file to Google Drive with organized folder structure.
 
 	Args:
-		pdf_content: PDF file content as bytes
-		filename: Original filename (e.g., "invoice-5478129904.pdf")
+		pdf_content: File content as bytes (PDF or image)
+		filename: Original filename (e.g., "invoice-5478129904.pdf" or "receipt.jpg")
 		supplier_name: Supplier name for folder organization (optional)
 		invoice_date: Invoice date for year/month folders (optional, format: YYYY-MM-DD)
 
@@ -75,7 +87,7 @@ def upload_invoice_to_drive(
 		# Upload PDF to the target folder
 		file_metadata = {"name": filename, "parents": [parent_folder_id]}
 
-		media = MediaInMemoryUpload(pdf_content, mimetype="application/pdf", resumable=True)
+		media = MediaInMemoryUpload(pdf_content, mimetype=_mime_type_from_filename(filename), resumable=True)
 
 		file = (
 			service.files()
@@ -310,7 +322,7 @@ def poll_drive_scan_folder():
 	if not files:
 		return
 
-	frappe.logger().info(f"Drive scan: Found {len(files)} PDF(s) in scan folder")
+	frappe.logger().info(f"Drive scan: Found {len(files)} file(s) in scan folder")
 
 	for file_info in files:
 		try:
@@ -324,13 +336,14 @@ def poll_drive_scan_folder():
 
 def _process_scan_file(service, file_info: dict, settings):
 	"""
-	Process a single PDF from the Drive scan folder.
+	Process a single file (PDF or image) from the Drive scan folder.
 
 	Handles dedup (skips files already processed successfully), auto-retries
 	previously failed extractions, and enqueues new files for Gemini extraction.
 	"""
 	drive_file_id = file_info["id"]
 	filename = file_info["name"]
+	file_mime_type = file_info.get("mimeType", _mime_type_from_filename(filename))
 
 	# Dedup: check ALL OCR Import rows for this drive_file_id
 	# (multi-invoice PDFs create multiple rows with the same drive_file_id)
@@ -353,7 +366,7 @@ def _process_scan_file(service, file_info: dict, settings):
 			# At least one record succeeded or is still processing — skip
 			return
 
-	# Download PDF content
+	# Download file content
 	pdf_content = _download_file(service, drive_file_id)
 	if not pdf_content:
 		frappe.log_error(title="Drive Scan Error", message=f"Empty content for {filename}")
@@ -363,7 +376,17 @@ def _process_scan_file(service, file_info: dict, settings):
 	if len(pdf_content) > MAX_PDF_SIZE_BYTES:
 		frappe.log_error(
 			title="Drive Scan Error",
-			message=f"PDF too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+		)
+		return
+
+	# Validate magic bytes before creating placeholder or enqueuing
+	from erpocr_integration.api import validate_file_magic_bytes
+
+	if not validate_file_magic_bytes(pdf_content, file_mime_type):
+		frappe.log_error(
+			title="Drive Scan Error",
+			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
 		)
 		return
 
@@ -393,6 +416,7 @@ def _process_scan_file(service, file_info: dict, settings):
 			ocr_import_name=ocr_import.name,
 			source_type="Gemini Drive Scan",
 			uploaded_by="Administrator",
+			mime_type=file_mime_type,
 		)
 		frappe.logger().info(f"Drive scan: Queued {filename} for processing")
 	except Exception as e:
@@ -404,16 +428,23 @@ def _process_scan_file(service, file_info: dict, settings):
 
 def _list_pdf_files(service, folder_id: str) -> list[dict]:
 	"""
-	List all PDF files in a Google Drive folder (with pagination).
+	List all supported files (PDF + images) in a Google Drive folder (with pagination).
 
 	Args:
 		service: Authenticated Drive service
 		folder_id: Google Drive folder ID
 
 	Returns:
-		list[dict]: Each dict has 'id' and 'name' keys
+		list[dict]: Each dict has 'id', 'name', and 'mimeType' keys
 	"""
-	query = f"'{folder_id}' in parents and mimeType='application/pdf' and trashed=false"
+	mime_filter = " or ".join(
+		[
+			"mimeType='application/pdf'",
+			"mimeType='image/jpeg'",
+			"mimeType='image/png'",
+		]
+	)
+	query = f"'{folder_id}' in parents and ({mime_filter}) and trashed=false"
 	all_files = []
 	page_token = None
 
@@ -422,7 +453,7 @@ def _list_pdf_files(service, folder_id: str) -> list[dict]:
 			service.files()
 			.list(
 				q=query,
-				fields="nextPageToken, files(id, name)",
+				fields="nextPageToken, files(id, name, mimeType)",
 				pageSize=100,
 				pageToken=page_token,
 				supportsAllDrives=True,

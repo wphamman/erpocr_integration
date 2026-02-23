@@ -13,7 +13,11 @@
 		"amount",
 		"expense_account",
 		"cost_center",
-		"match_status"
+		"match_status",
+		"purchase_order_item",
+		"po_qty",
+		"po_rate",
+		"pr_detail"
 	],
 	"fields": [
 		{
@@ -74,6 +78,36 @@
 			"in_list_view": 1,
 			"label": "Match Status",
 			"options": "Auto Matched\nSuggested\nUnmatched\nConfirmed"
+		},
+		{
+			"fieldname": "purchase_order_item",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"label": "PO Item Ref",
+			"read_only": 1,
+			"description": "Row name of the matched Purchase Order Item"
+		},
+		{
+			"depends_on": "eval:doc.purchase_order_item",
+			"fieldname": "po_qty",
+			"fieldtype": "Float",
+			"label": "PO Qty",
+			"read_only": 1
+		},
+		{
+			"depends_on": "eval:doc.purchase_order_item",
+			"fieldname": "po_rate",
+			"fieldtype": "Currency",
+			"label": "PO Rate",
+			"read_only": 1
+		},
+		{
+			"fieldname": "pr_detail",
+			"fieldtype": "Data",
+			"hidden": 1,
+			"label": "PR Item Ref",
+			"read_only": 1,
+			"description": "Row name of the matched Purchase Receipt Item"
 		}
 	],
 	"index_web_pages_for_search": 1,

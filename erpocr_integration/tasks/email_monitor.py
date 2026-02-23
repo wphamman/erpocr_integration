@@ -253,7 +253,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 		all_succeeded = True
 		pdfs_to_process = 0
 		has_in_progress = False
-		for pdf_content, filename in pdfs:
+		for pdf_content, filename, attachment_content_type in pdfs:
 			# Per-PDF duplicate check: skip this PDF if already successfully processed
 			if message_id:
 				existing = frappe.get_all(
@@ -293,6 +293,23 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 			pdfs_to_process += 1
 			ocr_import = None
 			try:
+				# Determine MIME type: prefer email Content-Type header, fall back to filename extension
+				from erpocr_integration.api import SUPPORTED_FILE_TYPES, validate_file_magic_bytes
+
+				if attachment_content_type in _SUPPORTED_EMAIL_MIME_TYPES:
+					file_mime_type = attachment_content_type
+				else:
+					file_ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+					file_mime_type = SUPPORTED_FILE_TYPES.get(file_ext, "application/pdf")
+
+				# Validate magic bytes before creating placeholder or enqueuing
+				if not validate_file_magic_bytes(pdf_content, file_mime_type):
+					frappe.logger().warning(
+						f"Email monitoring: Skipping '{filename}' — content does not match "
+						f"expected file type ({file_mime_type})"
+					)
+					continue
+
 				# Create placeholder OCR Import record
 				ocr_import = frappe.get_doc(
 					{
@@ -318,10 +335,11 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					ocr_import_name=ocr_import.name,
 					source_type="Gemini Email",
 					uploaded_by=uploaded_by,
+					mime_type=file_mime_type,
 				)
 
 				frappe.logger().info(
-					f"Email monitoring: Created OCR Import {ocr_import.name} and enqueued PDF '{filename}' from email '{subject}'"
+					f"Email monitoring: Created OCR Import {ocr_import.name} and enqueued '{filename}' from email '{subject}'"
 				)
 
 			except Exception:
@@ -427,12 +445,31 @@ def _move_to_processed_folder(mail, email_id, use_uid=False):
 		)
 
 
-def _extract_pdfs_from_email(msg) -> list[tuple[bytes, str]]:
+# MIME types accepted from email attachments
+_SUPPORTED_EMAIL_MIME_TYPES = {
+	"application/pdf",
+	"image/jpeg",
+	"image/png",
+}
+_SUPPORTED_EMAIL_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+
+
+def _is_supported_attachment(content_type: str, filename: str | None) -> bool:
+	"""Check if an email attachment is a supported file type."""
+	if content_type in _SUPPORTED_EMAIL_MIME_TYPES:
+		return True
+	if filename:
+		ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+		return ext in _SUPPORTED_EMAIL_EXTENSIONS
+	return False
+
+
+def _extract_pdfs_from_email(msg) -> list[tuple[bytes, str, str]]:
 	"""
-	Extract PDF attachments from email message.
+	Extract PDF and image attachments from email message.
 
 	Returns:
-		list: [(pdf_content, filename), ...]
+		list: [(file_content, filename, content_type), ...]
 	"""
 	pdfs = []
 
@@ -443,31 +480,31 @@ def _extract_pdfs_from_email(msg) -> list[tuple[bytes, str]]:
 			content_type = part.get_content_type()
 			content_disposition = str(part.get("Content-Disposition", ""))
 
-			# Check if it's an attachment
-			if "attachment" in content_disposition or "inline" in content_disposition:
+			# Check if it's an attachment (skip inline images — logos, signatures, tracking pixels)
+			is_attachment = "attachment" in content_disposition
+			is_inline_pdf = "inline" in content_disposition and content_type == "application/pdf"
+			if is_attachment or is_inline_pdf:
 				filename = part.get_filename()
-				# Check if it's a PDF
-				is_pdf = content_type == "application/pdf"
-				if not is_pdf and filename:
-					is_pdf = filename.lower().endswith(".pdf")
 
-				if is_pdf and filename:
+				if _is_supported_attachment(content_type, filename) and filename:
 					# Decode filename if needed
 					filename = _decode_header_value(filename)
 
-					# Get PDF content
+					# Get file content
 					pdf_content = part.get_payload(decode=True)
 					if pdf_content:
-						pdfs.append((pdf_content, filename))
+						pdfs.append((pdf_content, filename, content_type))
 	else:
-		# Single part email with PDF?
+		# Single part email — require attachment disposition to avoid processing
+		# bare image emails (e.g. camera snapshots sent without context)
 		content_type = msg.get_content_type()
-		if content_type == "application/pdf":
+		content_disposition = str(msg.get("Content-Disposition", ""))
+		if content_type in _SUPPORTED_EMAIL_MIME_TYPES and "attachment" in content_disposition:
 			filename = msg.get_filename() or "invoice.pdf"
 			filename = _decode_header_value(filename)
 			pdf_content = msg.get_payload(decode=True)
 			if pdf_content:
-				pdfs.append((pdf_content, filename))
+				pdfs.append((pdf_content, filename, content_type))
 
 	return pdfs
 

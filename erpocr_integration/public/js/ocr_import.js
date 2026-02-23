@@ -11,16 +11,46 @@ frappe.ui.form.on('OCR Import', {
 				}
 			};
 		});
+
+		// Filter credit account by company and usable accounts only
+		frm.set_query('credit_account', function() {
+			return {
+				filters: {
+					company: frm.doc.company,
+					is_group: 0
+				}
+			};
+		});
+
+		// Filter purchase_order by supplier, company, open statuses
+		frm.set_query('purchase_order', function() {
+			return {
+				filters: {
+					supplier: frm.doc.supplier,
+					company: frm.doc.company,
+					docstatus: 1,
+					status: ['in', ['To Receive and Bill', 'To Receive', 'To Bill']]
+				}
+			};
+		});
+
+		// Filter purchase_receipt_link via server-side query (PO link is on child rows)
+		frm.set_query('purchase_receipt_link', function() {
+			return {
+				query: 'erpocr_integration.api.purchase_receipt_link_query',
+				filters: { purchase_order: frm.doc.purchase_order }
+			};
+		});
 	},
 
 	refresh: function(frm) {
 		// Add "Upload PDF" button for new records
 		if (frm.is_new()) {
-			frm.add_custom_button(__('Upload PDF'), function() {
+			frm.add_custom_button(__('Upload File'), function() {
 				// Create file input element
 				let input = document.createElement('input');
 				input.type = 'file';
-				input.accept = 'application/pdf';
+				input.accept = 'application/pdf, image/jpeg, image/png';
 
 				input.onchange = function(e) {
 					let file = e.target.files[0];
@@ -33,8 +63,10 @@ frappe.ui.form.on('OCR Import', {
 					}
 
 					// Validate file type
-					if (!file.name.toLowerCase().endsWith('.pdf')) {
-						frappe.msgprint(__('Only PDF files are supported.'));
+					var allowed_exts = ['.pdf', '.jpg', '.jpeg', '.png'];
+					var file_ext = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+					if (!allowed_exts.includes(file_ext)) {
+						frappe.msgprint(__('Unsupported file type. Accepted formats: PDF, JPEG, PNG.'));
 						return;
 					}
 
@@ -109,7 +141,7 @@ frappe.ui.form.on('OCR Import', {
 					});
 				}, __('Actions'));
 			}
-			if ((!frm.doc.document_type || frm.doc.document_type === 'Purchase Invoice') && !frm.doc.purchase_invoice) {
+			if (frm.doc.document_type === 'Purchase Invoice' && !frm.doc.purchase_invoice) {
 				frm.add_custom_button(__('Create Purchase Invoice'), function() {
 					frappe.call({
 						method: 'create_purchase_invoice',
@@ -125,6 +157,67 @@ frappe.ui.form.on('OCR Import', {
 						}
 					});
 				}, __('Actions'));
+			}
+		}
+
+		// Journal Entry button — can create from Needs Review (doesn't need full item matching)
+		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status)
+			&& frm.doc.document_type === 'Journal Entry' && !frm.doc.journal_entry) {
+			frm.add_custom_button(__('Create Journal Entry'), function() {
+				frappe.call({
+					method: 'create_journal_entry',
+					doc: frm.doc,
+					callback: function(r) {
+						if (!r.exc) {
+							frm.reload_doc();
+							frappe.show_alert({
+								message: __('Journal Entry draft created.'),
+								indicator: 'green'
+							}, 5);
+						}
+					}
+				});
+			}, __('Actions'));
+		}
+
+		// PO linking buttons (only when supplier is set and not completed)
+		if (!frm.is_new() && frm.doc.supplier && !['Completed', 'Error', 'Pending'].includes(frm.doc.status)) {
+			// "Find Open POs" button
+			if (!frm.doc.purchase_order) {
+				frm.add_custom_button(__('Find Open POs'), function() {
+					frappe.call({
+						method: 'erpocr_integration.api.get_open_purchase_orders',
+						args: {
+							supplier: frm.doc.supplier,
+							company: frm.doc.company
+						},
+						callback: function(r) {
+							if (r.message && r.message.length) {
+								show_po_selection_dialog(frm, r.message);
+							} else {
+								frappe.msgprint(__('No open Purchase Orders found for this supplier.'));
+							}
+						}
+					});
+				}, __('Purchase Order'));
+			}
+
+			// "Match PO Items" button (when PO is selected)
+			if (frm.doc.purchase_order) {
+				frm.add_custom_button(__('Match PO Items'), function() {
+					frappe.call({
+						method: 'erpocr_integration.api.match_po_items',
+						args: {
+							ocr_import: frm.doc.name,
+							purchase_order: frm.doc.purchase_order
+						},
+						callback: function(r) {
+							if (r.message) {
+								show_po_match_dialog(frm, r.message);
+							}
+						}
+					});
+				}, __('Purchase Order'));
 			}
 		}
 
@@ -209,8 +302,307 @@ frappe.ui.form.on('OCR Import', {
 				}
 			});
 		}
+	},
+
+	document_type: function(frm) {
+		// When switching to Journal Entry, auto-populate credit_account from OCR Settings
+		if (frm.doc.document_type === 'Journal Entry' && !frm.doc.credit_account) {
+			frappe.db.get_single_value('OCR Settings', 'default_credit_account')
+				.then(value => {
+					if (value) {
+						frm.set_value('credit_account', value);
+					}
+				});
+		}
+	},
+
+	// Stale field clearing: when supplier changes, always clear PO/PR and item-level refs
+	supplier: function(frm) {
+		frm.set_value('purchase_order', '');
+		frm.set_value('purchase_receipt_link', '');
+		clear_item_po_pr_fields(frm);
+	},
+
+	// When PO changes, clear PR link and item-level refs
+	purchase_order: function(frm) {
+		if (frm.doc.purchase_receipt_link) {
+			frm.set_value('purchase_receipt_link', '');
+		}
+		clear_item_po_pr_fields(frm);
+	},
+
+	// When PR link changes, clear stale refs then auto-run PR matching
+	purchase_receipt_link: function(frm) {
+		clear_item_pr_fields(frm);
+
+		// Skip auto-matching if the value was set from the PO dialog
+		// (the dialog handles matching + save itself)
+		if (frm._skip_pr_auto_match) {
+			frm._skip_pr_auto_match = false;
+			return;
+		}
+
+		if (frm.doc.purchase_receipt_link && frm.doc.purchase_order) {
+			frappe.call({
+				method: 'erpocr_integration.api.match_pr_items',
+				args: {
+					ocr_import: frm.doc.name,
+					purchase_receipt: frm.doc.purchase_receipt_link
+				},
+				callback: function(r) {
+					if (r.message && r.message.matches) {
+						apply_pr_matches(frm, r.message.matches);
+						frm.dirty();
+						frm.save();
+						frappe.show_alert({
+							message: __('PR items matched.'),
+							indicator: 'green'
+						}, 3);
+					}
+				}
+			});
+		}
 	}
 });
+
+function clear_item_po_pr_fields(frm) {
+	let changed = false;
+	(frm.doc.items || []).forEach(function(item) {
+		if (item.purchase_order_item || item.po_qty || item.po_rate || item.pr_detail) {
+			frappe.model.set_value(item.doctype, item.name, 'purchase_order_item', '');
+			frappe.model.set_value(item.doctype, item.name, 'po_qty', 0);
+			frappe.model.set_value(item.doctype, item.name, 'po_rate', 0);
+			frappe.model.set_value(item.doctype, item.name, 'pr_detail', '');
+			changed = true;
+		}
+	});
+	if (changed) {
+		frm.refresh_fields();
+	}
+}
+
+function clear_item_pr_fields(frm) {
+	let changed = false;
+	(frm.doc.items || []).forEach(function(item) {
+		if (item.pr_detail) {
+			frappe.model.set_value(item.doctype, item.name, 'pr_detail', '');
+			changed = true;
+		}
+	});
+	if (changed) {
+		frm.refresh_fields();
+	}
+}
+
+function show_po_selection_dialog(frm, purchase_orders) {
+	let fields = [
+		{
+			fieldtype: 'HTML',
+			fieldname: 'po_list',
+			options: build_po_list_html(purchase_orders)
+		}
+	];
+
+	let d = new frappe.ui.Dialog({
+		title: __('Open Purchase Orders'),
+		fields: fields,
+		size: 'large'
+	});
+
+	d.show();
+
+	// Bind click handlers on PO rows
+	d.$wrapper.find('.select-po-btn').on('click', function() {
+		let po_name = $(this).data('po');
+		frm.set_value('purchase_order', po_name);
+		frm.dirty();
+		d.hide();
+		frappe.show_alert({
+			message: __('Purchase Order {0} selected. Click "Match PO Items" to match.', [po_name]),
+			indicator: 'blue'
+		}, 5);
+	});
+}
+
+function build_po_list_html(purchase_orders) {
+	let rows = purchase_orders.map(function(po) {
+		return `<tr>
+			<td><a href="/app/purchase-order/${po.name}" target="_blank">${po.name}</a></td>
+			<td>${po.transaction_date}</td>
+			<td>${format_currency(po.grand_total)}</td>
+			<td>${po.status}</td>
+			<td><button class="btn btn-xs btn-primary select-po-btn" data-po="${po.name}">${__('Select')}</button></td>
+		</tr>`;
+	}).join('');
+
+	return `<table class="table table-bordered table-hover">
+		<thead><tr>
+			<th>${__('PO #')}</th>
+			<th>${__('Date')}</th>
+			<th>${__('Total')}</th>
+			<th>${__('Status')}</th>
+			<th></th>
+		</tr></thead>
+		<tbody>${rows}</tbody>
+	</table>`;
+}
+
+function show_po_match_dialog(frm, data) {
+	let match_html = build_match_results_html(data.matches, data.unmatched_po);
+	let pr_html = '';
+
+	if (data.purchase_receipts && data.purchase_receipts.length) {
+		pr_html = '<hr><h5>' + __('Purchase Receipts against this PO') + '</h5>' +
+			build_pr_list_html(data.purchase_receipts);
+	}
+
+	let d = new frappe.ui.Dialog({
+		title: __('Match PO Items'),
+		fields: [
+			{
+				fieldtype: 'HTML',
+				fieldname: 'match_results',
+				options: match_html + pr_html
+			}
+		],
+		size: 'extra-large',
+		primary_action_label: __('Apply Matches'),
+		primary_action: function() {
+			apply_po_matches(frm, data.matches);
+
+			// If a PR was selected in the dialog, set it
+			let selected_pr = d.$wrapper.find('.select-pr-btn.btn-success').data('pr');
+			if (selected_pr) {
+				// Set flag to prevent the field handler from also running match_pr_items
+				frm._skip_pr_auto_match = true;
+				frm.set_value('purchase_receipt_link', selected_pr);
+				// Match PR items too
+				frappe.call({
+					method: 'erpocr_integration.api.match_pr_items',
+					args: {
+						ocr_import: frm.doc.name,
+						purchase_receipt: selected_pr
+					},
+					callback: function(r) {
+						if (r.message) {
+							apply_pr_matches(frm, r.message.matches);
+						}
+						frm.dirty();
+						frm.save();
+					}
+				});
+			} else {
+				frm.dirty();
+				frm.save();
+			}
+
+			d.hide();
+			frappe.show_alert({
+				message: __('PO item matches applied.'),
+				indicator: 'green'
+			}, 5);
+		}
+	});
+
+	d.show();
+
+	// PR selection toggle
+	d.$wrapper.find('.select-pr-btn').on('click', function() {
+		d.$wrapper.find('.select-pr-btn').removeClass('btn-success').addClass('btn-default');
+		$(this).removeClass('btn-default').addClass('btn-success');
+	});
+}
+
+function build_match_results_html(matches, unmatched_po) {
+	let rows = matches.map(function(m) {
+		let badge, po_info;
+		if (m.match) {
+			badge = '<span class="indicator-pill green">Matched</span>';
+			po_info = `${m.match.po_item_code} — Qty: ${m.match.po_qty}, Rate: ${format_currency(m.match.po_rate)}`;
+		} else {
+			badge = '<span class="indicator-pill orange">Unmatched</span>';
+			po_info = '—';
+		}
+		return `<tr>
+			<td>${m.idx}</td>
+			<td>${frappe.utils.escape_html(m.description_ocr || '')}</td>
+			<td>${m.item_code || '—'}</td>
+			<td>Qty: ${m.qty || 0}, Rate: ${format_currency(m.rate || 0)}</td>
+			<td>${po_info}</td>
+			<td>${badge}</td>
+		</tr>`;
+	}).join('');
+
+	let unmatched_rows = '';
+	if (unmatched_po && unmatched_po.length) {
+		unmatched_rows = '<h5 class="mt-3">' + __('Unmatched PO Items') + '</h5>' +
+			'<table class="table table-bordered"><thead><tr>' +
+			'<th>' + __('Item Code') + '</th><th>' + __('Item Name') + '</th>' +
+			'<th>' + __('Qty') + '</th><th>' + __('Rate') + '</th></tr></thead><tbody>' +
+			unmatched_po.map(function(p) {
+				return `<tr><td>${frappe.utils.escape_html(p.item_code)}</td><td>${frappe.utils.escape_html(p.item_name)}</td><td>${p.qty}</td><td>${format_currency(p.rate)}</td></tr>`;
+			}).join('') + '</tbody></table>';
+	}
+
+	return `<table class="table table-bordered">
+		<thead><tr>
+			<th>#</th>
+			<th>${__('OCR Description')}</th>
+			<th>${__('Matched Item')}</th>
+			<th>${__('OCR Qty/Rate')}</th>
+			<th>${__('PO Item')}</th>
+			<th>${__('Status')}</th>
+		</tr></thead>
+		<tbody>${rows}</tbody>
+	</table>` + unmatched_rows;
+}
+
+function build_pr_list_html(purchase_receipts) {
+	let rows = purchase_receipts.map(function(pr) {
+		return `<tr>
+			<td><a href="/app/purchase-receipt/${pr.name}" target="_blank">${pr.name}</a></td>
+			<td>${pr.posting_date}</td>
+			<td>${pr.status}</td>
+			<td><button class="btn btn-xs btn-default select-pr-btn" data-pr="${pr.name}">${__('Select')}</button></td>
+		</tr>`;
+	}).join('');
+
+	return `<table class="table table-bordered table-hover">
+		<thead><tr>
+			<th>${__('PR #')}</th>
+			<th>${__('Date')}</th>
+			<th>${__('Status')}</th>
+			<th></th>
+		</tr></thead>
+		<tbody>${rows}</tbody>
+	</table>`;
+}
+
+function apply_po_matches(frm, matches) {
+	matches.forEach(function(m) {
+		if (m.match) {
+			let item = frm.doc.items[m.idx - 1];
+			if (item) {
+				frappe.model.set_value(item.doctype, item.name, 'purchase_order_item', m.match.purchase_order_item);
+				frappe.model.set_value(item.doctype, item.name, 'po_qty', m.match.po_qty);
+				frappe.model.set_value(item.doctype, item.name, 'po_rate', m.match.po_rate);
+			}
+		}
+	});
+	frm.refresh_fields();
+}
+
+function apply_pr_matches(frm, matches) {
+	matches.forEach(function(m) {
+		if (m.match) {
+			let item = frm.doc.items[m.idx - 1];
+			if (item) {
+				frappe.model.set_value(item.doctype, item.name, 'pr_detail', m.match.pr_detail);
+			}
+		}
+	});
+	frm.refresh_fields();
+}
 
 function poll_extraction_status(frm, ocr_import_name) {
 	let poll_count = 0;
@@ -247,14 +639,9 @@ function poll_extraction_status(frm, ocr_import_name) {
 								message: __('Please check the error log or retry the extraction.'),
 								indicator: 'red'
 							});
-						} else if (status === 'Completed') {
-							frappe.show_alert({
-								message: __('Extraction complete! Document draft created.'),
-								indicator: 'green'
-							}, 5);
 						} else if (status === 'Matched') {
 							frappe.show_alert({
-								message: __('Extraction complete! All items matched.'),
+								message: __('Extraction complete! All items matched. Select Document Type to create.'),
 								indicator: 'green'
 							}, 5);
 						} else {

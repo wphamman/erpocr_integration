@@ -6,6 +6,33 @@ from frappe import _
 
 MAX_PENDING_IMPORTS_PER_USER = 5
 
+# Supported file types for upload (extension → MIME type for Gemini API)
+SUPPORTED_FILE_TYPES = {
+	".pdf": "application/pdf",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png": "image/png",
+}
+
+# Magic byte signatures for file type validation
+_MAGIC_BYTES = {
+	"application/pdf": (b"%PDF-", 5),
+	"image/jpeg": (b"\xff\xd8", 2),
+	"image/png": (b"\x89PNG", 4),
+}
+
+
+def validate_file_magic_bytes(content: bytes, mime_type: str) -> bool:
+	"""Check file content starts with the expected magic bytes for the given MIME type.
+
+	Returns True if valid (or if MIME type has no known signature), False if mismatch.
+	"""
+	sig = _MAGIC_BYTES.get(mime_type)
+	if not sig:
+		return True
+	magic, length = sig
+	return content[:length] == magic
+
 
 def _enforce_pending_import_limit(user: str | None):
 	"""Reject if user already has too many in-flight OCR imports in the queue."""
@@ -27,11 +54,12 @@ def _enforce_pending_import_limit(user: str | None):
 @frappe.whitelist(methods=["POST"])
 def upload_pdf():
 	"""
-	Upload PDF for Gemini OCR extraction.
+	Upload PDF or image for Gemini OCR extraction.
 
 	URL: /api/method/erpocr_integration.api.upload_pdf
 
 	Expects multipart/form-data with 'file' field.
+	Accepts PDF (.pdf), JPEG (.jpg/.jpeg), and PNG (.png) files.
 
 	Returns:
 		dict: {"ocr_import": name, "status": "processing"}
@@ -52,8 +80,11 @@ def upload_pdf():
 
 	# Validate file type
 	filename = file.filename
-	if not filename.lower().endswith(".pdf"):
-		frappe.throw(_("Only PDF files are supported"))
+	file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+	mime_type = SUPPORTED_FILE_TYPES.get(file_ext)
+	if not mime_type:
+		supported = ", ".join(SUPPORTED_FILE_TYPES.keys())
+		frappe.throw(_("Unsupported file type. Accepted formats: {0}").format(supported))
 
 	# Validate file size (10MB max)
 	file.seek(0, 2)  # Seek to end
@@ -69,11 +100,11 @@ def upload_pdf():
 		)
 
 	# Read file content
-	pdf_content = file.read()
+	file_content = file.read()
 
-	# Validate PDF magic bytes (%PDF- header)
-	if not pdf_content[:5] == b"%PDF-":
-		frappe.throw(_("File does not appear to be a valid PDF"))
+	# Validate file magic bytes
+	if not validate_file_magic_bytes(file_content, mime_type):
+		frappe.throw(_("File content does not match its file type. The file may be corrupted."))
 
 	# Get company from OCR Settings
 	settings = frappe.get_single("OCR Settings")
@@ -100,11 +131,12 @@ def upload_pdf():
 			"erpocr_integration.api.gemini_process",
 			queue="long",
 			timeout=300,  # 5 minutes
-			pdf_content=pdf_content,
+			pdf_content=file_content,
 			filename=filename,
 			ocr_import_name=ocr_import.name,
 			source_type="Gemini Manual Upload",
 			uploaded_by=frappe.session.user,
+			mime_type=mime_type,
 		)
 	except Exception:
 		# Enqueue failed — mark placeholder as Error so it doesn't sit as stale Pending
@@ -125,20 +157,22 @@ def gemini_process(
 	ocr_import_name: str,
 	source_type: str = "Gemini Manual Upload",
 	uploaded_by: str | None = None,
+	mime_type: str = "application/pdf",
 ):
 	"""
-	Background job to process PDF via Gemini API and create OCR Import(s).
+	Background job to process PDF/image via Gemini API and create OCR Import(s).
 
 	Supports multi-invoice PDFs — creates one OCR Import per invoice found.
 	The first invoice updates the existing placeholder record (ocr_import_name).
 	Additional invoices create new OCR Import records.
 
 	Args:
-		pdf_content: Raw PDF file bytes
+		pdf_content: Raw file bytes (PDF or image)
 		filename: Original filename
 		ocr_import_name: Name of the OCR Import record to update
 		source_type: "Gemini Manual Upload", "Gemini Email", or "Gemini Drive Scan"
 		uploaded_by: User who initiated the upload
+		mime_type: MIME type for Gemini API (e.g., "application/pdf", "image/jpeg")
 	"""
 	# Run as the uploading user (not Administrator) for audit trail.
 	# Individual calls use ignore_permissions where needed.
@@ -163,7 +197,7 @@ def gemini_process(
 		# Call Gemini API — returns list of invoices (usually 1, but may be multiple)
 		from erpocr_integration.tasks.gemini_extract import extract_invoice_data
 
-		invoice_list = extract_invoice_data(pdf_content, filename)
+		invoice_list = extract_invoice_data(pdf_content, filename, mime_type=mime_type)
 
 		# Publish realtime update
 		invoice_count = len(invoice_list)
@@ -269,21 +303,11 @@ def gemini_process(
 					title="Drive Move Failed", message=f"Failed to move {filename} to archive: {e!s}"
 				)
 
-		# Auto-create PI/PR drafts for fully matched imports
-		_auto_create_documents(all_ocr_import_names)
-
-		# Publish realtime update
+		# Publish realtime update — no auto-creation, user reviews and creates
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
-		msg = "Extraction complete!"
-		if ocr_import_first.status == "Completed":
-			doc_label = (
-				"Purchase Receipt"
-				if ocr_import_first.document_type == "Purchase Receipt"
-				else "Purchase Invoice"
-			)
-			msg = f"Extraction complete! {doc_label} draft created."
-		elif invoice_count > 1:
-			msg = f"Extraction complete! {invoice_count} invoices created."
+		msg = "Extraction complete! Please review and confirm matches."
+		if invoice_count > 1:
+			msg = f"Extraction complete! {invoice_count} invoices created. Please review."
 		frappe.publish_realtime(
 			event="ocr_extraction_progress",
 			message={"ocr_import": ocr_import_name, "status": ocr_import_first.status, "message": msg},
@@ -448,66 +472,7 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 		else:
 			item.match_status = "Unmatched"
 
-	# Auto-detect document type based on matched item types
-	_detect_document_type(ocr_import)
-
-
-def _detect_document_type(ocr_import):
-	"""Auto-detect whether to create a Purchase Invoice or Purchase Receipt.
-
-	Logic:
-	- If ALL matched items are stock items → Purchase Receipt
-	- If ANY item is non-stock or unmatched → Purchase Invoice (safer default)
-	- Default: Purchase Invoice
-	"""
-	matched_items = [item for item in ocr_import.items if item.item_code]
-	if not matched_items:
-		ocr_import.document_type = "Purchase Invoice"
-		return
-
-	all_stock = True
-	for item in matched_items:
-		is_stock = frappe.db.get_value("Item", item.item_code, "is_stock_item")
-		if not is_stock:
-			all_stock = False
-			break
-
-	# Only suggest PR when ALL matched items are stock items and ALL items are matched
-	has_unmatched = any(not item.item_code for item in ocr_import.items)
-	if all_stock and not has_unmatched:
-		ocr_import.document_type = "Purchase Receipt"
-	else:
-		ocr_import.document_type = "Purchase Invoice"
-
-
-def _auto_create_documents(ocr_import_names: list[str]):
-	"""Auto-create PI/PR drafts for OCR Imports that reached 'Matched' status.
-
-	Args:
-		ocr_import_names: Explicit list of OCR Import names from this batch
-			(collected during processing — no heuristic sibling lookup).
-	"""
-	for doc_name in ocr_import_names:
-		try:
-			doc = frappe.get_doc("OCR Import", doc_name)
-			if doc.status != "Matched":
-				continue
-			if doc.purchase_invoice or doc.purchase_receipt:
-				continue
-
-			if doc.document_type == "Purchase Receipt":
-				doc.create_purchase_receipt()
-				frappe.db.commit()  # nosemgrep
-				frappe.logger().info(f"Auto-created PR {doc.purchase_receipt} for {doc_name}")
-			else:
-				doc.create_purchase_invoice()
-				frappe.db.commit()  # nosemgrep
-				frappe.logger().info(f"Auto-created PI {doc.purchase_invoice} for {doc_name}")
-		except Exception:
-			frappe.log_error(
-				title="Auto Document Creation Failed",
-				message=f"Failed to auto-create document for {doc_name}\n{frappe.get_traceback()}",
-			)
+	# document_type left blank — user selects before creating document
 
 
 @frappe.whitelist(methods=["POST"])
@@ -533,13 +498,18 @@ def retry_gemini_extraction(ocr_import: str):
 
 	# Download PDF from Drive if available
 	if not ocr_import_doc.drive_file_id:
-		frappe.throw(_("Original PDF not available. Please re-upload the PDF."))
+		frappe.throw(_("Original file not available. Please re-upload the file."))
 
 	from erpocr_integration.tasks.drive_integration import download_file_from_drive
 
 	pdf_content = download_file_from_drive(ocr_import_doc.drive_file_id)
 	if not pdf_content:
-		frappe.throw(_("Failed to download PDF from Google Drive. Please re-upload the PDF."))
+		frappe.throw(_("Failed to download file from Google Drive. Please re-upload the file."))
+
+	# Determine MIME type from original filename
+	source_filename = ocr_import_doc.source_filename or ""
+	file_ext = ("." + source_filename.rsplit(".", 1)[-1].lower()) if "." in source_filename else ""
+	file_mime_type = SUPPORTED_FILE_TYPES.get(file_ext, "application/pdf")
 
 	# Reset status and clear old data
 	ocr_import_doc.db_set("status", "Pending")
@@ -556,6 +526,7 @@ def retry_gemini_extraction(ocr_import: str):
 			ocr_import_name=ocr_import_doc.name,
 			source_type=ocr_import_doc.source_type,
 			uploaded_by=frappe.session.user,
+			mime_type=file_mime_type,
 		)
 	except Exception:
 		# Enqueue failed — revert to Error so it doesn't sit as stale Pending
@@ -568,3 +539,283 @@ def retry_gemini_extraction(ocr_import: str):
 		frappe.throw(_("Failed to start retry. Please try again."))
 
 	return {"message": _("Retry queued. The extraction will run in the background.")}
+
+
+@frappe.whitelist()
+def get_open_purchase_orders(supplier, company):
+	"""Return open Purchase Orders for a given supplier and company."""
+	if not frappe.has_permission("Purchase Order", "read"):
+		frappe.throw(_("You don't have permission to view Purchase Orders."))
+
+	# Use get_list (not get_all) to respect user-permission restrictions
+	return frappe.get_list(
+		"Purchase Order",
+		filters={
+			"supplier": supplier,
+			"company": company,
+			"docstatus": 1,
+			"status": ["in", ["To Receive and Bill", "To Receive", "To Bill"]],
+		},
+		fields=["name", "transaction_date", "grand_total", "status"],
+		order_by="transaction_date desc",
+		limit_page_length=20,
+	)
+
+
+@frappe.whitelist()
+def get_purchase_receipts_for_po(purchase_order):
+	"""Return Purchase Receipts that have items linked to the given PO.
+
+	The PO reference lives on PR child rows (Purchase Receipt Item.purchase_order),
+	not the PR header, so a plain Link filter won't work.
+	"""
+	if not frappe.has_permission("Purchase Order", "read"):
+		frappe.throw(_("You don't have permission to view Purchase Orders."))
+	if not frappe.has_permission("Purchase Order", "read", purchase_order):
+		frappe.throw(_("You don't have permission to access this Purchase Order."))
+	if not frappe.has_permission("Purchase Receipt", "read"):
+		frappe.throw(_("You don't have permission to view Purchase Receipts."))
+
+	pr_names = frappe.db.sql(
+		"""
+		SELECT DISTINCT pri.parent
+		FROM `tabPurchase Receipt Item` pri
+		INNER JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent
+		WHERE pri.purchase_order = %s
+		  AND pr.docstatus = 1
+		""",
+		purchase_order,
+		as_list=True,
+	)
+
+	if not pr_names:
+		return []
+
+	# Use get_list (not get_all) to respect user-permission restrictions
+	pr_name_list = [r[0] for r in pr_names]
+	return frappe.get_list(
+		"Purchase Receipt",
+		filters={"name": ["in", pr_name_list]},
+		fields=["name", "posting_date", "status"],
+		order_by="posting_date desc",
+	)
+
+
+@frappe.whitelist()
+def purchase_receipt_link_query(doctype, txt, searchfield, start, page_len, filters):
+	"""Frappe Link query for purchase_receipt_link field.
+
+	Returns PRs linked to the selected PO. Required signature for set_query().
+	Enforces read permission on both Purchase Receipt and Purchase Order,
+	and scopes results to the PO's company. Per-document permission filtering
+	ensures user-permission restrictions are respected.
+	"""
+	if not frappe.has_permission("Purchase Receipt", "read"):
+		return []
+	if not frappe.has_permission("Purchase Order", "read"):
+		return []
+
+	purchase_order = filters.get("purchase_order") if filters else None
+	if not purchase_order:
+		return []
+
+	# Verify user can access this specific PO
+	if not frappe.has_permission("Purchase Order", "read", purchase_order):
+		return []
+
+	# Scope to the PO's company to prevent cross-company enumeration
+	po_company = frappe.db.get_value("Purchase Order", purchase_order, "company")
+	if not po_company:
+		return []
+
+	txt = txt or ""
+
+	# Fetch candidate PR names via SQL (needed for child-table JOIN)
+	# then filter through per-document permission check
+	candidates = frappe.db.sql(
+		"""
+		SELECT DISTINCT pr.name, pr.posting_date, pr.status
+		FROM `tabPurchase Receipt` pr
+		INNER JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name
+		WHERE pri.purchase_order = %(purchase_order)s
+		  AND pr.docstatus = 1
+		  AND pr.company = %(company)s
+		  AND pr.name LIKE %(txt)s
+		ORDER BY pr.posting_date DESC
+		""",
+		{
+			"purchase_order": purchase_order,
+			"txt": f"%{txt}%",
+			"company": po_company,
+		},
+		as_dict=True,
+	)
+
+	# Per-document permission filter (respects user-permission restrictions)
+	start = int(start or 0)
+	page_len = int(page_len or 20)
+	results = []
+	for row in candidates:
+		if frappe.has_permission("Purchase Receipt", "read", row.name):
+			results.append([row.name, f"{row.posting_date} — {row.status}"])
+			if len(results) >= start + page_len:
+				break
+
+	return results[start:]
+
+
+@frappe.whitelist()
+def match_po_items(ocr_import, purchase_order):
+	"""Match OCR Import items to Purchase Order items by item_code.
+
+	Validates supplier/company match, then returns proposed matches for user review.
+	"""
+	if not frappe.has_permission("OCR Import", "write", ocr_import):
+		frappe.throw(_("You don't have permission to modify this OCR Import."))
+	if not frappe.has_permission("Purchase Order", "read"):
+		frappe.throw(_("You don't have permission to view Purchase Orders."))
+
+	ocr_doc = frappe.get_doc("OCR Import", ocr_import)
+	po_doc = frappe.get_doc("Purchase Order", purchase_order)
+
+	# Validate supplier and company match
+	if po_doc.supplier != ocr_doc.supplier:
+		frappe.throw(
+			_("PO supplier '{0}' does not match OCR Import supplier '{1}'.").format(
+				po_doc.supplier, ocr_doc.supplier
+			)
+		)
+	if po_doc.company != ocr_doc.company:
+		frappe.throw(
+			_("PO company '{0}' does not match OCR Import company '{1}'.").format(
+				po_doc.company, ocr_doc.company
+			)
+		)
+
+	# Build a pool of PO items (FIFO for duplicate item_codes)
+	po_items_pool = []
+	for po_item in po_doc.items:
+		po_items_pool.append(
+			{
+				"name": po_item.name,
+				"item_code": po_item.item_code,
+				"item_name": po_item.item_name,
+				"qty": po_item.qty,
+				"rate": po_item.rate,
+				"matched": False,
+			}
+		)
+
+	# Match OCR items to PO items by item_code (FIFO)
+	matches = []
+	for item in ocr_doc.items:
+		match = None
+		if item.item_code:
+			for po_item in po_items_pool:
+				if not po_item["matched"] and po_item["item_code"] == item.item_code:
+					po_item["matched"] = True
+					match = {
+						"purchase_order_item": po_item["name"],
+						"po_item_code": po_item["item_code"],
+						"po_item_name": po_item["item_name"],
+						"po_qty": po_item["qty"],
+						"po_rate": po_item["rate"],
+					}
+					break
+
+		matches.append(
+			{
+				"idx": item.idx,
+				"description_ocr": item.description_ocr,
+				"item_code": item.item_code,
+				"item_name": item.item_name,
+				"qty": item.qty,
+				"rate": item.rate,
+				"match": match,
+			}
+		)
+
+	# Collect unmatched PO items
+	unmatched_po = [p for p in po_items_pool if not p["matched"]]
+
+	# Get available PRs for this PO
+	purchase_receipts = get_purchase_receipts_for_po(purchase_order)
+
+	return {
+		"matches": matches,
+		"unmatched_po": unmatched_po,
+		"purchase_receipts": purchase_receipts,
+	}
+
+
+@frappe.whitelist()
+def match_pr_items(ocr_import, purchase_receipt):
+	"""Match OCR Import items to Purchase Receipt items by item_code.
+
+	Validates that the PR belongs to the selected PO (server-side check).
+	"""
+	if not frappe.has_permission("OCR Import", "write", ocr_import):
+		frappe.throw(_("You don't have permission to modify this OCR Import."))
+	if not frappe.has_permission("Purchase Receipt", "read"):
+		frappe.throw(_("You don't have permission to view Purchase Receipts."))
+
+	ocr_doc = frappe.get_doc("OCR Import", ocr_import)
+	pr_doc = frappe.get_doc("Purchase Receipt", purchase_receipt)
+
+	# Validate the PR belongs to the selected PO
+	if not ocr_doc.purchase_order:
+		frappe.throw(_("Please select a Purchase Order first."))
+
+	pr_has_po_link = False
+	for pr_item in pr_doc.items:
+		if pr_item.purchase_order == ocr_doc.purchase_order:
+			pr_has_po_link = True
+			break
+
+	if not pr_has_po_link:
+		frappe.throw(
+			_("Purchase Receipt '{0}' is not linked to Purchase Order '{1}'.").format(
+				purchase_receipt, ocr_doc.purchase_order
+			)
+		)
+
+	# Build PR items pool (FIFO for duplicate item_codes)
+	pr_items_pool = []
+	for pr_item in pr_doc.items:
+		if pr_item.purchase_order == ocr_doc.purchase_order:
+			pr_items_pool.append(
+				{
+					"name": pr_item.name,
+					"item_code": pr_item.item_code,
+					"item_name": pr_item.item_name,
+					"qty": pr_item.qty,
+					"rate": pr_item.rate,
+					"matched": False,
+				}
+			)
+
+	# Match OCR items to PR items by item_code (FIFO)
+	matches = []
+	for item in ocr_doc.items:
+		match = None
+		if item.item_code:
+			for pr_item in pr_items_pool:
+				if not pr_item["matched"] and pr_item["item_code"] == item.item_code:
+					pr_item["matched"] = True
+					match = {
+						"pr_detail": pr_item["name"],
+						"pr_item_code": pr_item["item_code"],
+						"pr_qty": pr_item["qty"],
+						"pr_rate": pr_item["rate"],
+					}
+					break
+
+		matches.append(
+			{
+				"idx": item.idx,
+				"item_code": item.item_code,
+				"match": match,
+			}
+		)
+
+	return {"matches": matches}

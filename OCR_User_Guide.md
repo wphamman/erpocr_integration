@@ -1,225 +1,233 @@
-# OCR Invoice Import — User Guide & Test Plan
+# OCR Invoice Import — Accountant Guide
 
-**For: Star Pops Accounting Team**
-**System: erp.starpops.co.za**
+**For: Accounting team members who review imports and create documents**
 
 ---
 
 ## What This Does
 
-The OCR Import tool reads supplier invoice PDFs and automatically creates **draft Purchase Invoices** in ERPNext. It uses AI (Google Gemini) to extract the supplier name, invoice number, date, line items, quantities, and amounts from the PDF.
+The OCR Import tool reads supplier invoices (PDF or image) using AI and creates records in ERPNext with the extracted data. You review the data, confirm matches, and then create the appropriate document:
 
-You upload a PDF → the system reads it → you review the extracted data → a draft PI is created.
+- **Purchase Invoice** — for service invoices, subscriptions, stock purchases
+- **Purchase Receipt** — for receiving physical stock items into the warehouse
+- **Journal Entry** — for expense receipts (restaurant bills, tolls, entertainment)
 
-**Important:** It only creates *drafts*. Nothing is posted or submitted automatically. You always have a chance to review before anything hits the books.
+**Important:** The system only creates *drafts*. Nothing is posted or submitted automatically. You always review before anything hits the books.
 
 ---
 
-## Part 1: Initial Setup (One-Time)
+## Part 1: Installation & Setup
 
-Before testing, an administrator needs to configure OCR Settings.
+### Installing the App
 
-### Step 1 — Open OCR Settings
+```bash
+bench get-app https://github.com/wphamman/erpocr_integration
+bench --site <site> install-app erpocr_integration
+bench --site <site> migrate
+bench restart
+```
 
-1. In the search bar at the top of ERPNext, type **OCR Settings** and open it
+### Configuring OCR Settings
 
-### Step 2 — Fill In the Settings
+1. In the search bar, type **OCR Settings** and open it
+2. Fill in the required settings:
+
+**Gemini API**
 
 | Field | What to Enter |
 |---|---|
-| **Gemini API Key** | The API key provided by your administrator (starts with `AIza...`) |
+| **Gemini API Key** | Get from https://aistudio.google.com/apikey (starts with `AIza...`) |
 | **Gemini Model** | Select **gemini-2.5-flash** (recommended — fast and accurate) |
-| **Default Company** | Star Pops |
-| **Default Warehouse** | Your main receiving warehouse (e.g. "Stores - SP") |
-| **Default Expense Account** | A general expense account for service items (e.g. "Cost of Goods Sold - SP") |
-| **Default Cost Center** | Your main cost center (e.g. "Main - SP") |
-| **Default Item** | A non-stock item used for unmatched line items (e.g. a generic "Services" item). The OCR description is used as the item description on the Purchase Invoice. |
-| **VAT Tax Template** | South Africa Tax - SP |
-| **Non-VAT Tax Template** | Z - Not Registered for VAT - SP |
-| **Matching Threshold** | Leave at **80** (this controls how closely item names need to match — 80% is a good starting point) |
 
-### Step 3 — Save
+**ERPNext Defaults**
 
-Click **Save**. You're ready to test.
-
----
-
-## Part 2: Test Plan — Manual Upload
-
-This is the simplest way to test. You upload a PDF directly.
-
-### Test 1 — Upload a Simple Invoice
-
-**What you need:** A single-page PDF invoice from a supplier that already exists in ERPNext.
-
-1. In the search bar, type **OCR Import** and click **+ Add OCR Import** (or go to the OCR Import list and click **New**)
-2. Click the **Actions > Upload PDF** button in the top-right
-3. Select your PDF file (must be under 10 MB)
-4. Wait 5–30 seconds — you'll see progress messages ("Uploading...", "Extracting...", "Processing...")
-5. The page will reload automatically when extraction is done
-
-**What to check after extraction:**
-
-| Field | What to Look For |
+| Field | What to Enter |
 |---|---|
-| **Status** | Should be "Needs Review" or "Matched" |
-| **Supplier (OCR)** | The supplier name the AI read from the invoice |
-| **Supplier** | If auto-matched, this will be filled with the ERPNext supplier. If blank, the system couldn't find a match |
-| **Supplier Match Status** | "Auto Matched", "Suggested", or "Unmatched" |
-| **Invoice Number** | Should match the invoice number on the PDF |
-| **Invoice Date** | Should match the date on the PDF |
-| **Total Amount** | Should match the invoice total |
-| **Tax Amount** | Should match the VAT amount (if applicable) |
-| **Tax Template** | Should be auto-set: "South Africa Tax" for invoices with VAT, "Not Registered for VAT" for invoices without |
-| **Document Type** | Auto-detected: "Purchase Invoice" for service items, "Purchase Receipt" for stock items. You can change this before creating the document. |
-| **Confidence** | A colour-coded badge: Green (high) / Orange (medium) / Red (low) |
-| **Items table** | Each line item from the invoice should appear with description, quantity, rate, and amount |
+| **Default Company** | Your company |
+| **Default Warehouse** | Main receiving warehouse (e.g. "Stores - SP") |
+| **Default Expense Account** | General expense account for service items |
+| **Default Cost Center** | Main cost center |
+| **Default Item** | A non-stock item for unmatched line items (optional — OCR description becomes the item description) |
+| **Default Credit Account** | Default credit account for Journal Entries (e.g. Accounts Payable, Petty Cash, Bank) |
 
-**Pass criteria:** The extracted data reasonably matches what's on the PDF. Small formatting differences are normal (e.g., "R 1,500.00" becomes "1500.0").
+**Tax Templates**
 
----
+| Field | What to Enter |
+|---|---|
+| **VAT Tax Template** | Your VAT purchase tax template (applied when tax is detected on the invoice) |
+| **Non-VAT Tax Template** | Your non-VAT template (applied when no tax is detected) |
 
-### Test 2 — Confirm Matches and Create a Purchase Invoice
+**Matching**
 
-**Starting from:** A completed Test 1 with status "Needs Review"
+| Field | What to Enter |
+|---|---|
+| **Matching Threshold** | Leave at **80** (minimum similarity score for fuzzy matching) |
 
-**If the supplier was auto-matched (Supplier field is filled):**
-
-1. Verify the matched supplier is correct
-2. Change the **Supplier Match Status** dropdown to **Confirmed**
 3. Click **Save**
 
-**If the supplier was NOT matched (Supplier field is blank):**
+### Optional: Email Monitoring
 
-1. Click the **Supplier** link field
-2. Search for and select the correct ERPNext supplier
-3. Change the **Supplier Match Status** dropdown to **Confirmed**
-4. Click **Save**
-5. The system will remember this match for next time (creates a "Supplier Alias")
+1. In OCR Settings, check **Enable Email Monitoring**
+2. Select the **Email Account** to monitor (must be an existing ERPNext Email Account)
+3. Save
 
-**For each line item in the Items table:**
+The system will check this email account every hour for invoice attachments (PDF, JPEG, PNG).
 
-1. Check the **Match Status** column:
-   - **Auto Matched** — the system found the item automatically. Verify it's correct.
-   - **Suggested** — the system found a close match but isn't sure. Check carefully.
-   - **Unmatched** — no match found. You need to select the item manually.
-2. For unmatched or incorrect items:
-   - Click the **Item Code** field in that row
-   - Search for and select the correct ERPNext item
-   - If this is a service/expense item (not stock), also set the **Expense Account** and optionally the **Cost Center**
-   - Change the **Match Status** to **Confirmed**
-3. Click **Save**
+### Optional: Google Drive Integration
 
-**Check the Document Type:**
+1. In OCR Settings, check **Enable Drive Integration**
+2. Paste your Google Cloud **Service Account JSON** key
+3. Set **Archive Folder ID** — the Drive folder where processed files are archived (organised by Year/Month/Supplier)
+4. Set **Scan Inbox Folder ID** — the Drive folder where uploaders drop new files (checked every 15 minutes)
+5. Save
 
-Before creating the document, check the **Document Type** field:
-- **Purchase Invoice** — for service invoices, subscriptions, and general expenses
-- **Purchase Receipt** — for receiving physical stock items into the warehouse
-
-The system auto-detects this based on the matched item types. You can change it if needed.
-
-**Once all items are matched and the status shows "Matched":**
-
-If everything was auto-matched during extraction, a draft Purchase Invoice or Purchase Receipt is created automatically — the status will already be "Completed" with a link to the document.
-
-If you had to manually confirm matches, click **Actions > Create Purchase Invoice** (or **Create Purchase Receipt**) after saving. The system creates a draft and the status changes to "Completed".
-
-**Pass criteria:** A draft Purchase Invoice or Purchase Receipt is created with the correct supplier, line items, amounts, and tax template. The document is in draft status (not submitted).
+Make sure the service account has been granted access to both folders.
 
 ---
 
-### Test 3 — Upload an Invoice from a New Supplier
+## Part 2: Reviewing Imports
 
-**What you need:** A PDF from a supplier that does NOT exist in ERPNext yet.
+### Finding Imports to Review
 
-1. Upload the PDF (same as Test 1)
-2. After extraction, the **Supplier** field will be blank and **Supplier Match Status** will be "Unmatched"
-3. **First:** Go create the supplier in ERPNext (Buying > Supplier > New)
-4. Come back to the OCR Import record
-5. Select the new supplier in the **Supplier** field
-6. Set **Supplier Match Status** to **Confirmed** and save
-7. Continue with item matching as in Test 2
-
-**Pass criteria:** Works end-to-end even when the supplier didn't exist initially. After confirming, the supplier alias is saved so future invoices from this supplier match automatically.
-
----
-
-### Test 4 — Test the Learning System
-
-**What you need:** A second PDF from the same supplier used in Test 2 or Test 3.
-
-1. Upload the second PDF
-2. After extraction, check:
-   - The **Supplier** should be auto-matched this time (because you confirmed it before)
-   - Items that you previously confirmed should also be auto-matched
-3. If everything is matched, the status should be "Matched" immediately
-
-**Pass criteria:** The system remembers previous confirmations and auto-matches on the second invoice. Less manual work each time.
-
----
-
-### Test 5 — Upload a Multi-Invoice PDF (Statement)
-
-**What you need:** A PDF that contains multiple invoices (e.g., a monthly statement with several invoices).
-
-1. Upload the PDF (same as Test 1)
-2. After extraction, **multiple OCR Import records** will be created — one per invoice found in the PDF
-3. Check the OCR Import list — you should see several new records from the same upload
-4. Review each one individually
-
-**Pass criteria:** Each invoice in the statement gets its own separate OCR Import record with the correct data.
-
----
-
-### Test 6 — Error Handling
-
-**What you need:** A file that is NOT a valid invoice (e.g., a photo, a blank PDF, or a non-PDF file).
-
-1. Try uploading a non-PDF file → should show "Only PDF files are supported"
-2. Try uploading a PDF larger than 10 MB → should show "File too large"
-3. Try uploading a blank or illegible PDF → should complete extraction but with minimal/incorrect data and possibly a low confidence score
-
-**Pass criteria:** The system handles bad input gracefully without crashing. Error records show status "Error" and can be found in the OCR Import list.
-
----
-
-## Part 3: Day-to-Day Workflow (After Testing)
-
-Once you're comfortable with the system, the daily workflow looks like this:
-
-### Uploading Invoices
-
-1. **Manual upload:** Go to OCR Import > New > Upload PDF
-2. **Email (if enabled):** Forward invoice emails to the designated email address — they're picked up automatically every hour
-3. **Google Drive (if enabled):** Drop PDFs into the shared Drive folder — they're picked up automatically every 15 minutes
-
-### Reviewing Imports
-
-1. Go to the **OCR Import list** (search "OCR Import" in the search bar)
+1. In the search bar, type **OCR Import** and press Enter
 2. Filter by **Status = Needs Review** to see imports that need attention
-3. Open each one, confirm/correct the supplier and items, then create the Purchase Invoice
+3. Alternatively, use the **OCR Dashboard** (search "OCR Dashboard") for an overview with status cards
 
-### Tips for Faster Processing
+### Understanding the OCR Import Record
 
-- **Confirm matches** (set status to "Confirmed") whenever the system gets it right — this teaches the system and improves future accuracy
-- **Service items** (subscriptions, rent, professional fees) need an Expense Account set on the item row — the system will remember this for next time via Service Mappings
-- **Check the confidence score** — green (high) means the AI is very confident in the extraction, red (low) means you should check the data more carefully
-- Items and suppliers that you've confirmed before will auto-match in future — the system gets better over time
+When you open an import, you'll see:
 
-### Where to Find Things
-
-| What | Where |
+| Section | What's There |
 |---|---|
-| Upload a new invoice | OCR Import > New > Actions > Upload PDF |
-| See all imports | OCR Import list (filter by status) |
-| Review pending imports | OCR Import list > filter: Status = Needs Review |
-| See created Purchase Invoices | Click the **Purchase Invoice** link on any Completed OCR Import |
-| See created Purchase Receipts | Click the **Purchase Receipt** link on any Completed OCR Import |
-| View saved supplier aliases | OCR Supplier Alias list |
-| View saved item aliases | OCR Item Alias list |
-| View service mappings | OCR Service Mapping list |
-| Check for errors | Error Log (filter by "ocr") |
-| OCR Settings | Search "OCR Settings" in the search bar |
+| **Header** | Supplier (OCR name + matched ERPNext supplier), invoice number, dates, amounts |
+| **Tax Template** | Auto-set based on whether VAT was detected on the invoice |
+| **Confidence** | Colour-coded badge: Green (high) / Orange (medium) / Red (low) |
+| **Items table** | Each line item with description, qty, rate, amount, and match status |
+| **Document Type** | Blank by default — you select this before creating a document |
+| **Purchase Order section** | Optional PO/PR linking (see Part 4) |
+| **Result section** | Links to created documents (PI/PR/JE) after creation |
+
+### Confirming the Supplier
+
+**If the Supplier field is already filled and correct:**
+1. Change **Supplier Match Status** to **Confirmed**
+2. Click **Save** — the system saves this as an alias for future auto-matching
+
+**If the Supplier field is blank or wrong:**
+1. Click the **Supplier** field and search for the correct supplier
+2. Change **Supplier Match Status** to **Confirmed**
+3. Click **Save** — the alias is saved for next time
+
+**If the supplier doesn't exist in ERPNext yet:**
+1. Create the supplier first (Buying > Supplier > New)
+2. Come back to the OCR Import and select it
+
+### Confirming Line Items
+
+Look at the **Match Status** column in the Items table:
+
+| Match Status | What It Means | What to Do |
+|---|---|---|
+| **Auto Matched** | System found the item via alias or exact match | Verify it's correct |
+| **Suggested** | System found a close fuzzy match | Check carefully — might be wrong |
+| **Service Mapped** | Matched via service mapping pattern | Verify the item, expense account, and cost center |
+| **Unmatched** | No match found | Select the item manually |
+
+For unmatched or incorrect items:
+1. Click the **Item Code** field in that row
+2. Search for and select the correct item
+3. For service/expense items (not stock), also set the **Expense Account** and optionally the **Cost Center**
+4. Change **Match Status** to **Confirmed**
+5. Click **Save**
+
+---
+
+## Part 3: Creating Documents
+
+### Step 1 — Select a Document Type
+
+The **Document Type** field is blank by default. You must select one before creating a document:
+
+| Document Type | When to Use |
+|---|---|
+| **Purchase Invoice** | Most invoices — services, subscriptions, stock purchases with or without PO |
+| **Purchase Receipt** | Receiving physical stock items into the warehouse (all items must be stock items) |
+| **Journal Entry** | Expense receipts — restaurant bills, toll slips, entertainment, petty cash |
+
+### Step 2 — Create the Document
+
+After selecting a document type and confirming your matches, click the appropriate button under **Actions**:
+
+- **Create Purchase Invoice** — appears when Document Type = "Purchase Invoice"
+- **Create Purchase Receipt** — appears when Document Type = "Purchase Receipt" and status = "Matched"
+- **Create Journal Entry** — appears when Document Type = "Journal Entry"
+
+The system creates a **draft** document. The OCR Import status changes to **Completed** and a link to the created document appears in the Result section.
+
+### Step 3 — Review and Submit the Draft
+
+Open the created document (click the link in the Result section) and:
+1. Verify all details are correct
+2. Make any needed adjustments
+3. Submit the document when ready
+
+### Journal Entry — Additional Steps
+
+When creating a Journal Entry:
+1. Set Document Type to **Journal Entry**
+2. The **Credit Account** field appears — set it to the appropriate account (e.g. Accounts Payable, Petty Cash, Bank). The system auto-fills this from OCR Settings if configured.
+3. Ensure each item row has an **Expense Account** set
+4. Click **Create Journal Entry**
+
+The JE will have:
+- A **debit line** for each item's expense account
+- A separate **debit line** for VAT (if tax was detected)
+- A single **credit line** to the credit account for the total
+
+---
+
+## Part 4: Purchase Order Linking (Optional)
+
+If the invoice relates to an existing Purchase Order, you can link them before creating the Purchase Invoice. This closes the PO→PR→PI chain in ERPNext.
+
+### Linking a Purchase Order
+
+1. Make sure the **Supplier** field is set
+2. Click **Actions > Find Open POs** — a dialog shows open POs for this supplier
+3. Select the relevant PO
+4. Click **Actions > Match PO Items** — the system auto-matches OCR items to PO items by item code
+5. Review the matches in the dialog (see quantities and rates side by side)
+6. Click **Apply Matches** to write the PO references to the items
+
+### Linking a Purchase Receipt
+
+If the PO already has a Purchase Receipt (goods already received):
+
+1. After linking a PO, the **Purchase Receipt** field appears (under Purchase Order)
+2. Select the PR — only PRs created against the selected PO are shown
+3. The system auto-matches PR items and populates PR references on the items
+
+When you then create a Purchase Invoice, the PI items will include both PO references (marks the PO as billed) and PR references (marks the PR as billed).
+
+### When PO/PR Linking Matters
+
+| Scenario | Link PO? | Link PR? |
+|---|---|---|
+| Invoice for goods received with PO and delivery note | Yes | Yes |
+| Invoice for services with PO (no delivery) | Yes | No |
+| Invoice without any PO | No | No |
+
+---
+
+## Part 5: The System Learns
+
+Every time you confirm a supplier or item match, the system remembers it:
+
+- **Supplier aliases** — OCR text → ERPNext supplier (e.g. "Star Pops ( Pty ) Ltd" → "Star Pops")
+- **Item aliases** — OCR text → ERPNext item
+- **Service mappings** — pattern-based rules for recurring services (can be set up in OCR Service Mapping)
+
+The more invoices you process, the less manual work is needed. After a few invoices from the same supplier, most imports will be fully auto-matched.
 
 ---
 
@@ -228,10 +236,29 @@ Once you're comfortable with the system, the daily workflow looks like this:
 | Status | Meaning | Action Needed |
 |---|---|---|
 | **Pending** | Just uploaded, waiting to be processed | Wait — processing starts automatically |
-| **Needs Review** | Data extracted, but supplier or items need manual matching | Review and confirm matches |
-| **Matched** | All suppliers and items matched, PI/PR auto-created | Check the draft document |
-| **Completed** | Purchase Invoice or Purchase Receipt created | Nothing — all done |
-| **Error** | Something went wrong during extraction | Check the error details, retry or re-upload |
+| **Needs Review** | Data extracted, supplier or items need checking | Review and confirm matches, then create document |
+| **Matched** | All suppliers and items auto-matched | Select document type and create the document |
+| **Completed** | Document (PI/PR/JE) created | All done — review and submit the draft |
+| **Error** | Something went wrong during extraction | Check details, try re-uploading, or ask admin |
+
+---
+
+## Where to Find Things
+
+| What | Where |
+|---|---|
+| Upload a new invoice | OCR Import > New > Actions > Upload File |
+| See all imports | OCR Import list (filter by status) |
+| Review pending imports | OCR Import list > filter: Status = Needs Review |
+| Created Purchase Invoices | Click the **Purchase Invoice** link on any Completed OCR Import |
+| Created Purchase Receipts | Click the **Purchase Receipt** link on any Completed OCR Import |
+| Created Journal Entries | Click the **Journal Entry** link on any Completed OCR Import |
+| Supplier aliases | OCR Supplier Alias list |
+| Item aliases | OCR Item Alias list |
+| Service mappings | OCR Service Mapping list |
+| Error logs | Error Log (filter by "OCR") |
+| Settings | Search "OCR Settings" in the search bar |
+| Dashboard | Search "OCR Dashboard" in the search bar |
 
 ---
 
@@ -239,9 +266,12 @@ Once you're comfortable with the system, the daily workflow looks like this:
 
 | Problem | What to Do |
 |---|---|
-| Status stuck on "Pending" for more than 5 minutes | The background job may have failed. Check Error Log for OCR-related errors, or try uploading again. |
-| Supplier not matching | The supplier name on the invoice may be different from the name in ERPNext (e.g., "ABC Pty Ltd" vs "ABC (Pty) Ltd"). Select it manually and confirm — next time it will match. |
-| Items not matching | Same as above — item descriptions on invoices often differ from ERPNext item names. Confirm once and it learns. |
-| Wrong amounts extracted | Check the original PDF — unusual formatting can confuse the AI. You can edit the amounts on the OCR Import before creating the PI. |
-| Confidence score is red/low | The PDF might be a scan, image-based, or have unusual formatting. Review all fields carefully before creating the PI. |
-| "Upload PDF" button not showing | Make sure you're on a **new** (unsaved) OCR Import record. The button only appears on new records. |
+| Status stuck on "Pending" for more than 5 minutes | The background job may have failed. Check Error Log, or try uploading again. |
+| Supplier not matching | The supplier name on the invoice may differ from ERPNext (e.g. "ABC Pty Ltd" vs "ABC (Pty) Ltd"). Select manually and confirm — next time it will match. |
+| Items not matching | Item descriptions on invoices often differ from ERPNext item names. Confirm once and it learns. |
+| Wrong amounts extracted | Unusual PDF formatting can confuse the AI. Edit the amounts on the OCR Import before creating the document. |
+| Low confidence (red badge) | The file might be blurry, image-based, or have unusual formatting. Review all fields carefully. |
+| "Upload File" button not showing | The button only appears on **new** (unsaved) OCR Import records. |
+| "Create" button not showing | Make sure you've selected a **Document Type** first. For Purchase Receipt, status must be "Matched" (all items resolved). |
+| Journal Entry won't create | Check that all items have an Expense Account set and a Credit Account is specified. |
+| Can't find PRs for my PO | Only submitted Purchase Receipts with items linked to the selected PO are shown. |
