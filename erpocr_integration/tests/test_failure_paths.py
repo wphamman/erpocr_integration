@@ -13,16 +13,16 @@ import erpocr_integration.tasks.email_monitor
 import erpocr_integration.tasks.gemini_extract
 
 # ---------------------------------------------------------------------------
-# 1. upload_pdf enqueue failure cleanup (api.py)
+# 1. upload_file enqueue failure cleanup (api.py)
 # ---------------------------------------------------------------------------
 
 
-class TestUploadPdfEnqueueFailure:
-	"""When frappe.enqueue() fails in upload_pdf, the placeholder OCR Import
+class TestUploadFileEnqueueFailure:
+	"""When frappe.enqueue() fails in upload_file, the placeholder OCR Import
 	should be marked Error (not left as stale Pending)."""
 
 	def _setup_upload_mocks(self, mock_frappe, sample_settings, enqueue_side_effect=None):
-		"""Common setup for upload_pdf tests."""
+		"""Common setup for upload_file tests."""
 		mock_file = MagicMock()
 		mock_file.filename = "invoice.pdf"
 		mock_file.tell.return_value = 1000
@@ -50,7 +50,7 @@ class TestUploadPdfEnqueueFailure:
 		self._setup_upload_mocks(mock_frappe, sample_settings, enqueue_side_effect=Exception("Redis down"))
 
 		with pytest.raises(Exception):
-			erpocr_integration.api.upload_pdf()
+			erpocr_integration.api.upload_file()
 
 		mock_frappe.db.set_value.assert_called_with("OCR Import", "OCR-IMP-001", "status", "Error")
 
@@ -58,7 +58,7 @@ class TestUploadPdfEnqueueFailure:
 		"""Normal flow: enqueue succeeds, returns processing status."""
 		self._setup_upload_mocks(mock_frappe, sample_settings)
 
-		result = erpocr_integration.api.upload_pdf()
+		result = erpocr_integration.api.upload_file()
 
 		assert result["ocr_import"] == "OCR-IMP-001"
 		assert result["status"] == "processing"
@@ -312,7 +312,7 @@ class TestArchiveMoveFailure:
 			mock_frappe.get_doc = MagicMock(return_value=placeholder)
 
 			erpocr_integration.api.gemini_process(
-				pdf_content=b"%PDF-1.4 test",
+				file_content=b"%PDF-1.4 test",
 				filename="invoice.pdf",
 				ocr_import_name="OCR-IMP-ARCHIVE",
 				source_type="Gemini Drive Scan",

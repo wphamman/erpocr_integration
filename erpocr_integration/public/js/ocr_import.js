@@ -81,7 +81,7 @@ frappe.ui.form.on('OCR Import', {
 
 					// Use XMLHttpRequest for file upload (frappe.call doesn't support FormData well)
 					let xhr = new XMLHttpRequest();
-					xhr.open('POST', '/api/method/erpocr_integration.api.upload_pdf');
+					xhr.open('POST', '/api/method/erpocr_integration.api.upload_file');
 					xhr.setRequestHeader('X-Frappe-CSRF-Token', frappe.csrf_token);
 
 					xhr.onload = function() {

@@ -253,7 +253,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 		all_succeeded = True
 		pdfs_to_process = 0
 		has_in_progress = False
-		for pdf_content, filename, attachment_content_type in pdfs:
+		for file_content, filename, attachment_content_type in pdfs:
 			# Per-PDF duplicate check: skip this PDF if already successfully processed
 			if message_id:
 				existing = frappe.get_all(
@@ -283,7 +283,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					continue
 
 			# Enforce same size limit as manual upload
-			if len(pdf_content) > MAX_PDF_SIZE_BYTES:
+			if len(file_content) > MAX_PDF_SIZE_BYTES:
 				frappe.log_error(
 					title="Email Monitoring Error",
 					message=f"PDF too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
@@ -303,7 +303,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					file_mime_type = SUPPORTED_FILE_TYPES.get(file_ext, "application/pdf")
 
 				# Validate magic bytes before creating placeholder or enqueuing
-				if not validate_file_magic_bytes(pdf_content, file_mime_type):
+				if not validate_file_magic_bytes(file_content, file_mime_type):
 					frappe.logger().warning(
 						f"Email monitoring: Skipping '{filename}' — content does not match "
 						f"expected file type ({file_mime_type})"
@@ -330,7 +330,7 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					"erpocr_integration.api.gemini_process",
 					queue="long",
 					timeout=300,
-					pdf_content=pdf_content,
+					file_content=file_content,
 					filename=filename,
 					ocr_import_name=ocr_import.name,
 					source_type="Gemini Email",
@@ -491,9 +491,9 @@ def _extract_pdfs_from_email(msg) -> list[tuple[bytes, str, str]]:
 					filename = _decode_header_value(filename)
 
 					# Get file content
-					pdf_content = part.get_payload(decode=True)
-					if pdf_content:
-						pdfs.append((pdf_content, filename, content_type))
+					file_content = part.get_payload(decode=True)
+					if file_content:
+						pdfs.append((file_content, filename, content_type))
 	else:
 		# Single part email — require attachment disposition to avoid processing
 		# bare image emails (e.g. camera snapshots sent without context)
@@ -502,9 +502,9 @@ def _extract_pdfs_from_email(msg) -> list[tuple[bytes, str, str]]:
 		if content_type in _SUPPORTED_EMAIL_MIME_TYPES and "attachment" in content_disposition:
 			filename = msg.get_filename() or "invoice.pdf"
 			filename = _decode_header_value(filename)
-			pdf_content = msg.get_payload(decode=True)
-			if pdf_content:
-				pdfs.append((pdf_content, filename, content_type))
+			file_content = msg.get_payload(decode=True)
+			if file_content:
+				pdfs.append((file_content, filename, content_type))
 
 	return pdfs
 

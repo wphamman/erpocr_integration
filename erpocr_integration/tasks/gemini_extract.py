@@ -10,14 +10,14 @@ import requests
 from frappe import _
 
 
-def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "application/pdf") -> list[dict]:
+def extract_invoice_data(file_content: bytes, filename: str, mime_type: str = "application/pdf") -> list[dict]:
 	"""
 	Extract invoice data from PDF or image using Gemini 2.5 Flash API.
 
 	Supports multi-invoice PDFs — returns one result per invoice found.
 
 	Args:
-		pdf_content: Raw file bytes (PDF or image)
+		file_content: Raw file bytes (PDF or image)
 		filename: Original filename for logging
 		mime_type: MIME type for Gemini API (e.g., "application/pdf", "image/jpeg", "image/png")
 
@@ -49,7 +49,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "ap
 
 	# Call Gemini API with retry logic
 	try:
-		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+		response_data = _call_gemini_api(file_content, prompt, schema, api_key, model, mime_type)
 	except Exception as e:
 		frappe.log_error(
 			title="Gemini API Error",
@@ -249,7 +249,7 @@ def _build_extraction_schema() -> dict:
 
 
 def _call_gemini_api(
-	pdf_content: bytes,
+	file_content: bytes,
 	prompt: str,
 	schema: dict,
 	api_key: str,
@@ -263,7 +263,7 @@ def _call_gemini_api(
 	url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 	# Encode file as base64
-	file_base64 = base64.b64encode(pdf_content).decode("utf-8")
+	file_base64 = base64.b64encode(file_content).decode("utf-8")
 
 	payload = {
 		"contents": [

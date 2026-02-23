@@ -52,11 +52,11 @@ def _enforce_pending_import_limit(user: str | None):
 
 
 @frappe.whitelist(methods=["POST"])
-def upload_pdf():
+def upload_file():
 	"""
 	Upload PDF or image for Gemini OCR extraction.
 
-	URL: /api/method/erpocr_integration.api.upload_pdf
+	URL: /api/method/erpocr_integration.api.upload_file
 
 	Expects multipart/form-data with 'file' field.
 	Accepts PDF (.pdf), JPEG (.jpg/.jpeg), and PNG (.png) files.
@@ -131,7 +131,7 @@ def upload_pdf():
 			"erpocr_integration.api.gemini_process",
 			queue="long",
 			timeout=300,  # 5 minutes
-			pdf_content=file_content,
+			file_content=file_content,
 			filename=filename,
 			ocr_import_name=ocr_import.name,
 			source_type="Gemini Manual Upload",
@@ -152,7 +152,7 @@ def upload_pdf():
 
 
 def gemini_process(
-	pdf_content: bytes,
+	file_content: bytes,
 	filename: str,
 	ocr_import_name: str,
 	source_type: str = "Gemini Manual Upload",
@@ -167,7 +167,7 @@ def gemini_process(
 	Additional invoices create new OCR Import records.
 
 	Args:
-		pdf_content: Raw file bytes (PDF or image)
+		file_content: Raw file bytes (PDF or image)
 		filename: Original filename
 		ocr_import_name: Name of the OCR Import record to update
 		source_type: "Gemini Manual Upload", "Gemini Email", or "Gemini Drive Scan"
@@ -197,7 +197,7 @@ def gemini_process(
 		# Call Gemini API — returns list of invoices (usually 1, but may be multiple)
 		from erpocr_integration.tasks.gemini_extract import extract_invoice_data
 
-		invoice_list = extract_invoice_data(pdf_content, filename, mime_type=mime_type)
+		invoice_list = extract_invoice_data(file_content, filename, mime_type=mime_type)
 
 		# Publish realtime update
 		invoice_count = len(invoice_list)
@@ -223,7 +223,7 @@ def gemini_process(
 				from erpocr_integration.tasks.drive_integration import upload_invoice_to_drive
 
 				drive_result = upload_invoice_to_drive(
-					pdf_content=pdf_content,
+					file_content=file_content,
 					filename=filename,
 					supplier_name=first_header.get("supplier_name", ""),
 					invoice_date=first_header.get("invoice_date"),
@@ -502,8 +502,8 @@ def retry_gemini_extraction(ocr_import: str):
 
 	from erpocr_integration.tasks.drive_integration import download_file_from_drive
 
-	pdf_content = download_file_from_drive(ocr_import_doc.drive_file_id)
-	if not pdf_content:
+	file_content = download_file_from_drive(ocr_import_doc.drive_file_id)
+	if not file_content:
 		frappe.throw(_("Failed to download file from Google Drive. Please re-upload the file."))
 
 	# Determine MIME type from original filename
@@ -521,7 +521,7 @@ def retry_gemini_extraction(ocr_import: str):
 			"erpocr_integration.api.gemini_process",
 			queue="long",
 			timeout=300,
-			pdf_content=pdf_content,
+			file_content=file_content,
 			filename=ocr_import_doc.source_filename,
 			ocr_import_name=ocr_import_doc.name,
 			source_type=ocr_import_doc.source_type,

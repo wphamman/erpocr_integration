@@ -37,13 +37,13 @@ def _mime_type_from_filename(filename: str) -> str:
 
 
 def upload_invoice_to_drive(
-	pdf_content: bytes, filename: str, supplier_name: str | None = None, invoice_date: str | None = None
+	file_content: bytes, filename: str, supplier_name: str | None = None, invoice_date: str | None = None
 ) -> dict:
 	"""
 	Upload invoice file to Google Drive with organized folder structure.
 
 	Args:
-		pdf_content: File content as bytes (PDF or image)
+		file_content: File content as bytes (PDF or image)
 		filename: Original filename (e.g., "invoice-5478129904.pdf" or "receipt.jpg")
 		supplier_name: Supplier name for folder organization (optional)
 		invoice_date: Invoice date for year/month folders (optional, format: YYYY-MM-DD)
@@ -87,7 +87,7 @@ def upload_invoice_to_drive(
 		# Upload PDF to the target folder
 		file_metadata = {"name": filename, "parents": [parent_folder_id]}
 
-		media = MediaInMemoryUpload(pdf_content, mimetype=_mime_type_from_filename(filename), resumable=True)
+		media = MediaInMemoryUpload(file_content, mimetype=_mime_type_from_filename(filename), resumable=True)
 
 		file = (
 			service.files()
@@ -367,13 +367,13 @@ def _process_scan_file(service, file_info: dict, settings):
 			return
 
 	# Download file content
-	pdf_content = _download_file(service, drive_file_id)
-	if not pdf_content:
+	file_content = _download_file(service, drive_file_id)
+	if not file_content:
 		frappe.log_error(title="Drive Scan Error", message=f"Empty content for {filename}")
 		return
 
 	# Enforce same size limit as manual upload
-	if len(pdf_content) > MAX_PDF_SIZE_BYTES:
+	if len(file_content) > MAX_PDF_SIZE_BYTES:
 		frappe.log_error(
 			title="Drive Scan Error",
 			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
@@ -383,7 +383,7 @@ def _process_scan_file(service, file_info: dict, settings):
 	# Validate magic bytes before creating placeholder or enqueuing
 	from erpocr_integration.api import validate_file_magic_bytes
 
-	if not validate_file_magic_bytes(pdf_content, file_mime_type):
+	if not validate_file_magic_bytes(file_content, file_mime_type):
 		frappe.log_error(
 			title="Drive Scan Error",
 			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
@@ -411,7 +411,7 @@ def _process_scan_file(service, file_info: dict, settings):
 			"erpocr_integration.api.gemini_process",
 			queue="long",
 			timeout=300,
-			pdf_content=pdf_content,
+			file_content=file_content,
 			filename=filename,
 			ocr_import_name=ocr_import.name,
 			source_type="Gemini Drive Scan",
