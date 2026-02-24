@@ -303,7 +303,10 @@ def poll_drive_scan_folder():
 
 	Lists PDF files in the configured scan folder, skips any already processed
 	(dedup via drive_file_id), downloads content, and enqueues Gemini extraction.
+	Staggers enqueue calls by 5 seconds to avoid bursting the Gemini rate limit.
 	"""
+	import time
+
 	settings = frappe.get_single("OCR Settings")
 	if not settings.drive_integration_enabled or not settings.drive_scan_folder_id:
 		return
@@ -324,22 +327,34 @@ def poll_drive_scan_folder():
 
 	frappe.logger().info(f"Drive scan: Found {len(files)} file(s) in scan folder")
 
+	enqueued_count = 0
 	for file_info in files:
 		try:
-			_process_scan_file(service, file_info, settings)
+			was_enqueued = _process_scan_file(service, file_info, settings)
+			if was_enqueued:
+				enqueued_count += 1
+				# Stagger requests: wait 5s between enqueues so background workers
+				# don't all hit Gemini at once (free tier = 15 RPM)
+				time.sleep(5)
 		except Exception as e:
 			frappe.log_error(
 				title="Drive Scan Error", message=f"Failed to process {file_info.get('name', '?')}: {e!s}"
 			)
 			continue
 
+	if enqueued_count:
+		frappe.logger().info(f"Drive scan: Enqueued {enqueued_count} file(s) for processing")
 
-def _process_scan_file(service, file_info: dict, settings):
+
+def _process_scan_file(service, file_info: dict, settings) -> bool:
 	"""
 	Process a single file (PDF or image) from the Drive scan folder.
 
 	Handles dedup (skips files already processed successfully), auto-retries
 	previously failed extractions, and enqueues new files for Gemini extraction.
+
+	Returns:
+		True if a Gemini extraction job was enqueued, False if file was skipped.
 	"""
 	drive_file_id = file_info["id"]
 	filename = file_info["name"]
@@ -364,13 +379,13 @@ def _process_scan_file(service, file_info: dict, settings):
 			)
 		else:
 			# At least one record succeeded or is still processing — skip
-			return
+			return False
 
 	# Download file content
 	pdf_content = _download_file(service, drive_file_id)
 	if not pdf_content:
 		frappe.log_error(title="Drive Scan Error", message=f"Empty content for {filename}")
-		return
+		return False
 
 	# Enforce same size limit as manual upload
 	if len(pdf_content) > MAX_PDF_SIZE_BYTES:
@@ -378,7 +393,7 @@ def _process_scan_file(service, file_info: dict, settings):
 			title="Drive Scan Error",
 			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
 		)
-		return
+		return False
 
 	# Validate magic bytes before creating placeholder or enqueuing
 	from erpocr_integration.api import validate_file_magic_bytes
@@ -388,7 +403,7 @@ def _process_scan_file(service, file_info: dict, settings):
 			title="Drive Scan Error",
 			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
 		)
-		return
+		return False
 
 	# Create OCR Import placeholder with drive_file_id for dedup
 	ocr_import = frappe.get_doc(
@@ -419,11 +434,13 @@ def _process_scan_file(service, file_info: dict, settings):
 			mime_type=file_mime_type,
 		)
 		frappe.logger().info(f"Drive scan: Queued {filename} for processing")
+		return True
 	except Exception as e:
 		# Delete placeholder so next poll can retry this file
 		frappe.delete_doc("OCR Import", ocr_import.name, force=True, ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
 		frappe.log_error(title="Drive Scan Enqueue Failed", message=f"Failed to enqueue {filename}: {e!s}")
+		return False
 
 
 def _list_pdf_files(service, folder_id: str) -> list[dict]:

@@ -171,7 +171,7 @@ Service mappings support supplier-specific patterns (higher priority) and generi
 ### Local Docker Testing
 - **Docker dir**: `c:\Users\wpham\erpnext-docker\frappe_docker`
 - **Build context**: `c:\Users\wpham\erpnext-docker\custom-image\`
-- **Site**: `ocr-test.local` (admin/admin)
+- **Site**: `ocr-test.local` (Administrator/admin)
 - **Base image**: `frappe/erpnext:v15.71.1`
 - **Rebuild workflow**:
   ```bash

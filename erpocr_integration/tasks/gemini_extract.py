@@ -279,8 +279,8 @@ def _call_gemini_api(
 
 	headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
-	# Retry with exponential backoff
-	max_retries = 3
+	# Retry with backoff — longer delays for 429 (rate limit), shorter for 5xx
+	max_retries = 5
 	for attempt in range(max_retries):
 		try:
 			response = requests.post(url, json=payload, headers=headers, timeout=60)
@@ -298,19 +298,26 @@ def _call_gemini_api(
 			# Truncate error body to prevent sensitive invoice data from being logged
 			error_body_truncated = error_body[:500] + "..." if len(error_body) > 500 else error_body
 
+			status_code = e.response.status_code if e.response else None
+
 			# Rate limit (429) or server error (5xx) - retry
-			if e.response and e.response.status_code in (429, 500, 503) and attempt < max_retries - 1:
-				wait_time = 2**attempt  # 1s, 2s, 4s
+			if status_code in (429, 500, 503) and attempt < max_retries - 1:
+				# 429 needs long waits (Gemini free tier = 15 RPM)
+				# 5xx are transient — shorter waits suffice
+				if status_code == 429:
+					wait_time = [15, 30, 60, 120][min(attempt, 3)]
+				else:
+					wait_time = [2, 5, 10, 20][min(attempt, 3)]
 				frappe.log_error(
 					title="Gemini API Rate Limit",
-					message=f"Rate limit or server error (status {e.response.status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}",
+					message=f"Rate limit or server error (status {status_code}), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})\n\nResponse (truncated): {error_body_truncated}",
 				)
 				time.sleep(wait_time)
 				continue
 			else:
 				# Non-retryable error or max retries reached
 				# Log truncated error (avoid sensitive data in logs/stdout)
-				error_summary = f"HTTP {e.response.status_code if e.response else 'Unknown'} Error"
+				error_summary = f"HTTP {status_code or 'Unknown'} Error"
 
 				# Also try to log it (may fail if in nested error context)
 				try:
@@ -325,7 +332,7 @@ def _call_gemini_api(
 
 		except requests.exceptions.Timeout:
 			if attempt < max_retries - 1:
-				wait_time = 2**attempt
+				wait_time = [2, 5, 10, 20][min(attempt, 3)]
 				frappe.log_error(
 					title="Gemini API Timeout",
 					message=f"Request timeout, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})",
