@@ -164,28 +164,9 @@ Service mappings support supplier-specific patterns (higher priority) and generi
 - Currency symbols stripped from amounts
 - Product codes extracted separately from descriptions
 
-## Environment & Deployment
+## Deployment
 
-### Development
-- **Code location**: `c:\Users\wpham\ERPNextProjects\OCRIntegration`
-- **Live ERPNext**: Remote server (production — install after testing)
-
-### Local Docker Testing
-- **Docker dir**: `c:\Users\wpham\erpnext-docker\frappe_docker`
-- **Build context**: `c:\Users\wpham\erpnext-docker\custom-image\`
-- **Site**: `ocr-test.local` (Administrator/admin)
-- **Base image**: `frappe/erpnext:v15.71.1`
-- **Rebuild workflow**:
-  ```bash
-  # Copy app to build context
-  cp -r "c:/Users/wpham/ERPNextProjects/OCRIntegration/." "c:/Users/wpham/erpnext-docker/custom-image/erpocr_integration/"
-  # Build image
-  cd c:/Users/wpham/erpnext-docker/custom-image && docker build -t custom-erpnext:v15 -f Dockerfile.txt .
-  # Restart containers
-  cd c:/Users/wpham/erpnext-docker/frappe_docker && docker compose down && docker compose up -d
-  ```
-
-### Production Deployment
+### Installation
 ```bash
 bench get-app https://github.com/wphamman/erpocr_integration
 bench --site <site> install-app erpocr_integration
@@ -244,6 +225,10 @@ bench restart
 - [x] Migration patch (normalize document_type on in-flight records)
 - [x] Test suite (174 tests — unit tests + integration workflow tests)
 - [x] Image support: JPEG and PNG accepted alongside PDF (upload, email, Drive scan)
+
+### Future — Email Monitor Hardening
+- [ ] Replace X-GM-LABELS label manipulation with standard IMAP COPY + DELETE for moving emails from "OCR Invoices" to "OCR Processed" (more reliable across Gmail Workspace)
+- [ ] Add `\Seen` flag removal guard after Phase 2 read-write operations (prevent accidentally marking emails as read)
 
 ## Configuration
 
