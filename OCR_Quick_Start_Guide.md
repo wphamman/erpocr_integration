@@ -69,7 +69,7 @@ The accounting team then reviews the data, corrects any mistakes, and creates th
 ## Common Questions
 
 **How long does processing take?**
-Usually 5–30 seconds after the system picks up the file. Remember: Drive is checked every 15 minutes, email every hour.
+Usually 5–30 seconds after the system picks up the file. Remember: Drive is checked every 15 minutes, email every hour. If you drop many files at once, some may take longer — the system processes them in batches to avoid overloading the AI service.
 
 **Can I send a statement with multiple invoices on one PDF?**
 Yes. The system detects multiple invoices and creates a separate record for each one. (This only works with PDFs — a photo of a single invoice creates one record.)

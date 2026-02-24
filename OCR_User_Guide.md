@@ -39,6 +39,8 @@ bench restart
 | **Gemini API Key** | Get from https://aistudio.google.com/apikey (starts with `AIza...`) |
 | **Gemini Model** | Select **gemini-2.5-flash** (recommended — fast and accurate) |
 
+> **Free tier warning:** The Gemini free tier allows only 15 requests/minute and 1,500 requests/day. If you plan to process invoices in batch (via Drive scan or email), you will likely hit these limits. To avoid extraction failures, link a billing account to your Google AI project at [Google AI Studio](https://aistudio.google.com/apikey) > Settings. This upgrades to Tier 1 (~1,000 RPM) at minimal cost (~$0.0001 per invoice).
+
 **ERPNext Defaults**
 
 | Field | What to Enter |
@@ -267,6 +269,7 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | Problem | What to Do |
 |---|---|
 | Status stuck on "Pending" for more than 5 minutes | The background job may have failed. Check Error Log, or try uploading again. |
+| Many files failing with "429 Too Many Requests" | You've hit the Gemini API rate limit. The free tier only allows 15 requests/minute and 1,500/day. Link a billing account in Google AI Studio to upgrade to Tier 1 (1,000 RPM). Failed files will auto-retry on the next Drive scan poll (every 15 min). |
 | Supplier not matching | The supplier name on the invoice may differ from ERPNext (e.g. "ABC Pty Ltd" vs "ABC (Pty) Ltd"). Select manually and confirm — next time it will match. |
 | Items not matching | Item descriptions on invoices often differ from ERPNext item names. Confirm once and it learns. |
 | Wrong amounts extracted | Unusual PDF formatting can confuse the AI. Edit the amounts on the OCR Import before creating the document. |
