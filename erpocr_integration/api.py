@@ -125,6 +125,19 @@ def upload_pdf():
 	ocr_import.insert(ignore_permissions=True)
 	frappe.db.commit()
 
+	# Save file as private attachment for retry capability
+	frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": filename,
+			"attached_to_doctype": "OCR Import",
+			"attached_to_name": ocr_import.name,
+			"content": file_content,
+			"is_private": 1,
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.commit()
+
 	# Enqueue background processing
 	try:
 		frappe.enqueue(
@@ -496,15 +509,32 @@ def retry_gemini_extraction(ocr_import: str):
 
 	_enforce_pending_import_limit(frappe.session.user)
 
-	# Download PDF from Drive if available
-	if not ocr_import_doc.drive_file_id:
-		frappe.throw(_("Original file not available. Please re-upload the file."))
+	# Get file content: try Drive first, then local attachment
+	pdf_content = None
 
-	from erpocr_integration.tasks.drive_integration import download_file_from_drive
+	if ocr_import_doc.drive_file_id:
+		from erpocr_integration.tasks.drive_integration import download_file_from_drive
 
-	pdf_content = download_file_from_drive(ocr_import_doc.drive_file_id)
+		pdf_content = download_file_from_drive(ocr_import_doc.drive_file_id)
+
 	if not pdf_content:
-		frappe.throw(_("Failed to download file from Google Drive. Please re-upload the file."))
+		# Try reading from attached file
+		attached = frappe.get_all(
+			"File",
+			filters={
+				"attached_to_doctype": "OCR Import",
+				"attached_to_name": ocr_import_doc.name,
+			},
+			fields=["name", "file_url"],
+			limit=1,
+			order_by="creation desc",
+		)
+		if attached:
+			file_doc = frappe.get_doc("File", attached[0].name)
+			pdf_content = file_doc.get_content()
+
+	if not pdf_content:
+		frappe.throw(_("Original file not available. Please re-upload the file."))
 
 	# Determine MIME type from original filename
 	source_filename = ocr_import_doc.source_filename or ""
@@ -672,8 +702,8 @@ def match_po_items(ocr_import, purchase_order):
 	"""
 	if not frappe.has_permission("OCR Import", "write", ocr_import):
 		frappe.throw(_("You don't have permission to modify this OCR Import."))
-	if not frappe.has_permission("Purchase Order", "read"):
-		frappe.throw(_("You don't have permission to view Purchase Orders."))
+	if not frappe.has_permission("Purchase Order", "read", purchase_order):
+		frappe.throw(_("You don't have permission to view this Purchase Order."))
 
 	ocr_doc = frappe.get_doc("OCR Import", ocr_import)
 	po_doc = frappe.get_doc("Purchase Order", purchase_order)
@@ -756,8 +786,8 @@ def match_pr_items(ocr_import, purchase_receipt):
 	"""
 	if not frappe.has_permission("OCR Import", "write", ocr_import):
 		frappe.throw(_("You don't have permission to modify this OCR Import."))
-	if not frappe.has_permission("Purchase Receipt", "read"):
-		frappe.throw(_("You don't have permission to view Purchase Receipts."))
+	if not frappe.has_permission("Purchase Receipt", "read", purchase_receipt):
+		frappe.throw(_("You don't have permission to view this Purchase Receipt."))
 
 	ocr_doc = frappe.get_doc("OCR Import", ocr_import)
 	pr_doc = frappe.get_doc("Purchase Receipt", purchase_receipt)

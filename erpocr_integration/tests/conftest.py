@@ -115,12 +115,15 @@ def reset_frappe_mock():
 	"""Reset frappe mock state between tests so tests don't leak into each other."""
 	_frappe_mock.db.get_value.reset_mock()
 	_frappe_mock.db.get_value.return_value = None
+	_frappe_mock.db.get_value.side_effect = None
 	_frappe_mock.db.set_value.reset_mock()
 	_frappe_mock.db.exists.reset_mock()
 	_frappe_mock.db.exists.return_value = False
+	_frappe_mock.db.exists.side_effect = None
 	_frappe_mock.db.commit.reset_mock()
 	_frappe_mock.db.sql.reset_mock()
 	_frappe_mock.db.sql.return_value = []
+	_frappe_mock.db.sql.side_effect = None
 	_frappe_mock.get_all.reset_mock()
 	_frappe_mock.get_all.return_value = []
 	_frappe_mock.get_all.side_effect = None
@@ -128,6 +131,7 @@ def reset_frappe_mock():
 	_frappe_mock.get_list.return_value = []
 	_frappe_mock.get_list.side_effect = None
 	_frappe_mock.get_doc.reset_mock()
+	_frappe_mock.get_doc.side_effect = None
 	_frappe_mock.get_cached_doc.reset_mock()
 	_frappe_mock.get_cached_doc.side_effect = None
 	_frappe_mock.log_error.reset_mock()

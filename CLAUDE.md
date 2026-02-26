@@ -80,9 +80,9 @@ def process(raw_payload: str):
 - **Rate limits**: Free tier = 15 RPM / 1,500 RPD (will hit limits with batch uploads). Tier 1 (pay-as-you-go with billing linked) = 1,000 RPM / 10,000+ RPD. Check limits at https://aistudio.google.com/rate-limit
 
 ### Document Creation (PI / PR / JE)
-- `document_type` field on OCR Import: **blank by default** — user must explicitly select before creating
-- Three options: Purchase Invoice, Purchase Receipt, Journal Entry
-- **No auto-creation** — user clicks "Create" button after reviewing all matches
+- **Create dropdown** in top menu: Purchase Invoice, Purchase Receipt, Journal Entry — one click sets `document_type`, saves, and creates the draft
+- `document_type` field still exists on the form for reference, but users interact via the Create menu
+- **No auto-creation** — user clicks a Create menu option after reviewing all matches
 - `flags.ignore_mandatory = True` on all created documents (drafts may have incomplete data)
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
 - `default_item` in OCR Settings: used for unmatched PI items (non-stock item, OCR description set as item description)
@@ -106,6 +106,9 @@ def process(raw_payload: str):
 - **Document type enforcement**: each create method validates `document_type` matches (prevents API bypass)
 - **Cross-document lock**: row-lock checks all three output fields (PI, PR, JE) — only one document per OCR Import
 - **PO/PR linkage validation**: at create time, re-verifies PR belongs to selected PO (server-side, not just UI)
+- **Row-level permissions**: `match_po_items` and `match_pr_items` check per-document read permission (not just doctype-level)
+- **XSS prevention**: all dynamic values in PO/PR/match dialogs escaped via `frappe.utils.escape_html()` and `encodeURIComponent()`
+- **Tax ambiguity threshold**: `_detect_tax_inclusive_rates()` returns False (default exclusive) when inclusive vs exclusive difference is < 5% of tax amount
 - **Account validation (JE)**: credit/expense/tax accounts checked for company, is_group=0, disabled=0
 
 ### Upload Security
@@ -115,10 +118,12 @@ def process(raw_payload: str):
 
 ### Background Processing
 - Upload creates placeholder OCR Import immediately, returns record name
+- Uploaded file saved as private Frappe File attachment (enables retry on failure)
 - Processing runs on `long` queue (5-minute timeout)
 - Real-time progress updates via `frappe.publish_realtime()`
 - `frappe.db.commit()` required in enqueued jobs (with `# nosemgrep` comment)
 - Failures logged to Error Log, status set to "Error"
+- **Retry on error**: "Retry Extraction" button on all Error records — reads from Drive file or local attachment
 
 ### Matching System
 Matching runs in priority order for both suppliers and items:
@@ -130,6 +135,10 @@ Matching runs in priority order for both suppliers and items:
 6. User confirmations saved as aliases for future auto-matching
 
 Service mappings support supplier-specific patterns (higher priority) and generic patterns.
+
+Both pattern storage and runtime matching use `normalize_for_matching()` (strips punctuation, lowercases, collapses whitespace) so patterns match regardless of formatting differences between invoices.
+
+When saving service mappings, `_extract_service_pattern()` strips dates (DD/MM/YYYY, YYYY-MM-DD with plausible day/month bounds), month names, years (1900-2199), and trailing prepositions from OCR descriptions to produce reusable patterns (e.g., "Pro Plan - Jan 2026 to Feb 2026" → "pro plan"). A quality guard rejects patterns that reduce to only stop words (e.g., "for", "of the") and falls back to the full normalized description.
 
 ## Gemini Structured Output Schema
 ```json
@@ -223,7 +232,7 @@ bench restart
 - [x] Hardened server-side guards (document_type enforcement, cross-doc duplicate lock)
 - [x] Stale field clearing (supplier/PO/PR cascade)
 - [x] Migration patch (normalize document_type on in-flight records)
-- [x] Test suite (174 tests — unit tests + integration workflow tests)
+- [x] Test suite (220 tests — unit tests + integration workflow tests)
 - [x] Image support: JPEG and PNG accepted alongside PDF (upload, email, Drive scan)
 
 ### Future — Email Monitor Hardening
@@ -264,14 +273,15 @@ bench restart
 4. Review/confirm supplier and item matches (change status to "Confirmed" to save aliases)
 5. **(Optional)** Link to Purchase Order: click "Find Open POs" → select PO → "Match PO Items" → review → apply
 6. **(Optional)** If PO has existing PR: select it to link the full PO→PR→PI chain
-7. Select Document Type: Purchase Invoice, Purchase Receipt, or Journal Entry
-8. For Journal Entry: set expense accounts on items + credit account
-9. Click the "Create" button → document draft created for final review in ERPNext
+7. Click **Create** dropdown (top right) → select Purchase Invoice, Purchase Receipt, or Journal Entry
+8. For Journal Entry: set expense accounts on items + credit account before clicking Create
+9. Document draft created for final review in ERPNext
+10. If extraction fails: click **Retry Extraction** button to re-process
 
 **Email Upload**:
 1. Forward invoice email to configured email address
 2. Hourly job automatically extracts PDF and image attachments
-3. Follow steps 3-9 above
+3. Follow steps 3-10 above
 
 **Drive Scan (Batch)**:
 1. Drop PDF or image files into the configured Drive scan inbox folder
@@ -279,7 +289,7 @@ bench restart
 3. After extraction, files are moved to the archive folder (Year/Month/Supplier)
 4. Multi-invoice PDFs (statements) are split into separate OCR Import records
 5. Failed extractions are automatically retried on the next poll
-6. Follow steps 3-9 from Manual Upload for each created OCR Import
+6. Follow steps 3-10 from Manual Upload for each created OCR Import
 
 **Supported Workflows**:
 | Scenario | Document Type | PO Link? | PR Link? |

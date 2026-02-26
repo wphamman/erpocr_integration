@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import OCRImport
+from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+	OCRImport,
+	_detect_tax_inclusive_rates,
+	_extract_service_pattern,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -550,3 +554,260 @@ class TestUpdateStatus:
 		doc = _make_ocr_import(status="Error")
 		doc._update_status()
 		assert doc.status == "Error"
+
+
+# ---------------------------------------------------------------------------
+# _detect_tax_inclusive_rates tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectTaxInclusiveRates:
+	"""Tests for the country-agnostic tax inclusion detection heuristic."""
+
+	def test_exclusive_rates_sa_b2b(self):
+		"""SA B2B invoice: items sum matches subtotal (excl VAT)."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[
+				_make_item(qty=2, rate=300.00),
+				_make_item(qty=1, rate=400.00),
+			],
+		)
+		# sum(rate*qty) = 600 + 400 = 1000 = subtotal → exclusive
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_inclusive_rates_consumer_receipt(self):
+		"""Consumer receipt: items sum matches total (incl VAT)."""
+		doc = _make_ocr_import(
+			subtotal=869.57,
+			tax_amount=130.43,
+			total_amount=1000.00,
+			items=[
+				_make_item(qty=1, rate=600.00),
+				_make_item(qty=1, rate=400.00),
+			],
+		)
+		# sum(rate*qty) = 1000 = total → inclusive
+		assert _detect_tax_inclusive_rates(doc) is True
+
+	def test_no_tax_returns_false(self):
+		"""No tax on invoice → not inclusive."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=0,
+			total_amount=1000.00,
+			items=[_make_item(qty=1, rate=1000.00)],
+		)
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_no_subtotal_returns_false(self):
+		"""Missing subtotal → can't compare, default to exclusive."""
+		doc = _make_ocr_import(
+			subtotal=0,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1, rate=1000.00)],
+		)
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_real_data_chemicals_exclusive(self):
+		"""Real data from Docker: chemical supplier, VAT-exclusive rates."""
+		doc = _make_ocr_import(
+			subtotal=66762.50,
+			tax_amount=10014.39,
+			total_amount=76776.89,
+			items=[
+				_make_item(qty=150, rate=15.35),
+				_make_item(qty=250, rate=78.95),
+				_make_item(qty=75, rate=90.30),
+				_make_item(qty=1000, rate=37.95),
+			],
+		)
+		# sum = 2302.5 + 19737.5 + 6772.5 + 37950 = 66762.5 = subtotal
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_real_data_restaurant_exclusive(self):
+		"""Real data from Docker: restaurant receipt, rates matched subtotal."""
+		doc = _make_ocr_import(
+			subtotal=197.00,
+			tax_amount=25.70,
+			total_amount=220.00,
+			items=[
+				_make_item(qty=1, rate=105.00),
+				_make_item(qty=1, rate=60.00),
+				_make_item(qty=1, rate=32.00),
+			],
+		)
+		# sum = 197 = subtotal → exclusive
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_eu_vat_inclusive(self):
+		"""EU-style VAT-inclusive receipt (e.g., 20% VAT)."""
+		doc = _make_ocr_import(
+			subtotal=83.33,
+			tax_amount=16.67,
+			total_amount=100.00,
+			items=[_make_item(qty=1, rate=100.00)],
+		)
+		# sum = 100 = total → inclusive
+		assert _detect_tax_inclusive_rates(doc) is True
+
+	def test_no_items_returns_false(self):
+		"""No line items → can't determine, default to exclusive."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[],
+		)
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_zero_rate_items_returns_false(self):
+		"""Items with zero rates → can't determine."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1, rate=0)],
+		)
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_ambiguous_invoice_defaults_to_exclusive(self):
+		"""When rate*qty sum falls between subtotal and total but close to midpoint,
+		the ambiguity threshold should kick in and default to exclusive (False).
+
+		Example: subtotal=1000, tax=150, total=1150.
+		If rates sum to 1070 → diff_to_subtotal=70, diff_to_total=80.
+		Difference between distances = 10. Threshold = 150 * 0.05 = 7.5.
+		10 > 7.5 so this is NOT ambiguous → should return False (closer to subtotal).
+
+		But if rates sum to 1074 → diff_to_subtotal=74, diff_to_total=76.
+		Difference = 2. 2 < 7.5 so this IS ambiguous → should return False (default).
+		"""
+		# Ambiguous: rates midway between subtotal and total
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1, rate=1074.00)],
+		)
+		# diff_to_subtotal = 74, diff_to_total = 76, |74-76| = 2 < 7.5 → ambiguous
+		assert _detect_tax_inclusive_rates(doc) is False
+
+	def test_clear_inclusive_passes_ambiguity_check(self):
+		"""Clear inclusive case should still return True despite ambiguity check."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1, rate=1150.00)],
+		)
+		# diff_to_subtotal = 150, diff_to_total = 0, |150-0| = 150 >> 7.5
+		assert _detect_tax_inclusive_rates(doc) is True
+
+	def test_clear_exclusive_passes_ambiguity_check(self):
+		"""Clear exclusive case should still return False."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1, rate=1000.00)],
+		)
+		# diff_to_subtotal = 0, diff_to_total = 150, |0-150| = 150 >> 7.5
+		assert _detect_tax_inclusive_rates(doc) is False
+
+
+# ---------------------------------------------------------------------------
+# _extract_service_pattern tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractServicePattern:
+	"""Tests for the service mapping pattern extraction logic."""
+
+	def test_strips_month_name_and_year(self):
+		"""'Monthly Subscription Feb 2026' → strips month + year."""
+		result = _extract_service_pattern("Monthly Software Subscription Feb 2026")
+		assert result == "monthly software subscription"
+
+	def test_strips_full_month_name(self):
+		"""Full month names like 'February' are stripped."""
+		result = _extract_service_pattern("Afrihost VDSL Line Rental - February 2026")
+		assert result == "afrihost vdsl line rental"
+
+	def test_strips_date_format_dd_mm_yyyy(self):
+		"""Date in DD/MM/YYYY format is stripped."""
+		result = _extract_service_pattern("Delivery 15/01/2026")
+		assert result == "delivery"
+
+	def test_strips_date_format_yyyy_mm_dd(self):
+		"""Date in YYYY-MM-DD format is stripped."""
+		result = _extract_service_pattern("Service charge 2026-01-15")
+		assert result == "service charge"
+
+	def test_strips_ordinal_day(self):
+		"""Ordinal day numbers (1st, 2nd, 15th) are stripped."""
+		result = _extract_service_pattern("Service fee - 1st Jan 2025")
+		assert result == "service fee"
+
+	def test_strips_trailing_prepositions(self):
+		"""Trailing prepositions left after stripping are cleaned up."""
+		result = _extract_service_pattern("Subscription for the month of Jan 2026")
+		assert result == "subscription for the month"
+
+	def test_no_dates_unchanged(self):
+		"""Descriptions without dates/months pass through (lowered, punctuation normalized)."""
+		result = _extract_service_pattern("CACTUSCRAFT CC - CHEMICALS")
+		assert result == "cactuscraft cc chemicals"
+
+	def test_preserves_product_description(self):
+		"""Product descriptions without temporal info are preserved (punctuation normalized)."""
+		result = _extract_service_pattern("Sodium Hydroxide 50% Solution 25kg")
+		assert result == "sodium hydroxide 50 solution 25kg"
+
+	def test_multiple_date_parts(self):
+		"""Multiple date components in one description are all stripped."""
+		result = _extract_service_pattern("Invoice period 01/01/2026 to 31/01/2026")
+		assert result == "invoice period"
+
+	def test_fallback_on_short_result(self):
+		"""Falls back to full description if stripping makes it too short."""
+		result = _extract_service_pattern("Feb 2026")
+		assert result == "feb 2026"
+
+	def test_empty_string(self):
+		"""Empty input returns empty string."""
+		result = _extract_service_pattern("")
+		assert result == ""
+
+	def test_whitespace_only(self):
+		"""Whitespace-only input returns empty string."""
+		result = _extract_service_pattern("   ")
+		assert result == ""
+
+	def test_strips_dotted_date(self):
+		"""European date format DD.MM.YYYY is stripped."""
+		result = _extract_service_pattern("Hosting fee 15.01.2026")
+		assert result == "hosting fee"
+
+	def test_mixed_case_months(self):
+		"""Month name matching is case-insensitive."""
+		result = _extract_service_pattern("RENEWAL JANUARY 2025")
+		assert result == "renewal"
+
+	def test_month_with_trailing_comma(self):
+		"""Month names with trailing punctuation are stripped."""
+		result = _extract_service_pattern("Billed December, 2025")
+		assert result == "billed"
+
+	def test_real_description_restaurant(self):
+		"""Real-world restaurant receipt description."""
+		result = _extract_service_pattern("Food and Beverages")
+		assert result == "food and beverages"
+
+	def test_real_description_subscription_with_ref(self):
+		"""Subscription with date range."""
+		result = _extract_service_pattern("Pro Plan - Jan 2026 to Feb 2026")
+		assert result == "pro plan"

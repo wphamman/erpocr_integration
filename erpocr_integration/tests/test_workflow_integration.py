@@ -14,6 +14,7 @@ from erpocr_integration.api import (
 	get_purchase_receipts_for_po,
 	match_po_items,
 	match_pr_items,
+	purchase_receipt_link_query,
 )
 from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import OCRImport
 
@@ -326,3 +327,170 @@ class TestPurchaseReceiptMatching:
 		mock_frappe.has_permission.return_value = False
 		with pytest.raises(Exception):
 			get_purchase_receipts_for_po("PO-00001")
+
+
+# ---------------------------------------------------------------------------
+# Row-level permission enforcement tests
+# ---------------------------------------------------------------------------
+
+
+class TestRowLevelPermissions:
+	"""Verify that match_po_items and match_pr_items enforce per-document
+	permission checks, not just doctype-level checks."""
+
+	def test_match_po_items_row_level_po_denied(self, mock_frappe):
+		"""User has OCR Import write but NOT read on the specific PO."""
+
+		def perm_side_effect(doctype, ptype="read", doc=None):
+			if doctype == "OCR Import":
+				return True
+			if doctype == "Purchase Order" and doc == "PO-RESTRICTED":
+				return False
+			return True
+
+		mock_frappe.has_permission.side_effect = perm_side_effect
+
+		with pytest.raises(Exception):
+			match_po_items("OCR-IMP-00001", "PO-RESTRICTED")
+
+		# Verify has_permission was called with the specific PO name (row-level)
+		po_calls = [c for c in mock_frappe.has_permission.call_args_list if c.args[0] == "Purchase Order"]
+		assert any(c.args[2] == "PO-RESTRICTED" for c in po_calls if len(c.args) > 2)
+		# Should NOT have fetched the document (blocked before get_doc)
+		mock_frappe.get_doc.assert_not_called()
+
+	def test_match_po_items_row_level_ocr_denied(self, mock_frappe):
+		"""User does NOT have write on the specific OCR Import."""
+
+		def perm_side_effect(doctype, ptype="read", doc=None):
+			if doctype == "OCR Import" and doc == "OCR-IMP-SECRET":
+				return False
+			return True
+
+		mock_frappe.has_permission.side_effect = perm_side_effect
+
+		with pytest.raises(Exception):
+			match_po_items("OCR-IMP-SECRET", "PO-00001")
+
+		mock_frappe.get_doc.assert_not_called()
+
+	def test_match_pr_items_row_level_pr_denied(self, mock_frappe):
+		"""User has OCR Import write but NOT read on the specific PR."""
+
+		def perm_side_effect(doctype, ptype="read", doc=None):
+			if doctype == "OCR Import":
+				return True
+			if doctype == "Purchase Receipt" and doc == "PR-RESTRICTED":
+				return False
+			return True
+
+		mock_frappe.has_permission.side_effect = perm_side_effect
+
+		with pytest.raises(Exception):
+			match_pr_items("OCR-IMP-00001", "PR-RESTRICTED")
+
+		# Verify has_permission was called with the specific PR name (row-level)
+		pr_calls = [c for c in mock_frappe.has_permission.call_args_list if c.args[0] == "Purchase Receipt"]
+		assert any(c.args[2] == "PR-RESTRICTED" for c in pr_calls if len(c.args) > 2)
+		mock_frappe.get_doc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# purchase_receipt_link_query permission tests
+# ---------------------------------------------------------------------------
+
+
+class TestPurchaseReceiptLinkQuery:
+	"""Verify that the Link query for purchase_receipt_link enforces
+	doctype-level and row-level permission checks, and scopes to PO."""
+
+	def test_returns_empty_when_no_pr_read_permission(self, mock_frappe):
+		"""User without Purchase Receipt read → empty result."""
+
+		def perm_side_effect(doctype, ptype="read", doc=None):
+			if doctype == "Purchase Receipt":
+				return False
+			return True
+
+		mock_frappe.has_permission.side_effect = perm_side_effect
+
+		result = purchase_receipt_link_query(
+			"Purchase Receipt", "", "name", 0, 20, {"purchase_order": "PO-00001"}
+		)
+		assert result == []
+
+	def test_returns_empty_when_no_po_read_permission(self, mock_frappe):
+		"""User without Purchase Order read → empty result."""
+
+		def perm_side_effect(doctype, ptype="read", doc=None):
+			if doctype == "Purchase Order":
+				return False
+			return True
+
+		mock_frappe.has_permission.side_effect = perm_side_effect
+
+		result = purchase_receipt_link_query(
+			"Purchase Receipt", "", "name", 0, 20, {"purchase_order": "PO-00001"}
+		)
+		assert result == []
+
+	def test_returns_empty_when_no_purchase_order_in_filters(self, mock_frappe):
+		"""No PO in filters → empty result (prevents listing all PRs)."""
+		mock_frappe.has_permission.return_value = True
+
+		result = purchase_receipt_link_query("Purchase Receipt", "", "name", 0, 20, {})
+		assert result == []
+
+	def test_returns_empty_when_filters_is_none(self, mock_frappe):
+		"""Null filters → empty result."""
+		mock_frappe.has_permission.return_value = True
+
+		result = purchase_receipt_link_query("Purchase Receipt", "", "name", 0, 20, None)
+		assert result == []
+
+	def test_returns_empty_when_row_level_po_denied(self, mock_frappe):
+		"""User has PO read generally but NOT on the specific PO → empty."""
+
+		def perm_side_effect(doctype, ptype="read", doc=None):
+			# First two calls: doctype-level checks (pass)
+			# Third call: row-level PO check (fail)
+			if doctype == "Purchase Order" and doc == "PO-RESTRICTED":
+				return False
+			return True
+
+		mock_frappe.has_permission.side_effect = perm_side_effect
+
+		result = purchase_receipt_link_query(
+			"Purchase Receipt", "", "name", 0, 20, {"purchase_order": "PO-RESTRICTED"}
+		)
+		assert result == []
+		# Should NOT have queried DB (blocked before SQL)
+		mock_frappe.db.sql.assert_not_called()
+
+	def test_returns_empty_when_po_not_found(self, mock_frappe):
+		"""PO doesn't exist (get_value returns None) → empty result."""
+		mock_frappe.has_permission.return_value = True
+		mock_frappe.db.get_value.return_value = None
+
+		result = purchase_receipt_link_query(
+			"Purchase Receipt", "", "name", 0, 20, {"purchase_order": "PO-NONEXISTENT"}
+		)
+		assert result == []
+
+	def test_filters_by_row_level_pr_permission(self, mock_frappe):
+		"""SQL returns 2 PRs but user only has read on one → only one returned."""
+		mock_frappe.has_permission.side_effect = lambda dt, ptype="read", doc=None: (
+			False if dt == "Purchase Receipt" and doc == "PR-RESTRICTED" else True
+		)
+		mock_frappe.db.get_value.return_value = "Test Company"
+		mock_frappe.db.sql.return_value = [
+			SimpleNamespace(name="PR-00001", posting_date="2025-01-10", status="Completed"),
+			SimpleNamespace(name="PR-RESTRICTED", posting_date="2025-01-12", status="Completed"),
+		]
+
+		result = purchase_receipt_link_query(
+			"Purchase Receipt", "", "name", 0, 20, {"purchase_order": "PO-00001"}
+		)
+
+		assert len(result) == 1
+		assert result[0][0] == "PR-00001"

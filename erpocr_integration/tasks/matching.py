@@ -1,9 +1,26 @@
 # Copyright (c) 2025, ERPNext OCR Integration Contributors
 # For license information, please see license.txt
 
+import re
 from difflib import SequenceMatcher
 
 import frappe
+
+# Punctuation that should be collapsed to a single space for matching.
+# Keeps letters, digits, and whitespace; strips hyphens, slashes, parens, etc.
+_MATCH_PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
+
+
+def normalize_for_matching(text: str) -> str:
+	"""Normalize text for substring matching.
+
+	Lowercases, strips punctuation (hyphens, slashes, parens, etc.),
+	and collapses whitespace so that 'Pro-Plan' and 'pro plan' both
+	become 'pro plan'.
+	"""
+	text = text.lower().strip()
+	text = _MATCH_PUNCT.sub(" ", text)
+	return re.sub(r"\s+", " ", text).strip()
 
 
 def match_supplier(ocr_text: str) -> tuple[str | None, str]:
@@ -238,7 +255,7 @@ def match_service_item(
 	if not description_ocr:
 		return None
 
-	description_lower = description_ocr.lower().strip()
+	description_norm = normalize_for_matching(description_ocr)
 
 	if not company:
 		company = frappe.defaults.get_user_default("Company")
@@ -254,8 +271,8 @@ def match_service_item(
 		)
 
 		for mapping in supplier_mappings:
-			pattern = mapping.description_pattern.lower()
-			if pattern in description_lower:
+			pattern_norm = normalize_for_matching(mapping.description_pattern)
+			if pattern_norm in description_norm:
 				return {
 					"item_code": mapping.item_code,
 					"item_name": mapping.item_name,
@@ -274,8 +291,8 @@ def match_service_item(
 	)
 
 	for mapping in generic_mappings:
-		pattern = mapping.description_pattern.lower()
-		if pattern in description_lower:
+		pattern_norm = normalize_for_matching(mapping.description_pattern)
+		if pattern_norm in description_norm:
 			return {
 				"item_code": mapping.item_code,
 				"item_name": mapping.item_name,

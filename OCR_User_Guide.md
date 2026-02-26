@@ -105,7 +105,7 @@ When you open an import, you'll see:
 | **Tax Template** | Auto-set based on whether VAT was detected on the invoice |
 | **Confidence** | Colour-coded badge: Green (high) / Orange (medium) / Red (low) |
 | **Items table** | Each line item with description, qty, rate, amount, and match status |
-| **Document Type** | Blank by default — you select this before creating a document |
+| **Document Type** | Set automatically when you use the Create menu (can also be set manually) |
 | **Purchase Order section** | Optional PO/PR linking (see Part 4) |
 | **Result section** | Links to created documents (PI/PR/JE) after creation |
 
@@ -146,25 +146,17 @@ For unmatched or incorrect items:
 
 ## Part 3: Creating Documents
 
-### Step 1 — Select a Document Type
+### Choose a Document Type
 
-The **Document Type** field is blank by default. You must select one before creating a document:
+Use the **Create** dropdown at the top right of the form (next to Save). Choose one of:
 
-| Document Type | When to Use |
+| Option | When to Use |
 |---|---|
 | **Purchase Invoice** | Most invoices — services, subscriptions, stock purchases with or without PO |
-| **Purchase Receipt** | Receiving physical stock items into the warehouse (all items must be stock items) |
+| **Purchase Receipt** | Receiving physical stock items into the warehouse (all items must be stock items, status must be "Matched") |
 | **Journal Entry** | Expense receipts — restaurant bills, toll slips, entertainment, petty cash |
 
-### Step 2 — Create the Document
-
-After selecting a document type and confirming your matches, click the appropriate button under **Actions**:
-
-- **Create Purchase Invoice** — appears when Document Type = "Purchase Invoice"
-- **Create Purchase Receipt** — appears when Document Type = "Purchase Receipt" and status = "Matched"
-- **Create Journal Entry** — appears when Document Type = "Journal Entry"
-
-The system creates a **draft** document. The OCR Import status changes to **Completed** and a link to the created document appears in the Result section.
+One click handles everything: it sets the Document Type, saves the record, and creates the document draft. The OCR Import status changes to **Completed** and a link to the created document appears in the Result section.
 
 ### Step 3 — Review and Submit the Draft
 
@@ -225,7 +217,7 @@ When you then create a Purchase Invoice, the PI items will include both PO refer
 
 Every time you confirm a supplier or item match, the system remembers it:
 
-- **Supplier aliases** — OCR text → ERPNext supplier (e.g. "Star Pops ( Pty ) Ltd" → "Star Pops")
+- **Supplier aliases** — OCR text → ERPNext supplier (e.g. "ABC Trading ( Pty ) Ltd" → "ABC Trading")
 - **Item aliases** — OCR text → ERPNext item
 - **Service mappings** — pattern-based rules for recurring services (can be set up in OCR Service Mapping)
 
@@ -275,6 +267,6 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | Wrong amounts extracted | Unusual PDF formatting can confuse the AI. Edit the amounts on the OCR Import before creating the document. |
 | Low confidence (red badge) | The file might be blurry, image-based, or have unusual formatting. Review all fields carefully. |
 | "Upload File" button not showing | The button only appears on **new** (unsaved) OCR Import records. |
-| "Create" button not showing | Make sure you've selected a **Document Type** first. For Purchase Receipt, status must be "Matched" (all items resolved). |
+| "Create" menu not showing | The record status must be "Needs Review" or "Matched". For Purchase Receipt, status must be "Matched" (all items resolved). If the document was already created, the option won't appear again. |
 | Journal Entry won't create | Check that all items have an Expense Account set and a Credit Account is specified. |
 | Can't find PRs for my PO | Only submitted Purchase Receipts with items linked to the selected PO are shown. |

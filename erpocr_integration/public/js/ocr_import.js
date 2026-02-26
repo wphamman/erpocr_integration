@@ -121,63 +121,24 @@ frappe.ui.form.on('OCR Import', {
 			}, __('Actions'));
 		}
 
-		// Add "Create Purchase Invoice" or "Create Purchase Receipt" button based on document_type
-		// PR requires Matched status (all items must be resolved); PI allows Needs Review for manual override
+		// Create dropdown — one click sets document_type, saves, and creates the document
+		// No need for the user to find/set the Document Type field first
 		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status)) {
-			if (frm.doc.document_type === 'Purchase Receipt' && !frm.doc.purchase_receipt && frm.doc.status === 'Matched') {
-				frm.add_custom_button(__('Create Purchase Receipt'), function() {
-					frappe.call({
-						method: 'create_purchase_receipt',
-						doc: frm.doc,
-						callback: function(r) {
-							if (!r.exc) {
-								frm.reload_doc();
-								frappe.show_alert({
-									message: __('Purchase Receipt draft created.'),
-									indicator: 'green'
-								}, 5);
-							}
-						}
-					});
-				}, __('Actions'));
+			if (!frm.doc.purchase_invoice) {
+				frm.add_custom_button(__('Purchase Invoice'), function() {
+					create_document(frm, 'Purchase Invoice', 'create_purchase_invoice');
+				}, __('Create'));
 			}
-			if (frm.doc.document_type === 'Purchase Invoice' && !frm.doc.purchase_invoice) {
-				frm.add_custom_button(__('Create Purchase Invoice'), function() {
-					frappe.call({
-						method: 'create_purchase_invoice',
-						doc: frm.doc,
-						callback: function(r) {
-							if (!r.exc) {
-								frm.reload_doc();
-								frappe.show_alert({
-									message: __('Purchase Invoice draft created.'),
-									indicator: 'green'
-								}, 5);
-							}
-						}
-					});
-				}, __('Actions'));
+			if (!frm.doc.purchase_receipt && frm.doc.status === 'Matched') {
+				frm.add_custom_button(__('Purchase Receipt'), function() {
+					create_document(frm, 'Purchase Receipt', 'create_purchase_receipt');
+				}, __('Create'));
 			}
-		}
-
-		// Journal Entry button — can create from Needs Review (doesn't need full item matching)
-		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status)
-			&& frm.doc.document_type === 'Journal Entry' && !frm.doc.journal_entry) {
-			frm.add_custom_button(__('Create Journal Entry'), function() {
-				frappe.call({
-					method: 'create_journal_entry',
-					doc: frm.doc,
-					callback: function(r) {
-						if (!r.exc) {
-							frm.reload_doc();
-							frappe.show_alert({
-								message: __('Journal Entry draft created.'),
-								indicator: 'green'
-							}, 5);
-						}
-					}
-				});
-			}, __('Actions'));
+			if (!frm.doc.journal_entry) {
+				frm.add_custom_button(__('Journal Entry'), function() {
+					create_document(frm, 'Journal Entry', 'create_journal_entry');
+				}, __('Create'));
+			}
 		}
 
 		// PO linking buttons (only when supplier is set and not completed)
@@ -221,32 +182,24 @@ frappe.ui.form.on('OCR Import', {
 			}
 		}
 
-		// Add retry/re-upload buttons for failed extractions
+		// Add retry button for failed extractions
 		if (frm.doc.status === 'Error' && ['Gemini Manual Upload', 'Gemini Email', 'Gemini Drive Scan'].includes(frm.doc.source_type)) {
-			if (frm.doc.drive_file_id) {
-				// PDF is in Drive — offer retry
-				frm.add_custom_button(__('Retry Extraction'), function() {
-					frappe.call({
-						method: 'erpocr_integration.api.retry_gemini_extraction',
-						args: {ocr_import: frm.doc.name},
-						callback: function(r) {
-							if (!r.exc) {
-								frm.reload_doc();
-								frappe.show_alert({
-									message: __('Retrying extraction...'),
-									indicator: 'blue'
-								});
-								poll_extraction_status(frm, frm.doc.name);
-							}
+			frm.add_custom_button(__('Retry Extraction'), function() {
+				frappe.call({
+					method: 'erpocr_integration.api.retry_gemini_extraction',
+					args: {ocr_import: frm.doc.name},
+					callback: function(r) {
+						if (!r.exc) {
+							frm.reload_doc();
+							frappe.show_alert({
+								message: __('Retrying extraction...'),
+								indicator: 'blue'
+							});
+							poll_extraction_status(frm, frm.doc.name);
 						}
-					});
-				}, __('Actions'));
-			} else {
-				// No PDF available — offer re-upload
-				frm.add_custom_button(__('Re-upload PDF'), function() {
-					frappe.set_route('Form', 'OCR Import', 'new');
-				}, __('Actions'));
-			}
+					}
+				});
+			}, __('Actions'));
 		}
 
 		// Add "View Original Invoice" button and make Drive link clickable
@@ -425,13 +378,14 @@ function show_po_selection_dialog(frm, purchase_orders) {
 }
 
 function build_po_list_html(purchase_orders) {
+	let esc = frappe.utils.escape_html;
 	let rows = purchase_orders.map(function(po) {
 		return `<tr>
-			<td><a href="/app/purchase-order/${po.name}" target="_blank">${po.name}</a></td>
-			<td>${po.transaction_date}</td>
+			<td><a href="/app/purchase-order/${encodeURIComponent(po.name)}" target="_blank">${esc(po.name)}</a></td>
+			<td>${esc(po.transaction_date)}</td>
 			<td>${format_currency(po.grand_total)}</td>
-			<td>${po.status}</td>
-			<td><button class="btn btn-xs btn-primary select-po-btn" data-po="${po.name}">${__('Select')}</button></td>
+			<td>${esc(po.status)}</td>
+			<td><button class="btn btn-xs btn-primary select-po-btn" data-po="${esc(po.name)}">${__('Select')}</button></td>
 		</tr>`;
 	}).join('');
 
@@ -514,19 +468,20 @@ function show_po_match_dialog(frm, data) {
 }
 
 function build_match_results_html(matches, unmatched_po) {
+	let esc = frappe.utils.escape_html;
 	let rows = matches.map(function(m) {
 		let badge, po_info;
 		if (m.match) {
 			badge = '<span class="indicator-pill green">Matched</span>';
-			po_info = `${m.match.po_item_code} — Qty: ${m.match.po_qty}, Rate: ${format_currency(m.match.po_rate)}`;
+			po_info = `${esc(m.match.po_item_code)} — Qty: ${m.match.po_qty}, Rate: ${format_currency(m.match.po_rate)}`;
 		} else {
 			badge = '<span class="indicator-pill orange">Unmatched</span>';
 			po_info = '—';
 		}
 		return `<tr>
 			<td>${m.idx}</td>
-			<td>${frappe.utils.escape_html(m.description_ocr || '')}</td>
-			<td>${m.item_code || '—'}</td>
+			<td>${esc(m.description_ocr || '')}</td>
+			<td>${esc(m.item_code || '—')}</td>
 			<td>Qty: ${m.qty || 0}, Rate: ${format_currency(m.rate || 0)}</td>
 			<td>${po_info}</td>
 			<td>${badge}</td>
@@ -558,12 +513,13 @@ function build_match_results_html(matches, unmatched_po) {
 }
 
 function build_pr_list_html(purchase_receipts) {
+	let esc = frappe.utils.escape_html;
 	let rows = purchase_receipts.map(function(pr) {
 		return `<tr>
-			<td><a href="/app/purchase-receipt/${pr.name}" target="_blank">${pr.name}</a></td>
-			<td>${pr.posting_date}</td>
-			<td>${pr.status}</td>
-			<td><button class="btn btn-xs btn-default select-pr-btn" data-pr="${pr.name}">${__('Select')}</button></td>
+			<td><a href="/app/purchase-receipt/${encodeURIComponent(pr.name)}" target="_blank">${esc(pr.name)}</a></td>
+			<td>${esc(pr.posting_date)}</td>
+			<td>${esc(pr.status)}</td>
+			<td><button class="btn btn-xs btn-default select-pr-btn" data-pr="${esc(pr.name)}">${__('Select')}</button></td>
 		</tr>`;
 	}).join('');
 
@@ -641,7 +597,7 @@ function poll_extraction_status(frm, ocr_import_name) {
 							});
 						} else if (status === 'Matched') {
 							frappe.show_alert({
-								message: __('Extraction complete! All items matched. Select Document Type to create.'),
+								message: __('Extraction complete! All items matched. Use the Create menu to create a document.'),
 								indicator: 'green'
 							}, 5);
 						} else {
@@ -659,4 +615,24 @@ function poll_extraction_status(frm, ocr_import_name) {
 			}
 		});
 	}, 2000);  // Poll every 2 seconds
+}
+
+function create_document(frm, doc_type, method_name) {
+	// Set document_type, save, then call the create method — all in one click
+	frm.set_value('document_type', doc_type);
+	frm.save().then(() => {
+		frappe.call({
+			method: method_name,
+			doc: frm.doc,
+			callback: function(r) {
+				if (!r.exc) {
+					frm.reload_doc();
+					frappe.show_alert({
+						message: __('{0} draft created.', [doc_type]),
+						indicator: 'green'
+					}, 5);
+				}
+			}
+		});
+	});
 }

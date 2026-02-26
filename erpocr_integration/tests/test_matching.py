@@ -373,3 +373,174 @@ class TestMatchServiceItem:
 		result = match_service_item("DELIVERY FEE", company="Test Company")
 		assert result is not None
 		assert result["item_code"] == "DELIVERY"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end matching shape tests
+# ---------------------------------------------------------------------------
+
+
+class TestMatchingShapeEndToEnd:
+	"""Prove that patterns saved by _extract_service_pattern match future
+	invoice variants via match_service_item — covering punctuation, case,
+	date, and formatting differences across invoices for the same service."""
+
+	def _setup_mappings(self, mock_frappe, generic_mappings=None):
+		"""Configure mock service mappings (generic only)."""
+
+		def get_all_side_effect(doctype, **kwargs):
+			if doctype != "OCR Service Mapping":
+				return []
+			filters = kwargs.get("filters", {})
+			supplier_filter = filters.get("supplier")
+			if isinstance(supplier_filter, str):
+				return []  # No supplier-specific mappings
+			return [SimpleNamespace(**m) for m in (generic_mappings or [])]
+
+		mock_frappe.get_all = MagicMock(side_effect=get_all_side_effect)
+
+	def test_subscription_different_months(self, mock_frappe):
+		"""Pattern from 'Feb 2026' invoice matches 'March 2026' invoice."""
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+			_extract_service_pattern,
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		# Simulate: user confirmed "Monthly Software Subscription Feb 2026"
+		pattern = _extract_service_pattern("Monthly Software Subscription Feb 2026")
+		assert "feb" not in pattern
+		assert "2026" not in pattern
+
+		# Store pattern as a service mapping
+		self._setup_mappings(
+			mock_frappe,
+			generic_mappings=[
+				{
+					"description_pattern": pattern,
+					"item_code": "SUB-001",
+					"item_name": "Software Subscription",
+					"expense_account": "5300 - Subscriptions - TC",
+					"cost_center": "Main - TC",
+				}
+			],
+		)
+
+		# Future invoice with different month/year should match
+		result = match_service_item("Monthly Software Subscription March 2027", company="Test Company")
+		assert result is not None
+		assert result["item_code"] == "SUB-001"
+
+	def test_isp_rental_punctuation_variants(self, mock_frappe):
+		"""Pattern from hyphenated ISP description matches unhyphenated variant."""
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+			_extract_service_pattern,
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		# First invoice: "Afrihost VDSL Line Rental - February 2026"
+		pattern = _extract_service_pattern("Afrihost VDSL Line Rental - February 2026")
+
+		self._setup_mappings(
+			mock_frappe,
+			generic_mappings=[
+				{
+					"description_pattern": pattern,
+					"item_code": "ISP-VDSL",
+					"item_name": "VDSL Line Rental",
+					"expense_account": "5400 - Internet - TC",
+					"cost_center": "",
+				}
+			],
+		)
+
+		# Future invoice: different punctuation + month
+		result = match_service_item("Afrihost VDSL Line Rental March 2026", company="Test Company")
+		assert result is not None
+		assert result["item_code"] == "ISP-VDSL"
+
+		# Future invoice: with slashes instead of hyphens
+		result2 = match_service_item("Afrihost VDSL Line Rental / April 2026", company="Test Company")
+		assert result2 is not None
+		assert result2["item_code"] == "ISP-VDSL"
+
+	def test_delivery_with_date_variants(self, mock_frappe):
+		"""Pattern from 'Delivery 15/01/2026' matches 'Delivery 22/03/2027'."""
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+			_extract_service_pattern,
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		pattern = _extract_service_pattern("Delivery 15/01/2026")
+
+		self._setup_mappings(
+			mock_frappe,
+			generic_mappings=[
+				{
+					"description_pattern": pattern,
+					"item_code": "DELIVERY",
+					"item_name": "Delivery Fee",
+					"expense_account": "5200 - Delivery - TC",
+					"cost_center": "",
+				}
+			],
+		)
+
+		# Different date
+		result = match_service_item("Delivery 22/03/2027", company="Test Company")
+		assert result is not None
+		assert result["item_code"] == "DELIVERY"
+
+		# ISO date format
+		result2 = match_service_item("Delivery 2027-03-22", company="Test Company")
+		assert result2 is not None
+		assert result2["item_code"] == "DELIVERY"
+
+	def test_pro_plan_date_range(self, mock_frappe):
+		"""Pattern from 'Pro Plan - Jan 2026 to Feb 2026' matches different date range."""
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+			_extract_service_pattern,
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		pattern = _extract_service_pattern("Pro Plan - Jan 2026 to Feb 2026")
+
+		self._setup_mappings(
+			mock_frappe,
+			generic_mappings=[
+				{
+					"description_pattern": pattern,
+					"item_code": "PRO-PLAN",
+					"item_name": "Pro Plan",
+					"expense_account": "5300 - Subscriptions - TC",
+					"cost_center": "",
+				}
+			],
+		)
+
+		# Different months — "pro plan" is the core pattern
+		result = match_service_item("Pro-Plan - Mar 2026 to Apr 2026", company="Test Company")
+		assert result is not None
+		assert result["item_code"] == "PRO-PLAN"
+
+	def test_pattern_too_generic_falls_back(self):
+		"""If stripping produces only stopwords, fallback to full description."""
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+			_extract_service_pattern,
+		)
+
+		# "For Jan 2026" → stripped → "for" (single stopword, zero content tokens) → should fall back
+		result = _extract_service_pattern("For Jan 2026")
+		# Should NOT be just "for" — should include more context
+		assert result != "for"
+		# Fallback should be the full normalized description
+		assert "jan" in result or "for" in result
+
+	def test_single_meaningful_word_not_rejected(self):
+		"""A single meaningful word like 'delivery' is a valid pattern."""
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+			_extract_service_pattern,
+		)
+
+		# "Delivery 15/01/2026" → stripped → "delivery" (1 content token, should NOT fallback)
+		result = _extract_service_pattern("Delivery 15/01/2026")
+		assert result == "delivery"

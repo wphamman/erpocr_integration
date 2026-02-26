@@ -1,10 +1,155 @@
 # Copyright (c) 2025, ERPNext OCR Integration Contributors
 # For license information, please see license.txt
 
+import re
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
+
+# Month names used by _extract_service_pattern to strip variable date parts
+_MONTH_NAMES = frozenset(
+	{
+		"january",
+		"february",
+		"march",
+		"april",
+		"may",
+		"june",
+		"july",
+		"august",
+		"september",
+		"october",
+		"november",
+		"december",
+		"jan",
+		"feb",
+		"mar",
+		"apr",
+		"jun",
+		"jul",
+		"aug",
+		"sep",
+		"sept",
+		"oct",
+		"nov",
+		"dec",
+	}
+)
+
+_TRAILING_STOP_WORDS = re.compile(r"\b(?:for|of|on|in|at|to|the|a|an)\s*$")
+_STOP_WORDS = frozenset(
+	{"for", "of", "on", "in", "at", "to", "the", "a", "an", "and", "or", "is", "by", "from", "with"}
+)
+
+
+def _extract_service_pattern(description: str) -> str:
+	"""Extract a reusable matching pattern from an OCR description.
+
+	Strips variable parts (dates, month names, years) that change between
+	invoices so the pattern matches future invoices for the same service.
+
+	Examples:
+	    "Monthly Software Subscription Feb 2026" → "monthly software subscription"
+	    "Afrihost VDSL Line Rental - February 2026" → "afrihost vdsl line rental"
+	    "Delivery 15/01/2026" → "delivery"
+	    "Service fee - 1st Jan 2025" → "service fee"
+
+	Falls back to the full lowered description if stripping produces
+	a pattern shorter than 3 characters.
+	"""
+	text = description.lower().strip()
+	full_text = text  # Keep original for fallback
+
+	# 1. Strip date formats: DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD, DD.MM.YYYY
+	#    Requires at least one 4-digit component (the year) and plausible day/month bounds.
+	#    This avoids stripping invoice-like codes (e.g., INV-12/34-5678).
+	text = re.sub(
+		r"\b(?:"
+		r"(?:0?[1-9]|[12]\d|3[01])[/\-.](?:0?[1-9]|1[0-2])[/\-.](?:19|20|21)\d{2}"  # DD/MM/YYYY
+		r"|(?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])[/\-.](?:19|20|21)\d{2}"  # MM/DD/YYYY
+		r"|(?:19|20|21)\d{2}[/\-.](?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])"  # YYYY-MM-DD
+		r")\b",
+		"",
+		text,
+	)
+
+	# 2. Strip ordinal day numbers (1st, 2nd, 3rd, 15th)
+	text = re.sub(r"\b\d{1,2}(?:st|nd|rd|th)\b", "", text)
+
+	# 3. Strip standalone 4-digit years (1900-2199)
+	text = re.sub(r"\b(?:19|20|21)\d{2}\b", "", text)
+
+	# 4. Strip month names (including with trailing punctuation like commas)
+	words = text.split()
+	words = [w for w in words if w.rstrip(".,;:") not in _MONTH_NAMES]
+	text = " ".join(words)
+
+	# 5. Collapse whitespace and clean up trailing junk
+	#    Run separator + stop-word stripping in a loop since each pass can
+	#    reveal new trailing separators/prepositions (e.g., "plan - to" → "plan -" → "plan")
+	text = re.sub(r"\s+", " ", text).strip()
+	for _pass in range(3):
+		text = re.sub(r"[\s\-/|:;,]+$", "", text).strip()
+		text = _TRAILING_STOP_WORDS.sub("", text).strip()
+
+	# 6. Normalize punctuation (so stored pattern matches regardless of hyphens, slashes, etc.)
+	from erpocr_integration.tasks.matching import normalize_for_matching
+
+	text = normalize_for_matching(text)
+
+	# 7. Fallback: if too short or purely stopwords after stripping, use normalized full description.
+	#    Require at least 1 meaningful (non-stopword) token to avoid patterns like "for" or
+	#    "of the" matching unrelated invoices. Single words like "delivery" are fine.
+	content_tokens = [t for t in text.split() if t not in _STOP_WORDS]
+	if len(text) < 3 or not content_tokens:
+		full_normalized = normalize_for_matching(full_text)
+		full_content = [t for t in full_normalized.split() if t not in _STOP_WORDS]
+		# If even the full text lacks content, return whatever we have
+		if len(full_content) >= 2:
+			return full_normalized
+		return text or full_normalized
+
+	return text
+
+
+def _detect_tax_inclusive_rates(ocr_import) -> bool:
+	"""Detect whether OCR-extracted item rates already include tax.
+
+	Compares sum(rate * qty) against subtotal (excl tax) and total_amount (incl tax)
+	to determine which is closer. This is country-agnostic — works with any tax system
+	(SA VAT, EU VAT, GST, sales tax, etc.) without hardcoding any tax rate.
+
+	An ambiguity threshold prevents misclassification on mixed/discounted invoices:
+	if neither distance is clearly closer (within 5% of the tax amount), we default
+	to exclusive (False) since that's safer — adding tax on top is easier to spot
+	and correct than silently back-calculating an incorrect exclusive rate.
+
+	Returns True if rates appear to include tax, False otherwise.
+	"""
+	tax_amount = flt(ocr_import.tax_amount)
+	subtotal = flt(ocr_import.subtotal)
+	total_amount = flt(ocr_import.total_amount)
+
+	# Only relevant when there's tax and we have both subtotal and total to compare
+	if tax_amount <= 0 or subtotal <= 0 or total_amount <= subtotal:
+		return False
+
+	rate_qty_sum = sum(flt(item.qty or 1) * flt(item.rate or 0) for item in ocr_import.items)
+	if rate_qty_sum <= 0:
+		return False
+
+	diff_to_subtotal = abs(rate_qty_sum - subtotal)
+	diff_to_total = abs(rate_qty_sum - total_amount)
+
+	# Ambiguity guard: if the two distances are within 5% of the tax amount,
+	# the signal is too weak to classify confidently — default to exclusive.
+	ambiguity_threshold = tax_amount * 0.05
+	if abs(diff_to_subtotal - diff_to_total) < ambiguity_threshold:
+		return False
+
+	return diff_to_total < diff_to_subtotal
 
 
 class OCRImport(Document):
@@ -113,9 +258,8 @@ class OCRImport(Document):
 		if not description or not item.item_code or not item.expense_account:
 			return
 
-		# Extract a pattern from the description (first word or first few words)
-		# Convert to lowercase for case-insensitive matching
-		pattern = description.lower()
+		# Extract a reusable pattern (strips dates, months, years)
+		pattern = _extract_service_pattern(description)
 
 		company = self.get("company") or frappe.defaults.get_user_default("Company")
 		supplier = self.supplier  # Link to supplier for supplier-specific mappings
@@ -250,6 +394,7 @@ class OCRImport(Document):
 			"supplier": self.supplier,
 			"company": self.company,
 			"currency": self.currency or frappe.get_cached_value("Company", self.company, "default_currency"),
+			"set_posting_time": 1,
 			"posting_date": self.invoice_date or frappe.utils.today(),
 			"bill_no": self.invoice_number,
 			"bill_date": self.invoice_date,
@@ -271,6 +416,13 @@ class OCRImport(Document):
 						self.tax_template, template.company, self.company
 					)
 				)
+
+			# Detect if OCR-extracted rates already include tax.
+			# Compare sum(rate * qty) to subtotal vs total_amount to determine
+			# whether Gemini extracted VAT-inclusive or VAT-exclusive unit prices.
+			# This is country-agnostic — works with any tax system.
+			rates_include_tax = _detect_tax_inclusive_rates(self)
+
 			pi_dict["taxes_and_charges"] = self.tax_template
 			pi_dict["taxes"] = []
 			for tax_row in template.taxes:
@@ -285,7 +437,7 @@ class OCRImport(Document):
 						"rate": tax_row.rate,
 						"cost_center": tax_row.cost_center,
 						"account_currency": tax_row.account_currency,
-						"included_in_print_rate": tax_row.included_in_print_rate,
+						"included_in_print_rate": 1 if rates_include_tax else tax_row.included_in_print_rate,
 						"included_in_paid_amount": tax_row.included_in_paid_amount,
 					}
 				)
@@ -397,6 +549,7 @@ class OCRImport(Document):
 			"supplier": self.supplier,
 			"company": self.company,
 			"currency": self.currency or frappe.get_cached_value("Company", self.company, "default_currency"),
+			"set_posting_time": 1,
 			"posting_date": self.invoice_date or frappe.utils.today(),
 			"items": pr_items,
 		}
@@ -410,6 +563,9 @@ class OCRImport(Document):
 						self.tax_template, template.company, self.company
 					)
 				)
+
+			rates_include_tax = _detect_tax_inclusive_rates(self)
+
 			pr_dict["taxes_and_charges"] = self.tax_template
 			pr_dict["taxes"] = []
 			for tax_row in template.taxes:
@@ -424,7 +580,7 @@ class OCRImport(Document):
 						"rate": tax_row.rate,
 						"cost_center": tax_row.cost_center,
 						"account_currency": tax_row.account_currency,
-						"included_in_print_rate": tax_row.included_in_print_rate,
+						"included_in_print_rate": 1 if rates_include_tax else tax_row.included_in_print_rate,
 						"included_in_paid_amount": tax_row.included_in_paid_amount,
 					}
 				)
@@ -588,6 +744,7 @@ class OCRImport(Document):
 				"doctype": "Journal Entry",
 				"voucher_type": "Journal Entry",
 				"company": self.company,
+				"set_posting_time": 1,
 				"posting_date": self.invoice_date or frappe.utils.today(),
 				"cheque_no": self.invoice_number,
 				"cheque_date": self.invoice_date,
