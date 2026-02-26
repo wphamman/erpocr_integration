@@ -268,6 +268,8 @@ def gemini_process(
 						"uploaded_by": uploaded_by or frappe.session.user,
 						"company": settings.default_company,
 						"email_message_id": placeholder_doc.email_message_id,
+						"drive_file_id": placeholder_doc.drive_file_id,
+						"drive_retry_count": placeholder_doc.drive_retry_count,
 					}
 				)
 

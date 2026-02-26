@@ -23,6 +23,7 @@ from googleapiclient.http import MediaInMemoryUpload
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
+MAX_DRIVE_RETRIES = 3  # Stop retrying Drive files after this many extraction failures
 
 
 def _mime_type_from_filename(filename: str) -> str:
@@ -360,22 +361,37 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 	filename = file_info["name"]
 	file_mime_type = file_info.get("mimeType", _mime_type_from_filename(filename))
 
+	# Track retry count (0 for first attempt, incremented on each retry)
+	_next_retry_count = 0
+
 	# Dedup: check ALL OCR Import rows for this drive_file_id
 	# (multi-invoice PDFs create multiple rows with the same drive_file_id)
 	existing_rows = frappe.get_all(
 		"OCR Import",
 		filters={"drive_file_id": drive_file_id},
-		fields=["name", "status"],
+		fields=["name", "status", "drive_retry_count"],
 	)
 	if existing_rows:
 		all_error = all(row.status == "Error" for row in existing_rows)
 		if all_error:
-			# All records failed — delete all so the file can be retried from scratch
+			# Check retry cap to prevent infinite Gemini calls on permanently bad files
+			max_retry_count = max(getattr(row, "drive_retry_count", 0) or 0 for row in existing_rows)
+			if max_retry_count >= MAX_DRIVE_RETRIES:
+				frappe.logger().warning(
+					f"Drive scan: {filename} failed {max_retry_count} time(s), giving up "
+					f"(max retries: {MAX_DRIVE_RETRIES})"
+				)
+				return False
+
+			# All records failed and under retry cap — delete so file can be retried
 			for row in existing_rows:
 				frappe.delete_doc("OCR Import", row.name, force=True, ignore_permissions=True)
 			frappe.db.commit()  # nosemgrep
+			_next_retry_count = max_retry_count + 1
 			frappe.logger().info(
-				f"Drive scan: Retrying previously failed {filename} ({len(existing_rows)} record(s) cleared)"
+				f"Drive scan: Retrying previously failed {filename} "
+				f"(attempt {_next_retry_count}/{MAX_DRIVE_RETRIES}, "
+				f"{len(existing_rows)} record(s) cleared)"
 			)
 		else:
 			# At least one record succeeded or is still processing — skip
@@ -415,6 +431,7 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 			"uploaded_by": "Administrator",
 			"company": settings.default_company,
 			"drive_file_id": drive_file_id,
+			"drive_retry_count": _next_retry_count,
 		}
 	)
 	ocr_import.insert(ignore_permissions=True)

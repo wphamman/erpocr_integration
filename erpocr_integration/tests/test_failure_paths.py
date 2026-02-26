@@ -216,6 +216,25 @@ class TestDriveScanDedup:
 		)
 		mock_frappe.enqueue.assert_called_once()
 
+	def test_retry_cap_stops_infinite_retries(self, mock_frappe, sample_settings):
+		"""After MAX_DRIVE_RETRIES failures, stop retrying and don't delete records."""
+		service = MagicMock()
+		file_info = {"id": "drive-retry-cap", "name": "bad-file.pdf"}
+
+		mock_frappe.get_all = MagicMock(
+			return_value=[
+				SimpleNamespace(name="OCR-IMP-CAP1", status="Error", drive_retry_count=3),
+			]
+		)
+
+		result = erpocr_integration.tasks.drive_integration._process_scan_file(
+			service, file_info, sample_settings
+		)
+
+		assert result is False
+		mock_frappe.delete_doc.assert_not_called()
+		mock_frappe.enqueue.assert_not_called()
+
 	def test_new_file_creates_placeholder_and_enqueues(self, mock_frappe, sample_settings):
 		"""Brand new file (no existing records) creates placeholder and enqueues."""
 		service = MagicMock()

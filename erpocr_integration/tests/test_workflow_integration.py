@@ -182,6 +182,84 @@ class TestGuardCrossFlow:
 
 
 # ---------------------------------------------------------------------------
+# Status guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestStatusGuards:
+	"""Server-side status guards prevent document creation from invalid states."""
+
+	@pytest.mark.parametrize("bad_status", ["Pending", "Error", "Completed"])
+	def test_pi_rejects_invalid_status(self, mock_frappe, bad_status):
+		doc = _make_ocr_import(status=bad_status, document_type="Purchase Invoice")
+		with pytest.raises(Exception):
+			doc.create_purchase_invoice()
+
+	def test_pi_allows_matched(self, mock_frappe):
+		doc = _make_ocr_import(status="Matched", document_type="Purchase Invoice", items=[_make_item()])
+		mock_frappe.db.get_value.side_effect = _db_get_value_no_existing
+		mock_frappe.get_cached_doc.return_value = _sample_settings()
+		pi = MagicMock()
+		pi.name = "PI-TEST"
+		mock_frappe.get_doc.return_value = pi
+		mock_frappe.msgprint = MagicMock()
+		doc.create_purchase_invoice()
+		assert doc.purchase_invoice == "PI-TEST"
+
+	def test_pi_allows_needs_review(self, mock_frappe):
+		doc = _make_ocr_import(status="Needs Review", document_type="Purchase Invoice", items=[_make_item()])
+		mock_frappe.db.get_value.side_effect = _db_get_value_no_existing
+		mock_frappe.get_cached_doc.return_value = _sample_settings()
+		pi = MagicMock()
+		pi.name = "PI-TEST"
+		mock_frappe.get_doc.return_value = pi
+		mock_frappe.msgprint = MagicMock()
+		doc.create_purchase_invoice()
+		assert doc.purchase_invoice == "PI-TEST"
+
+	@pytest.mark.parametrize("bad_status", ["Pending", "Needs Review", "Error", "Completed"])
+	def test_pr_rejects_invalid_status(self, mock_frappe, bad_status):
+		doc = _make_ocr_import(status=bad_status, document_type="Purchase Receipt")
+		with pytest.raises(Exception):
+			doc.create_purchase_receipt()
+
+	def test_pr_allows_matched(self, mock_frappe):
+		doc = _make_ocr_import(status="Matched", document_type="Purchase Receipt", items=[_make_item()])
+		mock_frappe.db.get_value.side_effect = _db_get_value_no_existing
+		mock_frappe.get_cached_doc.return_value = _sample_settings()
+		pr = MagicMock()
+		pr.name = "PR-TEST"
+		mock_frappe.get_doc.return_value = pr
+		mock_frappe.msgprint = MagicMock()
+		doc.create_purchase_receipt()
+		assert doc.purchase_receipt == "PR-TEST"
+
+	@pytest.mark.parametrize("bad_status", ["Pending", "Error", "Completed"])
+	def test_je_rejects_invalid_status(self, mock_frappe, bad_status):
+		doc = _make_ocr_import(
+			status=bad_status, document_type="Journal Entry", credit_account="2100 - AP - TC"
+		)
+		with pytest.raises(Exception):
+			doc.create_journal_entry()
+
+	def test_je_allows_needs_review(self, mock_frappe):
+		doc = _make_ocr_import(
+			status="Needs Review",
+			document_type="Journal Entry",
+			credit_account="2100 - AP - TC",
+			items=[_make_item()],
+		)
+		mock_frappe.db.get_value.side_effect = _db_get_value_no_existing
+		mock_frappe.get_cached_doc.return_value = _sample_settings()
+		je = MagicMock()
+		je.name = "JE-TEST"
+		mock_frappe.get_doc.return_value = je
+		mock_frappe.msgprint = MagicMock()
+		doc.create_journal_entry()
+		assert doc.journal_entry == "JE-TEST"
+
+
+# ---------------------------------------------------------------------------
 # PO matching API tests
 # ---------------------------------------------------------------------------
 

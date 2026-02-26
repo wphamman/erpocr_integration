@@ -20,6 +20,7 @@
 		"confidence",
 		"section_break_drive",
 		"drive_file_id",
+		"drive_retry_count",
 		"drive_link",
 		"column_break_drive",
 		"drive_folder_path",
@@ -156,6 +157,15 @@
 			"description": "Google Drive file ID for the original PDF"
 		},
 		{
+			"default": "0",
+			"fieldname": "drive_retry_count",
+			"fieldtype": "Int",
+			"hidden": 1,
+			"label": "Drive Retry Count",
+			"read_only": 1,
+			"description": "Number of extraction attempts for Drive scan files (prevents infinite retries)"
+		},
+		{
 			"fieldname": "drive_link",
 			"fieldtype": "Data",
 			"label": "Drive Link",
@@ -205,11 +215,11 @@
 		},
 		{
 			"default": "Unmatched",
+			"description": "Set to 'Confirmed' to save this supplier mapping as an alias for future auto-matching.",
 			"fieldname": "supplier_match_status",
 			"fieldtype": "Select",
 			"label": "Supplier Match Status",
-			"options": "Auto Matched\nSuggested\nUnmatched\nConfirmed",
-			"read_only": 1
+			"options": "Auto Matched\nSuggested\nUnmatched\nConfirmed"
 		},
 		{
 			"fieldname": "section_break_invoice",
@@ -403,8 +413,10 @@
 			"write": 1
 		}
 	],
+	"show_title_field_in_link": 1,
 	"sort_field": "modified",
 	"sort_order": "DESC",
 	"states": [],
+	"title_field": "supplier_name_ocr",
 	"track_changes": 1
 }

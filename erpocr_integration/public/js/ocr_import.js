@@ -44,6 +44,9 @@ frappe.ui.form.on('OCR Import', {
 	},
 
 	refresh: function(frm) {
+		// Contextual intro message based on status (standard ERPNext pattern)
+		set_status_intro(frm);
+
 		// Add "Upload PDF" button for new records
 		if (frm.is_new()) {
 			frm.add_custom_button(__('Upload File'), function() {
@@ -615,6 +618,38 @@ function poll_extraction_status(frm, ocr_import_name) {
 			}
 		});
 	}, 2000);  // Poll every 2 seconds
+}
+
+function set_status_intro(frm) {
+	frm.set_intro('');
+	if (frm.is_new()) return;
+
+	const doc = frm.doc;
+
+	if (['Pending', 'Extracting', 'Processing'].includes(doc.status)) {
+		frm.set_intro(__('Extracting data from invoice... Please wait.'), 'blue');
+	} else if (doc.status === 'Error') {
+		frm.set_intro(__('Extraction failed. Check the Error Log or click Retry Extraction.'), 'red');
+	} else if (doc.status === 'Needs Review') {
+		frm.set_intro(__('Review the extracted data below. Confirm or correct supplier and item matches, then use the Create menu.'), 'orange');
+	} else if (doc.status === 'Matched') {
+		frm.set_intro(__('All items matched. Use the <b>Create</b> dropdown to create a Purchase Invoice, Purchase Receipt, or Journal Entry.'), 'blue');
+	} else if (doc.status === 'Completed') {
+		// Show link to created document
+		let link = '';
+		if (doc.purchase_invoice) {
+			link = `<a href="/app/purchase-invoice/${encodeURIComponent(doc.purchase_invoice)}">${frappe.utils.escape_html(doc.purchase_invoice)}</a>`;
+			frm.set_intro(__('Purchase Invoice {0} created.', [link]), 'green');
+		} else if (doc.purchase_receipt) {
+			link = `<a href="/app/purchase-receipt/${encodeURIComponent(doc.purchase_receipt)}">${frappe.utils.escape_html(doc.purchase_receipt)}</a>`;
+			frm.set_intro(__('Purchase Receipt {0} created.', [link]), 'green');
+		} else if (doc.journal_entry) {
+			link = `<a href="/app/journal-entry/${encodeURIComponent(doc.journal_entry)}">${frappe.utils.escape_html(doc.journal_entry)}</a>`;
+			frm.set_intro(__('Journal Entry {0} created.', [link]), 'green');
+		} else {
+			frm.set_intro(__('Completed.'), 'green');
+		}
+	}
 }
 
 function create_document(frm, doc_type, method_name) {

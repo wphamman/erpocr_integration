@@ -103,6 +103,7 @@ def process(raw_payload: str):
 - Account validation: all accounts must belong to company, not be group or disabled
 
 ### Server-Side Guards
+- **Status guards**: PI/JE require Matched or Needs Review; PR requires Matched only (matches UI gating, prevents API bypass)
 - **Document type enforcement**: each create method validates `document_type` matches (prevents API bypass)
 - **Cross-document lock**: row-lock checks all three output fields (PI, PR, JE) — only one document per OCR Import
 - **PO/PR linkage validation**: at create time, re-verifies PR belongs to selected PO (server-side, not just UI)
@@ -110,6 +111,7 @@ def process(raw_payload: str):
 - **XSS prevention**: all dynamic values in PO/PR/match dialogs escaped via `frappe.utils.escape_html()` and `encodeURIComponent()`
 - **Tax ambiguity threshold**: `_detect_tax_inclusive_rates()` returns False (default exclusive) when inclusive vs exclusive difference is < 5% of tax amount
 - **Account validation (JE)**: credit/expense/tax accounts checked for company, is_group=0, disabled=0
+- **Drive retry cap**: `MAX_DRIVE_RETRIES=3` prevents infinite Gemini calls on permanently bad Drive files
 
 ### Upload Security
 - Permission check: User must have "create" permission on OCR Import
@@ -232,7 +234,7 @@ bench restart
 - [x] Hardened server-side guards (document_type enforcement, cross-doc duplicate lock)
 - [x] Stale field clearing (supplier/PO/PR cascade)
 - [x] Migration patch (normalize document_type on in-flight records)
-- [x] Test suite (220 tests — unit tests + integration workflow tests)
+- [x] Test suite (235 tests — unit tests + integration workflow tests)
 - [x] Image support: JPEG and PNG accepted alongside PDF (upload, email, Drive scan)
 
 ### Future — Email Monitor Hardening

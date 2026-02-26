@@ -167,8 +167,9 @@ class OCRImport(Document):
 			self.status = "Completed"
 			return
 
-		# Check supplier match
-		supplier_matched = self.supplier and self.supplier_match_status in ("Auto Matched", "Confirmed")
+		# Check supplier match — if user has set the Supplier link, treat as matched
+		# regardless of match_status (user may have selected supplier manually)
+		supplier_matched = bool(self.supplier)
 
 		# Check item matches
 		all_items_matched = True
@@ -306,6 +307,12 @@ class OCRImport(Document):
 		"""Create a Purchase Invoice draft from this OCR Import record."""
 		if not frappe.has_permission("Purchase Invoice", "create"):
 			frappe.throw(_("You don't have permission to create Purchase Invoices."))
+
+		# Status guard — PI requires Matched or Needs Review
+		if self.status not in ("Matched", "Needs Review"):
+			frappe.throw(
+				_("Cannot create Purchase Invoice from a record with status '{0}'.").format(self.status)
+			)
 
 		# Document type enforcement
 		if self.document_type != "Purchase Invoice":
@@ -479,6 +486,12 @@ class OCRImport(Document):
 		if not frappe.has_permission("Purchase Receipt", "create"):
 			frappe.throw(_("You don't have permission to create Purchase Receipts."))
 
+		# Status guard — PR requires Matched (all items must have item_code for stock receipt)
+		if self.status != "Matched":
+			frappe.throw(
+				_("Cannot create Purchase Receipt from a record with status '{0}'.").format(self.status)
+			)
+
 		# Document type enforcement
 		if self.document_type != "Purchase Receipt":
 			frappe.throw(_("Document Type must be 'Purchase Receipt' to create a Purchase Receipt."))
@@ -625,6 +638,12 @@ class OCRImport(Document):
 		"""Create a Journal Entry draft from this OCR Import record."""
 		if not frappe.has_permission("Journal Entry", "create"):
 			frappe.throw(_("You don't have permission to create Journal Entries."))
+
+		# Status guard — JE requires Matched or Needs Review
+		if self.status not in ("Matched", "Needs Review"):
+			frappe.throw(
+				_("Cannot create Journal Entry from a record with status '{0}'.").format(self.status)
+			)
 
 		# Document type enforcement
 		if self.document_type != "Journal Entry":
