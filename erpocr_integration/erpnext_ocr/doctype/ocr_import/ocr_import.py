@@ -455,14 +455,12 @@ class OCRImport(Document):
 		pi.insert()
 
 		# Restore OCR descriptions — ERPNext's set_missing_item_details() overwrites
-		# item_name/description from the Item master during insert. For default_item
-		# (non-stock placeholder), the OCR description is the meaningful identifier.
+		# item_name/description from the Item master during insert(). We use db_set()
+		# to write directly to DB, bypassing save() which would re-trigger the overwrite.
 		for pi_item, ocr_item in zip(pi.items, self.items, strict=False):
 			ocr_desc = ocr_item.description_ocr or ocr_item.item_name
 			if ocr_desc and ocr_desc != pi_item.item_name:
-				pi_item.item_name = ocr_desc
-				pi_item.description = ocr_desc
-		pi.save()
+				pi_item.db_set({"item_name": ocr_desc, "description": ocr_desc})
 
 		# Add comment with original invoice link (if available from Drive)
 		if self.drive_link and self.drive_link.startswith("https://"):
@@ -617,9 +615,7 @@ class OCRImport(Document):
 		for pr_item, ocr_item in zip(pr.items, matched_items, strict=False):
 			ocr_desc = ocr_item.description_ocr or ocr_item.item_name
 			if ocr_desc and ocr_desc != pr_item.item_name:
-				pr_item.item_name = ocr_desc
-				pr_item.description = ocr_desc
-		pr.save()
+				pr_item.db_set({"item_name": ocr_desc, "description": ocr_desc})
 
 		# Add comment with original invoice link (if available from Drive)
 		if self.drive_link and self.drive_link.startswith("https://"):
