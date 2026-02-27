@@ -63,7 +63,20 @@ doctype_js = {"OCR Import": "public/js/ocr_import.js"}
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {}
+doc_events = {
+	"Purchase Invoice": {
+		"on_submit": "erpocr_integration.api.update_ocr_import_on_submit",
+		"on_cancel": "erpocr_integration.api.update_ocr_import_on_cancel",
+	},
+	"Purchase Receipt": {
+		"on_submit": "erpocr_integration.api.update_ocr_import_on_submit",
+		"on_cancel": "erpocr_integration.api.update_ocr_import_on_cancel",
+	},
+	"Journal Entry": {
+		"on_submit": "erpocr_integration.api.update_ocr_import_on_submit",
+		"on_cancel": "erpocr_integration.api.update_ocr_import_on_cancel",
+	},
+}
 
 # Scheduled Tasks
 # ---------------

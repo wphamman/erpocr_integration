@@ -15,6 +15,8 @@ from erpocr_integration.api import (
 	match_po_items,
 	match_pr_items,
 	purchase_receipt_link_query,
+	update_ocr_import_on_cancel,
+	update_ocr_import_on_submit,
 )
 from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import OCRImport
 
@@ -189,7 +191,7 @@ class TestGuardCrossFlow:
 class TestStatusGuards:
 	"""Server-side status guards prevent document creation from invalid states."""
 
-	@pytest.mark.parametrize("bad_status", ["Pending", "Error", "Completed"])
+	@pytest.mark.parametrize("bad_status", ["Pending", "Error", "Completed", "Draft Created"])
 	def test_pi_rejects_invalid_status(self, mock_frappe, bad_status):
 		doc = _make_ocr_import(status=bad_status, document_type="Purchase Invoice")
 		with pytest.raises(Exception):
@@ -205,6 +207,7 @@ class TestStatusGuards:
 		mock_frappe.msgprint = MagicMock()
 		doc.create_purchase_invoice()
 		assert doc.purchase_invoice == "PI-TEST"
+		assert doc.status == "Draft Created"
 
 	def test_pi_allows_needs_review(self, mock_frappe):
 		doc = _make_ocr_import(status="Needs Review", document_type="Purchase Invoice", items=[_make_item()])
@@ -216,8 +219,9 @@ class TestStatusGuards:
 		mock_frappe.msgprint = MagicMock()
 		doc.create_purchase_invoice()
 		assert doc.purchase_invoice == "PI-TEST"
+		assert doc.status == "Draft Created"
 
-	@pytest.mark.parametrize("bad_status", ["Pending", "Needs Review", "Error", "Completed"])
+	@pytest.mark.parametrize("bad_status", ["Pending", "Needs Review", "Error", "Completed", "Draft Created"])
 	def test_pr_rejects_invalid_status(self, mock_frappe, bad_status):
 		doc = _make_ocr_import(status=bad_status, document_type="Purchase Receipt")
 		with pytest.raises(Exception):
@@ -233,8 +237,9 @@ class TestStatusGuards:
 		mock_frappe.msgprint = MagicMock()
 		doc.create_purchase_receipt()
 		assert doc.purchase_receipt == "PR-TEST"
+		assert doc.status == "Draft Created"
 
-	@pytest.mark.parametrize("bad_status", ["Pending", "Error", "Completed"])
+	@pytest.mark.parametrize("bad_status", ["Pending", "Error", "Completed", "Draft Created"])
 	def test_je_rejects_invalid_status(self, mock_frappe, bad_status):
 		doc = _make_ocr_import(
 			status=bad_status, document_type="Journal Entry", credit_account="2100 - AP - TC"
@@ -572,3 +577,185 @@ class TestPurchaseReceiptLinkQuery:
 
 		assert len(result) == 1
 		assert result[0][0] == "PR-00001"
+
+
+# ---------------------------------------------------------------------------
+# Unlink & Reset tests
+# ---------------------------------------------------------------------------
+
+
+class TestUnlinkDocument:
+	"""Tests for the unlink_document() whitelist method."""
+
+	def _setup_unlink_mocks(self, doc, mock_frappe):
+		"""Common mock setup for unlink tests."""
+		mock_frappe.delete_doc = MagicMock()
+		mock_frappe.msgprint = MagicMock()
+		doc.db_set = MagicMock(side_effect=lambda k, v: setattr(doc, k, v))
+		doc.reload = MagicMock()
+		# save() is called after reload to trigger _update_status() recomputation
+		doc.save = MagicMock()
+
+	def test_unlink_pi_deletes_and_saves(self, mock_frappe):
+		doc = _make_ocr_import(
+			status="Draft Created",
+			document_type="Purchase Invoice",
+			purchase_invoice="PI-00001",
+		)
+		mock_frappe.db.get_value.return_value = 0  # docstatus = draft
+		self._setup_unlink_mocks(doc, mock_frappe)
+
+		doc.unlink_document()
+
+		# Link cleared via db_set BEFORE delete_doc
+		mock_frappe.delete_doc.assert_called_once_with("Purchase Invoice", "PI-00001", force=True)
+		doc.reload.assert_called_once()
+		# save() triggers before_save → _update_status() to recompute correct status
+		doc.save.assert_called_once()
+
+	def test_unlink_pr_deletes_and_saves(self, mock_frappe):
+		doc = _make_ocr_import(
+			status="Draft Created",
+			document_type="Purchase Receipt",
+			purchase_receipt="PR-00001",
+		)
+		mock_frappe.db.get_value.return_value = 0
+		self._setup_unlink_mocks(doc, mock_frappe)
+
+		doc.unlink_document()
+
+		mock_frappe.delete_doc.assert_called_once_with("Purchase Receipt", "PR-00001", force=True)
+		doc.save.assert_called_once()
+
+	def test_unlink_je_deletes_and_saves(self, mock_frappe):
+		doc = _make_ocr_import(
+			status="Draft Created",
+			document_type="Journal Entry",
+			journal_entry="JE-00001",
+		)
+		mock_frappe.db.get_value.return_value = 0
+		self._setup_unlink_mocks(doc, mock_frappe)
+
+		doc.unlink_document()
+
+		mock_frappe.delete_doc.assert_called_once_with("Journal Entry", "JE-00001", force=True)
+		doc.save.assert_called_once()
+
+	def test_unlink_cancelled_document(self, mock_frappe):
+		"""Cancelled docs (docstatus=2) should be unlinked and deleted."""
+		doc = _make_ocr_import(
+			status="Draft Created",
+			document_type="Purchase Invoice",
+			purchase_invoice="PI-CANC",
+		)
+		mock_frappe.db.get_value.return_value = 2  # docstatus = cancelled
+		self._setup_unlink_mocks(doc, mock_frappe)
+
+		doc.unlink_document()
+
+		mock_frappe.delete_doc.assert_called_once_with("Purchase Invoice", "PI-CANC", force=True)
+
+	def test_rejects_non_draft_created_status(self, mock_frappe):
+		doc = _make_ocr_import(status="Matched", purchase_invoice="PI-00001")
+		with pytest.raises(Exception):
+			doc.unlink_document()
+
+	def test_rejects_submitted_document(self, mock_frappe):
+		doc = _make_ocr_import(
+			status="Draft Created",
+			document_type="Purchase Invoice",
+			purchase_invoice="PI-00001",
+		)
+		mock_frappe.db.get_value.return_value = 1  # docstatus = submitted
+		doc.db_set = MagicMock(side_effect=lambda k, v: setattr(doc, k, v))
+
+		with pytest.raises(Exception):
+			doc.unlink_document()
+
+	def test_handles_already_deleted_document(self, mock_frappe):
+		"""If the draft was already deleted externally, just clear the link."""
+		doc = _make_ocr_import(
+			status="Draft Created",
+			document_type="Purchase Invoice",
+			purchase_invoice="PI-GONE",
+		)
+		mock_frappe.db.get_value.return_value = None  # doc doesn't exist
+		self._setup_unlink_mocks(doc, mock_frappe)
+
+		doc.unlink_document()
+
+		mock_frappe.delete_doc.assert_not_called()
+		doc.reload.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Doc events (on_submit / on_cancel) tests
+# ---------------------------------------------------------------------------
+
+
+class TestDocEventHooks:
+	"""Tests for update_ocr_import_on_submit and update_ocr_import_on_cancel."""
+
+	def test_submit_pi_marks_completed(self, mock_frappe):
+		pi_doc = SimpleNamespace(doctype="Purchase Invoice", name="PI-00001")
+		mock_frappe.get_all.return_value = ["OCR-IMP-00001"]
+
+		update_ocr_import_on_submit(pi_doc, "on_submit")
+
+		mock_frappe.get_all.assert_called_once_with(
+			"OCR Import",
+			filters={"purchase_invoice": "PI-00001", "status": "Draft Created"},
+			pluck="name",
+		)
+		mock_frappe.db.set_value.assert_called_once_with("OCR Import", "OCR-IMP-00001", "status", "Completed")
+
+	def test_submit_pr_marks_completed(self, mock_frappe):
+		pr_doc = SimpleNamespace(doctype="Purchase Receipt", name="PR-00001")
+		mock_frappe.get_all.return_value = ["OCR-IMP-00002"]
+
+		update_ocr_import_on_submit(pr_doc, "on_submit")
+
+		mock_frappe.get_all.assert_called_once_with(
+			"OCR Import",
+			filters={"purchase_receipt": "PR-00001", "status": "Draft Created"},
+			pluck="name",
+		)
+		mock_frappe.db.set_value.assert_called_once_with("OCR Import", "OCR-IMP-00002", "status", "Completed")
+
+	def test_cancel_pi_clears_link_and_recomputes_status(self, mock_frappe):
+		pi_doc = SimpleNamespace(doctype="Purchase Invoice", name="PI-00001")
+		mock_frappe.get_all.return_value = ["OCR-IMP-00001"]
+
+		# Mock get_doc to return a doc-like object that tracks set() and save()
+		ocr_mock = MagicMock()
+		mock_frappe.get_doc.return_value = ocr_mock
+
+		update_ocr_import_on_cancel(pi_doc, "on_cancel")
+
+		mock_frappe.get_all.assert_called_once_with(
+			"OCR Import",
+			filters={"purchase_invoice": "PI-00001", "status": "Completed"},
+			pluck="name",
+		)
+		mock_frappe.get_doc.assert_called_once_with("OCR Import", "OCR-IMP-00001")
+		# Link field and document_type cleared, status set to Pending for recomputation
+		ocr_mock.set.assert_any_call("purchase_invoice", "")
+		assert ocr_mock.document_type == ""
+		assert ocr_mock.status == "Pending"
+		# save() triggers _update_status() to compute correct status
+		ocr_mock.save.assert_called_once_with(ignore_permissions=True)
+
+	def test_no_linked_ocr_import_is_noop(self, mock_frappe):
+		pi_doc = SimpleNamespace(doctype="Purchase Invoice", name="PI-ORPHAN")
+		mock_frappe.get_all.return_value = []
+
+		update_ocr_import_on_submit(pi_doc, "on_submit")
+
+		mock_frappe.db.set_value.assert_not_called()
+
+	def test_unknown_doctype_is_noop(self, mock_frappe):
+		doc = SimpleNamespace(doctype="Sales Invoice", name="SI-001")
+
+		update_ocr_import_on_submit(doc, "on_submit")
+
+		mock_frappe.get_all.assert_not_called()

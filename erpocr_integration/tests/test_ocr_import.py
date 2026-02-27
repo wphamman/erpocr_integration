@@ -205,7 +205,7 @@ class TestCreateJournalEntry:
 
 		assert result == "JE-00001"
 		assert doc.journal_entry == "JE-00001"
-		assert doc.status == "Completed"
+		assert doc.status == "Draft Created"
 		doc.save.assert_called_once()
 
 	def test_je_get_doc_called_with_correct_structure(self, mock_frappe, sample_settings):
@@ -521,29 +521,34 @@ class TestCreatePurchaseReceiptWithPORefs:
 
 
 class TestUpdateStatus:
-	def test_status_completed_when_journal_entry_set(self, mock_frappe):
+	def test_status_draft_created_when_journal_entry_set(self, mock_frappe):
 		doc = _make_ocr_import(
 			status="Needs Review",
 			journal_entry="JE-00001",
 		)
 		doc._update_status()
-		assert doc.status == "Completed"
+		assert doc.status == "Draft Created"
 
-	def test_status_completed_when_pi_set(self, mock_frappe):
+	def test_status_draft_created_when_pi_set(self, mock_frappe):
 		doc = _make_ocr_import(
 			status="Needs Review",
 			purchase_invoice="PI-00001",
 		)
 		doc._update_status()
-		assert doc.status == "Completed"
+		assert doc.status == "Draft Created"
 
-	def test_status_completed_when_pr_set(self, mock_frappe):
+	def test_status_draft_created_when_pr_set(self, mock_frappe):
 		doc = _make_ocr_import(
 			status="Needs Review",
 			purchase_receipt="PR-00001",
 		)
 		doc._update_status()
-		assert doc.status == "Completed"
+		assert doc.status == "Draft Created"
+
+	def test_status_not_changed_when_already_draft_created(self, mock_frappe):
+		doc = _make_ocr_import(status="Draft Created")
+		doc._update_status()
+		assert doc.status == "Draft Created"
 
 	def test_status_not_changed_when_already_completed(self, mock_frappe):
 		doc = _make_ocr_import(status="Completed")

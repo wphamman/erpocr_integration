@@ -32,6 +32,7 @@ class TestUploadPdfEnqueueFailure:
 		mock_frappe.request.files = {"file": mock_file}
 		mock_frappe.has_permission = MagicMock(return_value=True)
 		mock_frappe.session.user = "test@example.com"
+		mock_frappe.db.count.return_value = 0  # no pending imports
 		mock_frappe.get_single = MagicMock(return_value=sample_settings)
 
 		placeholder = MagicMock()

@@ -4,8 +4,6 @@
 import frappe
 from frappe import _
 
-MAX_PENDING_IMPORTS_PER_USER = 5
-
 # Supported file types for upload (extension → MIME type for Gemini API)
 SUPPORTED_FILE_TYPES = {
 	".pdf": "application/pdf",
@@ -34,23 +32,6 @@ def validate_file_magic_bytes(content: bytes, mime_type: str) -> bool:
 	return content[:length] == magic
 
 
-def _enforce_pending_import_limit(user: str | None):
-	"""Reject if user already has too many in-flight OCR imports in the queue."""
-	if not user or user == "Guest":
-		return
-	pending_count = frappe.db.count(
-		"OCR Import",
-		filters={"uploaded_by": user, "status": ["in", ["Pending", "Needs Review"]]},
-	)
-	if int(pending_count or 0) >= MAX_PENDING_IMPORTS_PER_USER:
-		frappe.throw(
-			_(
-				"You already have {0} pending OCR imports. "
-				"Please wait for some to finish before uploading more."
-			).format(MAX_PENDING_IMPORTS_PER_USER)
-		)
-
-
 @frappe.whitelist(methods=["POST"])
 def upload_pdf():
 	"""
@@ -68,7 +49,18 @@ def upload_pdf():
 	if not frappe.has_permission("OCR Import", "create"):
 		frappe.throw(_("You do not have permission to upload invoices"))
 
-	_enforce_pending_import_limit(frappe.session.user)
+	# Per-user pending limit — prevents a single user from flooding the queue
+	MAX_PENDING_PER_USER = 20
+	user_pending = frappe.db.count(
+		"OCR Import",
+		filters={"status": "Pending", "uploaded_by": frappe.session.user},
+	)
+	if user_pending >= MAX_PENDING_PER_USER:
+		frappe.throw(
+			_(
+				"You have {0} imports still processing. Please wait for them to complete before uploading more."
+			).format(user_pending)
+		)
 
 	# Get uploaded file
 	if not frappe.request or not frappe.request.files:
@@ -138,18 +130,30 @@ def upload_pdf():
 	).insert(ignore_permissions=True)
 	frappe.db.commit()
 
+	# Stagger Gemini API calls to avoid rate-limit stampede when uploading
+	# multiple files simultaneously. Each queued job waits its turn.
+	pending_count = frappe.db.count(
+		"OCR Import",
+		filters={"status": "Pending", "name": ["!=", ocr_import.name]},
+	)
+	queue_position = int(pending_count or 0)
+	# Cap stagger delay so job doesn't time out before extraction starts
+	stagger_delay = min(queue_position * 5, 240)
+	job_timeout = 300 + stagger_delay
+
 	# Enqueue background processing
 	try:
 		frappe.enqueue(
 			"erpocr_integration.api.gemini_process",
 			queue="long",
-			timeout=300,  # 5 minutes
+			timeout=job_timeout,
 			pdf_content=file_content,
 			filename=filename,
 			ocr_import_name=ocr_import.name,
 			source_type="Gemini Manual Upload",
 			uploaded_by=frappe.session.user,
 			mime_type=mime_type,
+			queue_position=queue_position,
 		)
 	except Exception:
 		# Enqueue failed — mark placeholder as Error so it doesn't sit as stale Pending
@@ -171,6 +175,7 @@ def gemini_process(
 	source_type: str = "Gemini Manual Upload",
 	uploaded_by: str | None = None,
 	mime_type: str = "application/pdf",
+	queue_position: int = 0,
 ):
 	"""
 	Background job to process PDF/image via Gemini API and create OCR Import(s).
@@ -192,6 +197,24 @@ def gemini_process(
 	frappe.set_user(uploaded_by or "Administrator")
 
 	try:
+		# Stagger Gemini API calls to avoid rate-limit stampede on batch uploads.
+		# Each job waits 5s per position in queue (e.g., 3rd upload waits 15s),
+		# capped at 240s to leave headroom within the worker timeout.
+		if queue_position > 0:
+			import time
+
+			wait_seconds = min(queue_position * 5, 240)
+			frappe.publish_realtime(
+				event="ocr_extraction_progress",
+				message={
+					"ocr_import": ocr_import_name,
+					"status": "Pending",
+					"message": f"Queued (position {queue_position + 1}). Starting in ~{wait_seconds}s...",
+				},
+				user=uploaded_by,
+			)
+			time.sleep(wait_seconds)
+
 		# Update status to "Extracting"
 		frappe.db.set_value("OCR Import", ocr_import_name, "status", "Pending")
 		frappe.db.commit()
@@ -501,6 +524,19 @@ def retry_gemini_extraction(ocr_import: str):
 	if not frappe.has_permission("OCR Import", "write", ocr_import):
 		frappe.throw(_("You do not have permission to retry this extraction"))
 
+	# Per-user pending limit — same guard as upload_pdf()
+	MAX_PENDING_PER_USER = 20
+	user_pending = frappe.db.count(
+		"OCR Import",
+		filters={"status": "Pending", "uploaded_by": frappe.session.user},
+	)
+	if user_pending >= MAX_PENDING_PER_USER:
+		frappe.throw(
+			_(
+				"You have {0} imports still processing. Please wait for them to complete before retrying."
+			).format(user_pending)
+		)
+
 	ocr_import_doc = frappe.get_doc("OCR Import", ocr_import)
 
 	if ocr_import_doc.status != "Error":
@@ -508,8 +544,6 @@ def retry_gemini_extraction(ocr_import: str):
 
 	if ocr_import_doc.source_type not in ("Gemini Manual Upload", "Gemini Email", "Gemini Drive Scan"):
 		frappe.throw(_("Can only retry Gemini extractions"))
-
-	_enforce_pending_import_limit(frappe.session.user)
 
 	# Get file content: try Drive first, then local attachment
 	pdf_content = None
@@ -547,7 +581,7 @@ def retry_gemini_extraction(ocr_import: str):
 	ocr_import_doc.db_set("status", "Pending")
 	frappe.db.commit()
 
-	# Re-enqueue extraction
+	# Re-enqueue extraction (single file — no stagger needed)
 	try:
 		frappe.enqueue(
 			"erpocr_integration.api.gemini_process",
@@ -559,6 +593,7 @@ def retry_gemini_extraction(ocr_import: str):
 			source_type=ocr_import_doc.source_type,
 			uploaded_by=frappe.session.user,
 			mime_type=file_mime_type,
+			queue_position=0,
 		)
 	except Exception:
 		# Enqueue failed — revert to Error so it doesn't sit as stale Pending
@@ -571,6 +606,58 @@ def retry_gemini_extraction(ocr_import: str):
 		frappe.throw(_("Failed to start retry. Please try again."))
 
 	return {"message": _("Retry queued. The extraction will run in the background.")}
+
+
+def update_ocr_import_on_submit(doc, method):
+	"""Hook: when a PI/PR/JE is submitted, mark the linked OCR Import as Completed."""
+	field_map = {
+		"Purchase Invoice": "purchase_invoice",
+		"Purchase Receipt": "purchase_receipt",
+		"Journal Entry": "journal_entry",
+	}
+	field = field_map.get(doc.doctype)
+	if not field:
+		return
+
+	ocr_imports = frappe.get_all(
+		"OCR Import",
+		filters={field: doc.name, "status": "Draft Created"},
+		pluck="name",
+	)
+	for name in ocr_imports:
+		frappe.db.set_value("OCR Import", name, "status", "Completed")
+
+
+def update_ocr_import_on_cancel(doc, method):
+	"""Hook: when a PI/PR/JE is cancelled, clear the link and recompute OCR Import status.
+
+	Clearing the link (not just reverting status) avoids a dead-end where the OCR Import
+	is stuck in 'Draft Created' pointing to a cancelled document that can't be unlinked
+	or recreated from.
+
+	Status is recomputed via _update_status() (triggered by save) so it returns to the
+	correct state (Matched or Needs Review) based on actual supplier/item match state.
+	"""
+	field_map = {
+		"Purchase Invoice": "purchase_invoice",
+		"Purchase Receipt": "purchase_receipt",
+		"Journal Entry": "journal_entry",
+	}
+	field = field_map.get(doc.doctype)
+	if not field:
+		return
+
+	ocr_imports = frappe.get_all(
+		"OCR Import",
+		filters={field: doc.name, "status": "Completed"},
+		pluck="name",
+	)
+	for name in ocr_imports:
+		ocr_doc = frappe.get_doc("OCR Import", name)
+		ocr_doc.set(field, "")
+		ocr_doc.document_type = ""
+		ocr_doc.status = "Pending"  # neutral — _update_status() will recompute on save
+		ocr_doc.save(ignore_permissions=True)
 
 
 @frappe.whitelist()

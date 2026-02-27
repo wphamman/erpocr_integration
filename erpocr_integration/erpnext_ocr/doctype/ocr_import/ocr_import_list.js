@@ -8,11 +8,12 @@ frappe.listview_settings['OCR Import'] = {
 	get_indicator: function(doc) {
 		// Return [label, color, field] — standard ERPNext status indicator pattern
 		const status_map = {
-			'Pending':      [__('Pending'), 'orange', 'status'],
-			'Needs Review': [__('Needs Review'), 'orange', 'status'],
-			'Matched':      [__('Matched'), 'blue', 'status'],
-			'Completed':    [__('Completed'), 'green', 'status'],
-			'Error':        [__('Error'), 'red', 'status']
+			'Pending':       [__('Pending'), 'orange', 'status'],
+			'Needs Review':  [__('Needs Review'), 'orange', 'status'],
+			'Matched':       [__('Matched'), 'blue', 'status'],
+			'Draft Created': [__('Draft Created'), 'purple', 'status'],
+			'Completed':     [__('Completed'), 'green', 'status'],
+			'Error':         [__('Error'), 'red', 'status']
 		};
 		return status_map[doc.status] || [__(doc.status), 'grey', 'status'];
 	},

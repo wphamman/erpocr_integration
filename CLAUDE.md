@@ -57,7 +57,11 @@ User Review:   Review matches → Select Document Type → (optional) Link PO/PR
 | **OCR Service Mapping** | Regular | Pattern → item + GL account + cost center (supplier-specific or generic) |
 
 ### OCR Import Status Workflow
-Pending → Needs Review → Matched → Completed / Error
+Pending → Needs Review → Matched → Draft Created → Completed / Error
+
+- **Draft Created**: set when a PI/PR/JE draft is created; user can still Unlink & Reset back to Matched
+- **Completed**: set automatically when the linked PI/PR/JE is submitted (via doc_events hook)
+- **on_cancel**: if the submitted document is cancelled, OCR Import reverts to Matched (link cleared, ready for re-creation)
 
 ## Critical Implementation Patterns
 
@@ -81,8 +85,13 @@ def process(raw_payload: str):
 
 ### Document Creation (PI / PR / JE)
 - **Create dropdown** in top menu: Purchase Invoice, Purchase Receipt, Journal Entry — one click sets `document_type`, saves, and creates the draft
-- `document_type` field still exists on the form for reference, but users interact via the Create menu
+- `document_type` field is hidden from the form — users interact only via the Create menu
 - **No auto-creation** — user clicks a Create menu option after reviewing all matches
+- After creation, status becomes **Draft Created** (not Completed) — user can Unlink & Reset if needed
+- **Unlink & Reset**: deletes the draft document and resets OCR Import to Matched for re-creation
+  - Clears link via `db_set()` BEFORE calling `frappe.delete_doc()` (Frappe blocks deletion of documents with incoming Link references)
+  - Works on drafts (docstatus=0) and cancelled documents (docstatus=2); blocks on submitted (docstatus=1)
+- **doc_events hooks** (hooks.py): `on_submit` → marks OCR Import as Completed; `on_cancel` → clears link + resets to Matched
 - `flags.ignore_mandatory = True` on all created documents (drafts may have incomplete data)
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
 - `default_item` in OCR Settings: used for unmatched PI items (non-stock item, OCR description set as item description)
@@ -103,7 +112,7 @@ def process(raw_payload: str):
 - Account validation: all accounts must belong to company, not be group or disabled
 
 ### Server-Side Guards
-- **Status guards**: PI/JE require Matched or Needs Review; PR requires Matched only (matches UI gating, prevents API bypass)
+- **Status guards**: PI/JE require Matched or Needs Review; PR requires Matched only; Draft Created blocks all creation (matches UI gating, prevents API bypass)
 - **Document type enforcement**: each create method validates `document_type` matches (prevents API bypass)
 - **Cross-document lock**: row-lock checks all three output fields (PI, PR, JE) — only one document per OCR Import
 - **PO/PR linkage validation**: at create time, re-verifies PR belongs to selected PO (server-side, not just UI)
@@ -121,7 +130,8 @@ def process(raw_payload: str):
 ### Background Processing
 - Upload creates placeholder OCR Import immediately, returns record name
 - Uploaded file saved as private Frappe File attachment (enables retry on failure)
-- Processing runs on `long` queue (5-minute timeout)
+- Processing runs on `long` queue with dynamic timeout (base 300s + stagger delay)
+- **Rate-limit stagger**: all ingestion paths (manual upload, email, Drive scan) pass `queue_position` to `gemini_process()`, which sleeps `position * 5s` (capped at 240s) before hitting Gemini API
 - Real-time progress updates via `frappe.publish_realtime()`
 - `frappe.db.commit()` required in enqueued jobs (with `# nosemgrep` comment)
 - Failures logged to Error Log, status set to "Error"
@@ -234,7 +244,7 @@ bench restart
 - [x] Hardened server-side guards (document_type enforcement, cross-doc duplicate lock)
 - [x] Stale field clearing (supplier/PO/PR cascade)
 - [x] Migration patch (normalize document_type on in-flight records)
-- [x] Test suite (235 tests — unit tests + integration workflow tests)
+- [x] Test suite (251 tests — unit tests + integration workflow tests)
 - [x] Image support: JPEG and PNG accepted alongside PDF (upload, email, Drive scan)
 
 ### Future — Email Monitor Hardening
@@ -277,8 +287,10 @@ bench restart
 6. **(Optional)** If PO has existing PR: select it to link the full PO→PR→PI chain
 7. Click **Create** dropdown (top right) → select Purchase Invoice, Purchase Receipt, or Journal Entry
 8. For Journal Entry: set expense accounts on items + credit account before clicking Create
-9. Document draft created for final review in ERPNext
-10. If extraction fails: click **Retry Extraction** button to re-process
+9. Document draft created for final review in ERPNext (OCR Import status → "Draft Created")
+10. Submit the draft in ERPNext → OCR Import status automatically moves to "Completed"
+11. If you need to change document type: click **Unlink & Reset** (Actions menu) to delete the draft and try again
+12. If extraction fails: click **Retry Extraction** button to re-process
 
 **Email Upload**:
 1. Forward invoice email to configured email address

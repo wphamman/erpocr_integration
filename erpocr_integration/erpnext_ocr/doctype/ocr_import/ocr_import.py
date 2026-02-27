@@ -158,13 +158,13 @@ class OCRImport(Document):
 
 	def _update_status(self):
 		"""Auto-update status based on match states."""
-		# Don't change status if already completed or in error
-		if self.status in ("Completed", "Error"):
+		# Don't change status if already completed, draft created, or in error
+		if self.status in ("Completed", "Draft Created", "Error"):
 			return
 
-		# If PI, PR, or JE already created, mark completed
+		# If PI, PR, or JE already created, mark as Draft Created
 		if self.purchase_invoice or self.purchase_receipt or self.journal_entry:
-			self.status = "Completed"
+			self.status = "Draft Created"
 			return
 
 		# Check supplier match — if user has set the Supplier link, treat as matched
@@ -476,7 +476,7 @@ class OCRImport(Document):
 
 		# Link PI back to this import
 		self.purchase_invoice = pi.name
-		self.status = "Completed"
+		self.status = "Draft Created"
 		self.save()
 
 		frappe.msgprint(
@@ -631,7 +631,7 @@ class OCRImport(Document):
 
 		# Link PR back to this import
 		self.purchase_receipt = pr.name
-		self.status = "Completed"
+		self.status = "Draft Created"
 		self.save()
 
 		msg = _("Purchase Receipt {0} created as draft.").format(
@@ -803,7 +803,7 @@ class OCRImport(Document):
 
 		# Link JE back to this import
 		self.journal_entry = je.name
-		self.status = "Completed"
+		self.status = "Draft Created"
 		self.save()
 
 		frappe.msgprint(
@@ -814,6 +814,79 @@ class OCRImport(Document):
 		)
 
 		return je.name
+
+	@frappe.whitelist()
+	def unlink_document(self):
+		"""Unlink and delete the draft PI/PR/JE, resetting this OCR Import for re-use.
+
+		Only works when status is 'Draft Created' and the linked document is still a draft
+		(or cancelled — e.g. after the user cancelled the submitted document).
+		"""
+		if self.status != "Draft Created":
+			frappe.throw(_("Can only unlink documents when status is 'Draft Created'."))
+
+		# Find which document is linked
+		linked_doctype = None
+		linked_name = None
+		link_field = None
+
+		if self.purchase_invoice:
+			linked_doctype = "Purchase Invoice"
+			linked_name = self.purchase_invoice
+			link_field = "purchase_invoice"
+		elif self.purchase_receipt:
+			linked_doctype = "Purchase Receipt"
+			linked_name = self.purchase_receipt
+			link_field = "purchase_receipt"
+		elif self.journal_entry:
+			linked_doctype = "Journal Entry"
+			linked_name = self.journal_entry
+			link_field = "journal_entry"
+
+		if not linked_name:
+			frappe.throw(_("No linked document found to unlink."))
+
+		# Check linked document state
+		docstatus = frappe.db.get_value(linked_doctype, linked_name, "docstatus")
+		is_submitted = docstatus == 1
+		if is_submitted:
+			frappe.throw(
+				_("{0} {1} is submitted. Amend or cancel it first.").format(linked_doctype, linked_name)
+			)
+
+		# Clear the link on this OCR Import FIRST via db_set — this removes
+		# the incoming Link reference so frappe.delete_doc won't be blocked.
+		# Set status to Pending (neutral) so _update_status() will recompute
+		# the correct status based on actual match state on save().
+		self.db_set(link_field, "")
+		self.db_set("document_type", "")
+		self.db_set("status", "Pending")
+
+		# Now delete the linked document (draft or cancelled)
+		deleted = False
+		if docstatus is not None:
+			# docstatus 0 (draft) or 2 (cancelled) — safe to delete
+			frappe.delete_doc(linked_doctype, linked_name, force=True)
+			deleted = True
+
+		# Reload and save — save triggers before_save → _update_status()
+		# which recomputes the correct status (Matched or Needs Review)
+		# based on actual supplier/item match state.
+		self.reload()
+		self.save()
+
+		if deleted:
+			frappe.msgprint(
+				_("{0} {1} deleted. You can now create a different document.").format(
+					linked_doctype, linked_name
+				),
+				indicator="blue",
+			)
+		else:
+			frappe.msgprint(
+				_("Link cleared. {0} {1} was already deleted.").format(linked_doctype, linked_name),
+				indicator="blue",
+			)
 
 	def _validate_account(self, account, label):
 		"""Validate that an account belongs to this company, is not a group, and is not disabled."""

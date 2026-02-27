@@ -331,7 +331,7 @@ def poll_drive_scan_folder():
 	enqueued_count = 0
 	for file_info in files:
 		try:
-			was_enqueued = _process_scan_file(service, file_info, settings)
+			was_enqueued = _process_scan_file(service, file_info, settings, queue_position=enqueued_count)
 			if was_enqueued:
 				enqueued_count += 1
 				# Stagger requests: wait 5s between enqueues so background workers
@@ -347,7 +347,7 @@ def poll_drive_scan_folder():
 		frappe.logger().info(f"Drive scan: Enqueued {enqueued_count} file(s) for processing")
 
 
-def _process_scan_file(service, file_info: dict, settings) -> bool:
+def _process_scan_file(service, file_info: dict, settings, queue_position: int = 0) -> bool:
 	"""
 	Process a single file (PDF or image) from the Drive scan folder.
 
@@ -439,16 +439,18 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 
 	# Enqueue Gemini extraction
 	try:
+		stagger_delay = min(queue_position * 5, 240)
 		frappe.enqueue(
 			"erpocr_integration.api.gemini_process",
 			queue="long",
-			timeout=300,
+			timeout=300 + stagger_delay,
 			pdf_content=pdf_content,
 			filename=filename,
 			ocr_import_name=ocr_import.name,
 			source_type="Gemini Drive Scan",
 			uploaded_by="Administrator",
 			mime_type=file_mime_type,
+			queue_position=queue_position,
 		)
 		frappe.logger().info(f"Drive scan: Queued {filename} for processing")
 		return True

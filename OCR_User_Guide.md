@@ -156,14 +156,25 @@ Use the **Create** dropdown at the top right of the form (next to Save). Choose 
 | **Purchase Receipt** | Receiving physical stock items into the warehouse (all items must be stock items, status must be "Matched") |
 | **Journal Entry** | Expense receipts — restaurant bills, toll slips, entertainment, petty cash |
 
-One click handles everything: it sets the Document Type, saves the record, and creates the document draft. The OCR Import status changes to **Completed** and a link to the created document appears in the Result section.
+One click handles everything: it sets the Document Type, saves the record, and creates the document draft. The OCR Import status changes to **Draft Created** and a link to the created document appears in the Result section.
 
-### Step 3 — Review and Submit the Draft
+### Reviewing and Submitting the Draft
 
 Open the created document (click the link in the Result section) and:
 1. Verify all details are correct
 2. Make any needed adjustments
-3. Submit the document when ready
+3. Submit the document when ready — the OCR Import status will automatically change to **Completed**
+
+### Changing Your Mind (Unlink & Reset)
+
+If you created the wrong document type (e.g. you created a Purchase Invoice but wanted a Purchase Receipt):
+
+1. Go back to the OCR Import record
+2. Click **Actions > Unlink & Reset**
+3. Confirm — the draft document is deleted and the OCR Import resets to **Matched**
+4. Now you can select a different document type and create again
+
+This also works if a submitted document was cancelled — the OCR Import automatically resets to Matched and you can create a new document from it.
 
 ### Journal Entry — Additional Steps
 
@@ -232,8 +243,9 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | **Pending** | Just uploaded, waiting to be processed | Wait — processing starts automatically |
 | **Needs Review** | Data extracted, supplier or items need checking | Review and confirm matches, then create document |
 | **Matched** | All suppliers and items auto-matched | Select document type and create the document |
-| **Completed** | Document (PI/PR/JE) created | All done — review and submit the draft |
-| **Error** | Something went wrong during extraction | Check details, try re-uploading, or ask admin |
+| **Draft Created** | Document draft created, not yet submitted | Review and submit the draft in ERPNext |
+| **Completed** | Draft has been submitted | All done |
+| **Error** | Something went wrong during extraction | Check details, click Retry Extraction, or re-upload |
 
 ---
 
@@ -244,9 +256,9 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | Upload a new invoice | OCR Import > New > Actions > Upload File |
 | See all imports | OCR Import list (filter by status) |
 | Review pending imports | OCR Import list > filter: Status = Needs Review |
-| Created Purchase Invoices | Click the **Purchase Invoice** link on any Completed OCR Import |
-| Created Purchase Receipts | Click the **Purchase Receipt** link on any Completed OCR Import |
-| Created Journal Entries | Click the **Journal Entry** link on any Completed OCR Import |
+| Created Purchase Invoices | Click the **Purchase Invoice** link on any Draft Created or Completed OCR Import |
+| Created Purchase Receipts | Click the **Purchase Receipt** link on any Draft Created or Completed OCR Import |
+| Created Journal Entries | Click the **Journal Entry** link on any Draft Created or Completed OCR Import |
 | Supplier aliases | OCR Supplier Alias list |
 | Item aliases | OCR Item Alias list |
 | Service mappings | OCR Service Mapping list |
@@ -267,6 +279,6 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | Wrong amounts extracted | Unusual PDF formatting can confuse the AI. Edit the amounts on the OCR Import before creating the document. |
 | Low confidence (red badge) | The file might be blurry, image-based, or have unusual formatting. Review all fields carefully. |
 | "Upload File" button not showing | The button only appears on **new** (unsaved) OCR Import records. |
-| "Create" menu not showing | The record status must be "Needs Review" or "Matched". For Purchase Receipt, status must be "Matched" (all items resolved). If the document was already created, the option won't appear again. |
+| "Create" menu not showing | The record status must be "Needs Review" or "Matched". For Purchase Receipt, status must be "Matched" (all items resolved). If a draft was already created (status "Draft Created"), use "Unlink & Reset" first. |
 | Journal Entry won't create | Check that all items have an Expense Account set and a Credit Account is specified. |
 | Can't find PRs for my PO | Only submitted Purchase Receipts with items linked to the selected PO are shown. |

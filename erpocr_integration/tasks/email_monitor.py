@@ -325,17 +325,21 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 				ocr_import.insert(ignore_permissions=True)
 				frappe.db.commit()  # nosemgrep
 
-				# Enqueue Gemini processing
+				# Enqueue Gemini processing with stagger to avoid rate-limit stampede.
+				# pdfs_to_process was already incremented, so subtract 1 for 0-based position.
+				queue_pos = pdfs_to_process - 1
+				stagger_delay = min(queue_pos * 5, 240)
 				frappe.enqueue(
 					"erpocr_integration.api.gemini_process",
 					queue="long",
-					timeout=300,
+					timeout=300 + stagger_delay,
 					pdf_content=pdf_content,
 					filename=filename,
 					ocr_import_name=ocr_import.name,
 					source_type="Gemini Email",
 					uploaded_by=uploaded_by,
 					mime_type=file_mime_type,
+					queue_position=queue_pos,
 				)
 
 				frappe.logger().info(

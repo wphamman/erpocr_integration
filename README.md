@@ -131,9 +131,11 @@ If your current alias setup cannot enforce sender restrictions cleanly, route `i
 2. Click **Actions > Upload File** (accepts PDF, JPEG, PNG — max 10 MB)
 3. Wait 5-30 seconds for Gemini extraction
 4. Review and confirm supplier and item matches
-5. Select a **Document Type** (Purchase Invoice, Purchase Receipt, or Journal Entry)
-6. Optionally link to a Purchase Order (and Purchase Receipt)
-7. Click the **Create** button — draft document is created for final review
+5. Optionally link to a Purchase Order (and Purchase Receipt)
+6. Click the **Create** dropdown → select Purchase Invoice, Purchase Receipt, or Journal Entry
+7. Draft document is created (OCR Import status → "Draft Created")
+8. Review and submit the draft in ERPNext → OCR Import moves to "Completed"
+9. Need to change? Click **Actions > Unlink & Reset** to delete the draft and try again
 
 ### Email
 1. Forward invoice emails to the configured address
@@ -159,16 +161,22 @@ If your current alias setup cannot enforce sender restrictions cleanly, route `i
 ## Status Workflow
 
 ```
-Pending → Needs Review → Matched → Completed
-                ↓
-              Error
+Pending → Needs Review → Matched → Draft Created → Completed
+                ↓                        ↑
+              Error            (Unlink & Reset)
 ```
 
 - **Pending** — File uploaded, waiting for extraction
 - **Needs Review** — Extracted, but supplier or items need review
 - **Matched** — All suppliers and items matched; ready for document creation
-- **Completed** — Document (PI/PR/JE) created
+- **Draft Created** — Document draft (PI/PR/JE) created but not yet submitted
+- **Completed** — Draft document has been submitted in ERPNext
 - **Error** — Extraction or processing failed (check Error Log)
+
+From **Draft Created**, you can:
+- **Submit** the draft in ERPNext → OCR Import automatically moves to Completed
+- **Unlink & Reset** (Actions menu) → deletes the draft and resets to Matched for re-creation
+- If you **cancel** a submitted document → OCR Import resets to Matched automatically
 
 ## Architecture
 

@@ -144,8 +144,29 @@ frappe.ui.form.on('OCR Import', {
 			}
 		}
 
-		// PO linking buttons (only when supplier is set and not completed)
-		if (!frm.is_new() && frm.doc.supplier && !['Completed', 'Error', 'Pending'].includes(frm.doc.status)) {
+		// Unlink & Reset button — allows user to delete the draft and try a different document type
+		if (!frm.is_new() && frm.doc.status === 'Draft Created') {
+			frm.add_custom_button(__('Unlink & Reset'), function() {
+				let linked = frm.doc.purchase_invoice || frm.doc.purchase_receipt || frm.doc.journal_entry;
+				frappe.confirm(
+					__('This will delete the draft document ({0}) and reset this record for re-use. Continue?', [linked]),
+					function() {
+						frappe.call({
+							method: 'unlink_document',
+							doc: frm.doc,
+							callback: function(r) {
+								if (!r.exc) {
+									frm.reload_doc();
+								}
+							}
+						});
+					}
+				);
+			}, __('Actions'));
+		}
+
+		// PO linking buttons (only when supplier is set and in a reviewable state)
+		if (!frm.is_new() && frm.doc.supplier && !['Completed', 'Draft Created', 'Error', 'Pending'].includes(frm.doc.status)) {
 			// "Find Open POs" button
 			if (!frm.doc.purchase_order) {
 				frm.add_custom_button(__('Find Open POs'), function() {
@@ -634,18 +655,33 @@ function set_status_intro(frm) {
 		frm.set_intro(__('Review the extracted data below. Confirm or correct supplier and item matches, then use the Create menu.'), 'orange');
 	} else if (doc.status === 'Matched') {
 		frm.set_intro(__('All items matched. Use the <b>Create</b> dropdown to create a Purchase Invoice, Purchase Receipt, or Journal Entry.'), 'blue');
-	} else if (doc.status === 'Completed') {
-		// Show link to created document
+	} else if (doc.status === 'Draft Created') {
+		// Show link to created draft + hint about Unlink
 		let link = '';
 		if (doc.purchase_invoice) {
 			link = `<a href="/app/purchase-invoice/${encodeURIComponent(doc.purchase_invoice)}">${frappe.utils.escape_html(doc.purchase_invoice)}</a>`;
-			frm.set_intro(__('Purchase Invoice {0} created.', [link]), 'green');
+			frm.set_intro(__('Draft Purchase Invoice {0} created. Submit it to complete, or use Actions > Unlink & Reset to start over.', [link]), 'blue');
 		} else if (doc.purchase_receipt) {
 			link = `<a href="/app/purchase-receipt/${encodeURIComponent(doc.purchase_receipt)}">${frappe.utils.escape_html(doc.purchase_receipt)}</a>`;
-			frm.set_intro(__('Purchase Receipt {0} created.', [link]), 'green');
+			frm.set_intro(__('Draft Purchase Receipt {0} created. Submit it to complete, or use Actions > Unlink & Reset to start over.', [link]), 'blue');
 		} else if (doc.journal_entry) {
 			link = `<a href="/app/journal-entry/${encodeURIComponent(doc.journal_entry)}">${frappe.utils.escape_html(doc.journal_entry)}</a>`;
-			frm.set_intro(__('Journal Entry {0} created.', [link]), 'green');
+			frm.set_intro(__('Draft Journal Entry {0} created. Submit it to complete, or use Actions > Unlink & Reset to start over.', [link]), 'blue');
+		} else {
+			frm.set_intro(__('Draft created.'), 'blue');
+		}
+	} else if (doc.status === 'Completed') {
+		// Show link to submitted document
+		let link = '';
+		if (doc.purchase_invoice) {
+			link = `<a href="/app/purchase-invoice/${encodeURIComponent(doc.purchase_invoice)}">${frappe.utils.escape_html(doc.purchase_invoice)}</a>`;
+			frm.set_intro(__('Purchase Invoice {0} submitted.', [link]), 'green');
+		} else if (doc.purchase_receipt) {
+			link = `<a href="/app/purchase-receipt/${encodeURIComponent(doc.purchase_receipt)}">${frappe.utils.escape_html(doc.purchase_receipt)}</a>`;
+			frm.set_intro(__('Purchase Receipt {0} submitted.', [link]), 'green');
+		} else if (doc.journal_entry) {
+			link = `<a href="/app/journal-entry/${encodeURIComponent(doc.journal_entry)}">${frappe.utils.escape_html(doc.journal_entry)}</a>`;
+			frm.set_intro(__('Journal Entry {0} submitted.', [link]), 'green');
 		} else {
 			frm.set_intro(__('Completed.'), 'green');
 		}
@@ -653,9 +689,10 @@ function set_status_intro(frm) {
 }
 
 function create_document(frm, doc_type, method_name) {
-	// Set document_type, save, then call the create method — all in one click
-	frm.set_value('document_type', doc_type);
-	frm.save().then(() => {
+	// Set document_type, save, then call the create method — all in one click.
+	// If document_type is already correct and form is clean, skip save to avoid
+	// "No changes in document" blocking the create call.
+	function call_create() {
 		frappe.call({
 			method: method_name,
 			doc: frm.doc,
@@ -669,5 +706,14 @@ function create_document(frm, doc_type, method_name) {
 				}
 			}
 		});
-	});
+	}
+
+	if (frm.doc.document_type === doc_type && !frm.is_dirty()) {
+		call_create();
+	} else {
+		frm.set_value('document_type', doc_type);
+		frm.save().then(() => {
+			call_create();
+		});
+	}
 }
