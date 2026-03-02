@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from erpocr_integration.api import _populate_ocr_import
+from erpocr_integration.api import _populate_ocr_import, check_duplicates
 
 # ---------------------------------------------------------------------------
 # _populate_ocr_import
@@ -160,3 +160,116 @@ class TestPopulateOcrImport:
 
 		assert doc.items[0].item_name == "WA-01"  # product_code takes priority
 		assert doc.items[1].item_name == "Service Fee"  # Falls back to description
+
+
+# ---------------------------------------------------------------------------
+# check_duplicates
+# ---------------------------------------------------------------------------
+
+
+class TestCheckDuplicates:
+	def _make_doc(self, **kwargs):
+		"""Return a SimpleNamespace mimicking a cached OCR Import doc."""
+		defaults = {
+			"invoice_number": "INV-001",
+			"supplier_name_ocr": "Acme Corp",
+			"source_filename": "invoice.pdf",
+		}
+		defaults.update(kwargs)
+		return SimpleNamespace(**defaults)
+
+	def test_finds_duplicate_by_invoice_number(self, mock_frappe):
+		doc = self._make_doc()
+		mock_frappe.get_cached_doc.return_value = doc
+
+		dup_record = {
+			"name": "OCR-IMP-00002",
+			"status": "Needs Review",
+			"creation": "2026-03-01",
+			"source_type": "Gemini Email",
+			"invoice_number": "INV-001",
+		}
+		# First call = invoice_number match, second call = filename match
+		mock_frappe.get_list.side_effect = [[dup_record], []]
+
+		result = check_duplicates("OCR-IMP-00001")
+
+		assert len(result) == 1
+		assert result[0]["name"] == "OCR-IMP-00002"
+		assert result[0]["match_reason"] == "Same invoice number"
+
+	def test_finds_duplicate_by_filename(self, mock_frappe):
+		doc = self._make_doc(invoice_number="")  # No invoice number
+		mock_frappe.get_cached_doc.return_value = doc
+
+		dup_record = {
+			"name": "OCR-IMP-00003",
+			"status": "Matched",
+			"creation": "2026-03-01",
+			"source_type": "Gemini Manual Upload",
+			"invoice_number": "INV-002",
+		}
+		# First call skipped (no invoice_number), second call = filename match
+		mock_frappe.get_list.return_value = [dup_record]
+
+		result = check_duplicates("OCR-IMP-00001")
+
+		assert len(result) == 1
+		assert result[0]["match_reason"] == "Same filename"
+
+	def test_deduplicates_across_both_checks(self, mock_frappe):
+		"""If the same record matches both invoice_number and filename, it appears once."""
+		doc = self._make_doc()
+		mock_frappe.get_cached_doc.return_value = doc
+
+		dup = {
+			"name": "OCR-IMP-00002",
+			"status": "Needs Review",
+			"creation": "2026-03-01",
+			"source_type": "Gemini Email",
+			"invoice_number": "INV-001",
+		}
+		# Same record returned by both queries
+		mock_frappe.get_list.side_effect = [[dup], [dup]]
+
+		result = check_duplicates("OCR-IMP-00001")
+
+		assert len(result) == 1
+		# First match wins — should be "Same invoice number"
+		assert result[0]["match_reason"] == "Same invoice number"
+
+	def test_no_duplicates_found(self, mock_frappe):
+		doc = self._make_doc()
+		mock_frappe.get_cached_doc.return_value = doc
+		mock_frappe.get_list.return_value = []
+
+		result = check_duplicates("OCR-IMP-00001")
+
+		assert result == []
+
+	def test_skips_invoice_check_when_empty(self, mock_frappe):
+		"""Should not query by invoice_number when it's empty."""
+		doc = self._make_doc(invoice_number="", supplier_name_ocr="")
+		mock_frappe.get_cached_doc.return_value = doc
+		mock_frappe.get_list.return_value = []
+
+		check_duplicates("OCR-IMP-00001")
+
+		# Only the filename query should have been made (not the invoice one)
+		assert mock_frappe.get_list.call_count == 1
+
+	def test_skips_filename_check_when_empty(self, mock_frappe):
+		doc = self._make_doc(source_filename="")
+		mock_frappe.get_cached_doc.return_value = doc
+		mock_frappe.get_list.return_value = []
+
+		check_duplicates("OCR-IMP-00001")
+
+		# Only the invoice_number query should have been made
+		assert mock_frappe.get_list.call_count == 1
+
+	def test_permission_denied(self, mock_frappe):
+		mock_frappe.has_permission.return_value = False
+
+		with pytest.raises(Exception):
+			check_duplicates("OCR-IMP-00001")

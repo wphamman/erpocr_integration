@@ -47,6 +47,9 @@ frappe.ui.form.on('OCR Import', {
 		// Contextual intro message based on status (standard ERPNext pattern)
 		set_status_intro(frm);
 
+		// Check for potential duplicates (skip for new, Pending, Error records)
+		check_and_show_duplicates(frm);
+
 		// Add "Upload PDF" button for new records
 		if (frm.is_new()) {
 			frm.add_custom_button(__('Upload File'), function() {
@@ -708,12 +711,63 @@ function create_document(frm, doc_type, method_name) {
 		});
 	}
 
-	if (frm.doc.document_type === doc_type && !frm.is_dirty()) {
-		call_create();
-	} else {
-		frm.set_value('document_type', doc_type);
-		frm.save().then(() => {
+	function do_create() {
+		if (frm.doc.document_type === doc_type && !frm.is_dirty()) {
 			call_create();
-		});
+		} else {
+			frm.set_value('document_type', doc_type);
+			frm.save().then(() => {
+				call_create();
+			});
+		}
 	}
+
+	// Check for duplicates before creating — warn user if potential dupes exist
+	frappe.call({
+		method: 'erpocr_integration.api.check_duplicates',
+		args: { ocr_import: frm.doc.name },
+		callback: function(r) {
+			if (r.message && r.message.length) {
+				let esc = frappe.utils.escape_html;
+				let lines = r.message.map(function(d) {
+					let link = `/app/ocr-import/${encodeURIComponent(d.name)}`;
+					return `<li><a href="${link}" target="_blank">${esc(d.name)}</a> — ${esc(d.status)} (${esc(d.match_reason)})</li>`;
+				}).join('');
+				frappe.confirm(
+					__('Potential duplicates found:') + `<ul>${lines}</ul>` +
+					__('Do you still want to create a {0}?', [doc_type]),
+					function() { do_create(); }
+				);
+			} else {
+				do_create();
+			}
+		}
+	});
+}
+
+function check_and_show_duplicates(frm) {
+	if (frm.is_new()) return;
+	if (['Pending', 'Extracting', 'Processing', 'Error'].includes(frm.doc.status)) return;
+
+	frappe.call({
+		method: 'erpocr_integration.api.check_duplicates',
+		args: { ocr_import: frm.doc.name },
+		async: true,
+		callback: function(r) {
+			// Remove any previous duplicate banner
+			frm.$wrapper.find('.ocr-duplicate-warning').remove();
+
+			if (r.message && r.message.length) {
+				let esc = frappe.utils.escape_html;
+				let lines = r.message.map(function(d) {
+					let link = `/app/ocr-import/${encodeURIComponent(d.name)}`;
+					return `<a href="${link}">${esc(d.name)}</a> (${esc(d.status)} — ${esc(d.match_reason)})`;
+				}).join(', ');
+				let html = `<div class="ocr-duplicate-warning form-message orange">
+					<div>${__('Possible duplicate')}:  ${lines}</div>
+				</div>`;
+				frm.$wrapper.find('.form-message').first().after(html);
+			}
+		}
+	});
 }

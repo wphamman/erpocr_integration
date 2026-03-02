@@ -661,6 +661,62 @@ def update_ocr_import_on_cancel(doc, method):
 
 
 @frappe.whitelist()
+def check_duplicates(ocr_import):
+	"""Return potential duplicate OCR Imports for the given record.
+
+	Matches on:
+	  1. Same invoice_number + supplier_name_ocr (both non-empty)
+	  2. Same source_filename (non-empty)
+
+	Excludes the record itself and any records with status "Error".
+	"""
+	if not frappe.has_permission("OCR Import", "read", ocr_import):
+		frappe.throw(_("You don't have permission to view this record."))
+
+	doc = frappe.get_cached_doc("OCR Import", ocr_import)
+	duplicates = {}  # name → record dict (dedup across both checks)
+
+	# Check 1: same invoice_number + supplier_name_ocr
+	inv_num = (doc.invoice_number or "").strip()
+	supplier_ocr = (doc.supplier_name_ocr or "").strip()
+	if inv_num and supplier_ocr:
+		for row in frappe.get_list(
+			"OCR Import",
+			filters={
+				"name": ["!=", ocr_import],
+				"status": ["!=", "Error"],
+				"invoice_number": inv_num,
+				"supplier_name_ocr": supplier_ocr,
+			},
+			fields=["name", "status", "creation", "source_type", "invoice_number"],
+			limit_page_length=10,
+			order_by="creation desc",
+		):
+			row["match_reason"] = "Same invoice number"
+			duplicates[row["name"]] = row
+
+	# Check 2: same source_filename
+	filename = (doc.source_filename or "").strip()
+	if filename:
+		for row in frappe.get_list(
+			"OCR Import",
+			filters={
+				"name": ["!=", ocr_import],
+				"status": ["!=", "Error"],
+				"source_filename": filename,
+			},
+			fields=["name", "status", "creation", "source_type", "invoice_number"],
+			limit_page_length=10,
+			order_by="creation desc",
+		):
+			if row["name"] not in duplicates:
+				row["match_reason"] = "Same filename"
+				duplicates[row["name"]] = row
+
+	return list(duplicates.values())
+
+
+@frappe.whitelist()
 def get_open_purchase_orders(supplier, company):
 	"""Return open Purchase Orders for a given supplier and company."""
 	if not frappe.has_permission("Purchase Order", "read"):
