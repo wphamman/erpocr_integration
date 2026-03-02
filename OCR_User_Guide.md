@@ -69,9 +69,10 @@ bench restart
 
 ### Optional: Email Monitoring
 
-1. In OCR Settings, check **Enable Email Monitoring**
-2. Select the **Email Account** to monitor (must be an existing ERPNext Email Account)
-3. Save
+1. Create or select an ERPNext **Email Account** with valid IMAP credentials (server, port, email, password)
+2. **Disable "Enable Incoming"** on that Email Account — the OCR monitor makes its own IMAP connection and does not use Frappe's built-in email sync
+3. In OCR Settings, check **Enable Email Monitoring** and select the Email Account
+4. Save
 
 The system will check this email account every hour for invoice attachments (PDF, JPEG, PNG).
 

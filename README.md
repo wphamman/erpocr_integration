@@ -12,6 +12,7 @@
   <a href="https://github.com/wphamman/erpocr_integration/blob/master/license.txt">
     <img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License: GPLv3">
   </a>
+  <img src="https://img.shields.io/badge/version-0.4.0-green" alt="Version 0.4.0">
   <img src="https://img.shields.io/badge/ERPNext-v15-blue" alt="ERPNext v15">
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p>
@@ -95,9 +96,10 @@ Navigate to **Setup > OCR Settings** in your ERPNext instance:
 | **Matching Threshold** | Minimum fuzzy match score (0-100, default: 80) |
 
 ### Optional: Email Monitoring
-1. Enable **Email Monitoring** in OCR Settings
-2. Select an ERPNext **Email Account** to monitor
-3. Forward invoice emails (with PDF or image attachments) to the monitored address
+1. Create or select an ERPNext **Email Account** with valid IMAP credentials (server, port, email, password)
+2. **Disable "Enable Incoming"** on the Email Account — the OCR monitor makes its own direct IMAP connection and does not use Frappe's built-in email sync
+3. Enable **Email Monitoring** in OCR Settings and select the Email Account
+4. Forward invoice emails (with PDF or image attachments) to the monitored address
 
 ### Email Security (Required in Production)
 

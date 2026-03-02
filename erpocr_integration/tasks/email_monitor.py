@@ -111,6 +111,17 @@ def poll_email_inbox():
 
 			for email_uid in uids_to_move:
 				try:
+					# Mark as \Seen FIRST — this is the primary guard against
+					# reprocessing.  Even if the label move below fails, the
+					# UNSEEN search in the next poll won't find this message.
+					mail.uid("store", email_uid, "+FLAGS", "\\Seen")
+				except Exception:
+					frappe.log_error(
+						title="Email Monitoring Error",
+						message=f"Failed to mark email UID {email_uid} as Seen\n{frappe.get_traceback()}",
+					)
+
+				try:
 					_move_to_processed_folder(mail, email_uid, use_uid=True)
 				except Exception:
 					frappe.log_error(
@@ -227,7 +238,10 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 
 				# Get email subject and Message-ID
 				subject = _decode_header_value(msg.get("Subject", ""))
-				message_id = msg.get("Message-ID", "").strip()
+				# Strip angle brackets from Message-ID to avoid Frappe
+				# HTML-encoding <> to &lt;&gt; in Data fields, which
+				# breaks the dedup query (raw '<' != stored '&lt;').
+				message_id = msg.get("Message-ID", "").strip().strip("<>")
 
 				frappe.logger().info(
 					f"Email monitoring: Processing email '{subject}' (Message-ID: {message_id})"
