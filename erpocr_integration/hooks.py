@@ -17,7 +17,10 @@ app_license = "GNU GPLv3"
 # web_include_js = "/assets/erpocr_integration/js/erpocr_integration.js"
 
 # include js in doctype views
-doctype_js = {"OCR Import": "public/js/ocr_import.js"}
+doctype_js = {
+	"OCR Import": "public/js/ocr_import.js",
+	"OCR Delivery Note": "public/js/ocr_delivery_note.js",
+}
 # doctype_list_js = {"DocType": "public/js/doctype_list.js"}
 
 # Home Pages
@@ -69,8 +72,18 @@ doc_events = {
 		"on_cancel": "erpocr_integration.api.update_ocr_import_on_cancel",
 	},
 	"Purchase Receipt": {
-		"on_submit": "erpocr_integration.api.update_ocr_import_on_submit",
-		"on_cancel": "erpocr_integration.api.update_ocr_import_on_cancel",
+		"on_submit": [
+			"erpocr_integration.api.update_ocr_import_on_submit",
+			"erpocr_integration.dn_api.update_ocr_dn_on_submit",
+		],
+		"on_cancel": [
+			"erpocr_integration.api.update_ocr_import_on_cancel",
+			"erpocr_integration.dn_api.update_ocr_dn_on_cancel",
+		],
+	},
+	"Purchase Order": {
+		"on_submit": "erpocr_integration.dn_api.update_ocr_dn_on_submit",
+		"on_cancel": "erpocr_integration.dn_api.update_ocr_dn_on_cancel",
 	},
 	"Journal Entry": {
 		"on_submit": "erpocr_integration.api.update_ocr_import_on_submit",
@@ -83,7 +96,12 @@ doc_events = {
 
 scheduler_events = {
 	"hourly": ["erpocr_integration.tasks.email_monitor.poll_email_inbox"],
-	"cron": {"*/15 * * * *": ["erpocr_integration.tasks.drive_integration.poll_drive_scan_folder"]},
+	"cron": {
+		"*/15 * * * *": [
+			"erpocr_integration.tasks.drive_integration.poll_drive_scan_folder",
+			"erpocr_integration.tasks.drive_integration.poll_drive_dn_folder",
+		]
+	},
 }
 
 # Permissions

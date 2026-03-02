@@ -340,4 +340,66 @@ def sample_settings():
 		gemini_model="gemini-2.5-flash",
 		email_monitoring_enabled=False,
 		drive_integration_enabled=False,
+		dn_scan_folder_id="",
+		dn_archive_folder_id="",
+		dn_default_warehouse="",
 	)
+
+
+@pytest.fixture
+def sample_dn_gemini_response():
+	"""A realistic raw Gemini API response for a delivery note scan."""
+	dn_json = {
+		"supplier_name": "Acme Materials (Pty) Ltd",
+		"delivery_note_number": "DN-2025-0042",
+		"delivery_date": "2025-02-20",
+		"vehicle_number": "CA 123-456",
+		"driver_name": "John",
+		"confidence": 0.92,
+		"line_items": [
+			{
+				"description": "Steel Rod 12mm x 6m",
+				"product_code": "SR-12-6",
+				"quantity": 50,
+				"unit": "pcs",
+			},
+			{
+				"description": "Cement 50kg bag",
+				"product_code": "",
+				"quantity": 20,
+				"unit": "bags",
+			},
+		],
+	}
+	return {"candidates": [{"content": {"parts": [{"text": json.dumps(dn_json)}]}}]}
+
+
+@pytest.fixture
+def sample_dn_extracted_data():
+	"""Transformed data in OCR DN format (output of _transform_to_dn_format)."""
+	return {
+		"header_fields": {
+			"supplier_name": "Acme Materials (Pty) Ltd",
+			"delivery_note_number": "DN-2025-0042",
+			"delivery_date": "2025-02-20",
+			"vehicle_number": "CA 123-456",
+			"driver_name": "John",
+			"confidence": 0.92,
+		},
+		"line_items": [
+			{
+				"description": "Steel Rod 12mm x 6m",
+				"product_code": "SR-12-6",
+				"quantity": 50,
+				"unit": "pcs",
+			},
+			{
+				"description": "Cement 50kg bag",
+				"product_code": "",
+				"quantity": 20,
+				"unit": "bags",
+			},
+		],
+		"raw_response": "{}",
+		"extraction_time": 3.5,
+	}

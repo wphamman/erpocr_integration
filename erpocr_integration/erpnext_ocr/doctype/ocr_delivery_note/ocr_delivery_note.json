@@ -1,0 +1,357 @@
+{
+	"actions": [],
+	"autoname": "naming_series:",
+	"creation": "2025-01-01 00:00:00.000000",
+	"default_view": "List",
+	"doctype": "DocType",
+	"editable_grid": 1,
+	"engine": "InnoDB",
+	"field_order": [
+		"naming_series",
+		"status",
+		"source_filename",
+		"column_break_header",
+		"source_type",
+		"uploaded_by",
+		"company",
+		"extraction_time",
+		"confidence",
+		"section_break_drive",
+		"drive_file_id",
+		"drive_retry_count",
+		"drive_link",
+		"column_break_drive",
+		"drive_folder_path",
+		"section_break_supplier",
+		"supplier_name_ocr",
+		"supplier",
+		"column_break_supplier",
+		"supplier_match_status",
+		"section_break_dn_details",
+		"delivery_note_number",
+		"delivery_date",
+		"column_break_dn_details",
+		"vehicle_number",
+		"driver_name",
+		"received_by",
+		"section_break_items",
+		"items",
+		"section_break_po",
+		"purchase_order",
+		"section_break_result",
+		"document_type",
+		"purchase_order_result",
+		"column_break_result",
+		"purchase_receipt",
+		"error_log",
+		"no_action_reason",
+		"section_break_raw",
+		"raw_payload"
+	],
+	"fields": [
+		{
+			"fieldname": "naming_series",
+			"fieldtype": "Select",
+			"hidden": 1,
+			"label": "Series",
+			"options": "OCR-DN-.#####",
+			"default": "OCR-DN-.#####"
+		},
+		{
+			"default": "Pending",
+			"fieldname": "status",
+			"fieldtype": "Select",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"label": "Status",
+			"options": "Pending\nNeeds Review\nMatched\nDraft Created\nCompleted\nNo Action\nError",
+			"read_only": 1
+		},
+		{
+			"fieldname": "source_filename",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Source Filename",
+			"read_only": 1
+		},
+		{
+			"fieldname": "column_break_header",
+			"fieldtype": "Column Break"
+		},
+		{
+			"default": "Gemini Drive Scan",
+			"fieldname": "source_type",
+			"fieldtype": "Select",
+			"in_standard_filter": 1,
+			"label": "Source Type",
+			"options": "Gemini Drive Scan",
+			"read_only": 1
+		},
+		{
+			"fieldname": "uploaded_by",
+			"fieldtype": "Link",
+			"label": "Uploaded By",
+			"options": "User",
+			"read_only": 1
+		},
+		{
+			"fieldname": "company",
+			"fieldtype": "Link",
+			"label": "Company",
+			"options": "Company",
+			"reqd": 1,
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"description": "Company for this delivery note (used for matching and document creation)"
+		},
+		{
+			"description": "Time taken by Gemini API to extract data (seconds)",
+			"fieldname": "extraction_time",
+			"fieldtype": "Float",
+			"label": "Extraction Time",
+			"read_only": 1
+		},
+		{
+			"description": "Gemini's self-reported extraction confidence (0-100%)",
+			"fieldname": "confidence",
+			"fieldtype": "Percent",
+			"label": "Confidence",
+			"read_only": 1
+		},
+		{
+			"fieldname": "section_break_drive",
+			"fieldtype": "Section Break",
+			"label": "Google Drive Archive",
+			"collapsible": 1
+		},
+		{
+			"fieldname": "drive_file_id",
+			"fieldtype": "Data",
+			"label": "Drive File ID",
+			"read_only": 1,
+			"hidden": 1,
+			"description": "Google Drive file ID for the original scan"
+		},
+		{
+			"default": "0",
+			"fieldname": "drive_retry_count",
+			"fieldtype": "Int",
+			"hidden": 1,
+			"label": "Drive Retry Count",
+			"read_only": 1,
+			"description": "Number of extraction attempts for Drive scan files (prevents infinite retries)"
+		},
+		{
+			"fieldname": "drive_link",
+			"fieldtype": "Data",
+			"label": "Drive Link",
+			"read_only": 1,
+			"description": "Shareable link to view original scan in Google Drive"
+		},
+		{
+			"fieldname": "column_break_drive",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "drive_folder_path",
+			"fieldtype": "Data",
+			"label": "Archive Folder Path",
+			"read_only": 1,
+			"description": "Google Drive folder path where scan is stored"
+		},
+		{
+			"fieldname": "section_break_supplier",
+			"fieldtype": "Section Break",
+			"label": "Supplier"
+		},
+		{
+			"fieldname": "supplier_name_ocr",
+			"fieldtype": "Data",
+			"in_list_view": 1,
+			"label": "Supplier Name (OCR)",
+			"read_only": 1
+		},
+		{
+			"fieldname": "supplier",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"label": "Supplier",
+			"options": "Supplier"
+		},
+		{
+			"fieldname": "column_break_supplier",
+			"fieldtype": "Column Break"
+		},
+		{
+			"default": "Unmatched",
+			"description": "Set to 'Confirmed' to save this supplier mapping as an alias for future auto-matching.",
+			"fieldname": "supplier_match_status",
+			"fieldtype": "Select",
+			"label": "Supplier Match Status",
+			"options": "Auto Matched\nSuggested\nUnmatched\nConfirmed"
+		},
+		{
+			"fieldname": "section_break_dn_details",
+			"fieldtype": "Section Break",
+			"label": "Delivery Note Details"
+		},
+		{
+			"fieldname": "delivery_note_number",
+			"fieldtype": "Data",
+			"label": "DN / GRN Number"
+		},
+		{
+			"fieldname": "delivery_date",
+			"fieldtype": "Date",
+			"label": "Delivery Date"
+		},
+		{
+			"fieldname": "column_break_dn_details",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "vehicle_number",
+			"fieldtype": "Data",
+			"label": "Vehicle Number"
+		},
+		{
+			"fieldname": "driver_name",
+			"fieldtype": "Data",
+			"label": "Driver Name"
+		},
+		{
+			"fieldname": "received_by",
+			"fieldtype": "Data",
+			"label": "Received By"
+		},
+		{
+			"fieldname": "section_break_items",
+			"fieldtype": "Section Break",
+			"label": "Line Items"
+		},
+		{
+			"fieldname": "items",
+			"fieldtype": "Table",
+			"label": "Items",
+			"options": "OCR Delivery Note Item"
+		},
+		{
+			"collapsible": 1,
+			"depends_on": "eval:doc.supplier",
+			"fieldname": "section_break_po",
+			"fieldtype": "Section Break",
+			"label": "Purchase Order"
+		},
+		{
+			"fieldname": "purchase_order",
+			"fieldtype": "Link",
+			"label": "Purchase Order",
+			"options": "Purchase Order"
+		},
+		{
+			"fieldname": "section_break_result",
+			"fieldtype": "Section Break",
+			"label": "Result"
+		},
+		{
+			"fieldname": "document_type",
+			"fieldtype": "Select",
+			"hidden": 1,
+			"in_standard_filter": 1,
+			"label": "Document Type",
+			"options": "\nPurchase Order\nPurchase Receipt"
+		},
+		{
+			"fieldname": "purchase_order_result",
+			"fieldtype": "Link",
+			"label": "Purchase Order (Created)",
+			"options": "Purchase Order",
+			"read_only": 1,
+			"description": "Draft PO created from this delivery note"
+		},
+		{
+			"fieldname": "column_break_result",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "purchase_receipt",
+			"fieldtype": "Link",
+			"label": "Purchase Receipt",
+			"options": "Purchase Receipt",
+			"read_only": 1
+		},
+		{
+			"fieldname": "error_log",
+			"fieldtype": "Link",
+			"label": "Error Log",
+			"options": "Error Log",
+			"read_only": 1
+		},
+		{
+			"depends_on": "eval:doc.status=='No Action'",
+			"fieldname": "no_action_reason",
+			"fieldtype": "Small Text",
+			"label": "No Action Reason",
+			"read_only": 1,
+			"description": "Reason this record was marked as No Action Required"
+		},
+		{
+			"collapsible": 1,
+			"fieldname": "section_break_raw",
+			"fieldtype": "Section Break",
+			"label": "Raw OCR Data"
+		},
+		{
+			"fieldname": "raw_payload",
+			"fieldtype": "Code",
+			"label": "Raw Payload",
+			"options": "JSON",
+			"read_only": 1,
+			"permlevel": 1
+		}
+	],
+	"index_web_pages_for_search": 1,
+	"links": [],
+	"modified": "2025-01-01 00:00:00.000000",
+	"modified_by": "Administrator",
+	"module": "ERPNext OCR",
+	"name": "OCR Delivery Note",
+	"owner": "Administrator",
+	"permissions": [
+		{
+			"create": 1,
+			"delete": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "System Manager",
+			"share": 1,
+			"write": 1
+		},
+		{
+			"create": 1,
+			"email": 1,
+			"export": 1,
+			"print": 1,
+			"read": 1,
+			"report": 1,
+			"role": "OCR Manager",
+			"share": 1,
+			"write": 1
+		},
+		{
+			"permlevel": 1,
+			"read": 1,
+			"role": "System Manager",
+			"write": 1
+		}
+	],
+	"show_title_field_in_link": 1,
+	"sort_field": "modified",
+	"sort_order": "DESC",
+	"states": [],
+	"title_field": "supplier_name_ocr",
+	"track_changes": 1
+}

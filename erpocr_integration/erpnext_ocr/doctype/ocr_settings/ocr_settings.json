@@ -27,7 +27,12 @@
 		"default_item",
 		"default_credit_account",
 		"section_break_matching",
-		"matching_threshold"
+		"matching_threshold",
+		"section_break_dn",
+		"dn_scan_folder_id",
+		"column_break_dn",
+		"dn_archive_folder_id",
+		"dn_default_warehouse"
 	],
 	"fields": [
 		{
@@ -182,6 +187,37 @@
 			"fieldname": "matching_threshold",
 			"fieldtype": "Percent",
 			"label": "Matching Threshold"
+		},
+		{
+			"fieldname": "section_break_dn",
+			"fieldtype": "Section Break",
+			"label": "Delivery Note Scanning",
+			"description": "Configure Google Drive folder polling for delivery note scans from factory floor"
+		},
+		{
+			"depends_on": "eval:doc.drive_integration_enabled",
+			"fieldname": "dn_scan_folder_id",
+			"fieldtype": "Data",
+			"label": "DN Scan Inbox Folder ID",
+			"description": "Drive folder where delivery note scans are dropped (checked every 15 minutes, separate from invoice scan folder)"
+		},
+		{
+			"fieldname": "column_break_dn",
+			"fieldtype": "Column Break"
+		},
+		{
+			"depends_on": "eval:doc.drive_integration_enabled",
+			"fieldname": "dn_archive_folder_id",
+			"fieldtype": "Data",
+			"label": "DN Archive Folder ID",
+			"description": "Drive folder where processed DN scans are archived (Year/Month/Supplier structure)"
+		},
+		{
+			"fieldname": "dn_default_warehouse",
+			"fieldtype": "Link",
+			"label": "DN Default Warehouse",
+			"options": "Warehouse",
+			"description": "Default warehouse for Purchase Receipts created from delivery note scans"
 		}
 	],
 	"index_web_pages_for_search": 1,

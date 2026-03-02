@@ -534,7 +534,10 @@ def _download_file(service, file_id: str) -> bytes | None:
 
 
 def move_file_to_archive(
-	file_id: str, supplier_name: str | None = None, invoice_date: str | None = None
+	file_id: str,
+	supplier_name: str | None = None,
+	invoice_date: str | None = None,
+	archive_folder_id: str | None = None,
 ) -> dict:
 	"""
 	Move a file from the scan inbox folder to the archive folder structure.
@@ -546,13 +549,16 @@ def move_file_to_archive(
 		file_id: Google Drive file ID to move
 		supplier_name: Supplier name for folder organization
 		invoice_date: Invoice date for year/month folders (YYYY-MM-DD)
+		archive_folder_id: Override archive folder (for DN vs invoice separation).
+			Defaults to settings.drive_archive_folder_id if None.
 
 	Returns:
 		dict: {"file_id", "shareable_link", "folder_path"}
 	"""
 	settings = frappe.get_single("OCR Settings")
 
-	if not settings.drive_integration_enabled or not settings.drive_archive_folder_id:
+	target_archive = archive_folder_id or settings.drive_archive_folder_id
+	if not settings.drive_integration_enabled or not target_archive:
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 
 	sa_json = settings.get_password("drive_service_account_json")
@@ -564,7 +570,7 @@ def move_file_to_archive(
 
 		# Build archive folder structure (Year/Month/Supplier)
 		folder_path, target_folder_id = _build_folder_structure(
-			service, settings.drive_archive_folder_id, supplier_name, invoice_date
+			service, target_archive, supplier_name, invoice_date
 		)
 
 		# Get current parent(s) and link
@@ -635,3 +641,175 @@ def test_drive_connection():
 
 	except Exception as e:
 		return {"success": False, "message": f"Connection failed: {e!s}"}
+
+
+# ── Delivery Note Drive Scan ──────────────────────────────────────────
+
+
+def poll_drive_dn_folder():
+	"""
+	Scheduled job (every 15 min) — scan Drive DN folder for new scans.
+
+	Lists PDF/image files in the configured DN scan folder, skips already
+	processed files (dedup via drive_file_id on OCR Delivery Note), downloads
+	content, and enqueues DN Gemini extraction.  Staggers enqueue calls by
+	5 seconds to avoid bursting the Gemini rate limit.
+	"""
+	import time
+
+	settings = frappe.get_single("OCR Settings")
+	if not settings.drive_integration_enabled or not settings.dn_scan_folder_id:
+		return
+
+	sa_json = settings.get_password("drive_service_account_json")
+	if not sa_json:
+		return
+
+	try:
+		service = _get_drive_service(sa_json)
+		files = _list_pdf_files(service, settings.dn_scan_folder_id)
+	except Exception as e:
+		frappe.log_error(title="DN Drive Scan Error", message=f"Failed to list DN scan folder: {e!s}")
+		return
+
+	if not files:
+		return
+
+	frappe.logger().info(f"DN Drive scan: Found {len(files)} file(s) in scan folder")
+
+	enqueued_count = 0
+	for file_info in files:
+		try:
+			was_enqueued = _process_dn_scan_file(service, file_info, settings, queue_position=enqueued_count)
+			if was_enqueued:
+				enqueued_count += 1
+				time.sleep(5)
+		except Exception as e:
+			frappe.log_error(
+				title="DN Drive Scan Error",
+				message=f"Failed to process DN scan {file_info.get('name', '?')}: {e!s}",
+			)
+			continue
+
+	if enqueued_count:
+		frappe.logger().info(f"DN Drive scan: Enqueued {enqueued_count} file(s) for processing")
+
+
+def _process_dn_scan_file(service, file_info: dict, settings, queue_position: int = 0) -> bool:
+	"""
+	Process a single file from the Drive DN scan folder.
+
+	Handles dedup (skips files already processed), auto-retries previously
+	failed extractions, and enqueues new files for DN Gemini extraction.
+
+	Returns:
+		True if a Gemini extraction job was enqueued, False if file was skipped.
+	"""
+	drive_file_id = file_info["id"]
+	filename = file_info["name"]
+	file_mime_type = file_info.get("mimeType", _mime_type_from_filename(filename))
+
+	_next_retry_count = 0
+
+	# Dedup: check OCR Delivery Note for this drive_file_id
+	existing_rows = frappe.get_all(
+		"OCR Delivery Note",
+		filters={"drive_file_id": drive_file_id},
+		fields=["name", "status", "drive_retry_count"],
+	)
+	if existing_rows:
+		all_error = all(row.status == "Error" for row in existing_rows)
+		if all_error:
+			max_retry_count = max(getattr(row, "drive_retry_count", 0) or 0 for row in existing_rows)
+			if max_retry_count >= MAX_DRIVE_RETRIES:
+				frappe.logger().warning(
+					f"DN Drive scan: {filename} failed {max_retry_count} time(s), giving up "
+					f"(max retries: {MAX_DRIVE_RETRIES})"
+				)
+				return False
+
+			for row in existing_rows:
+				frappe.delete_doc("OCR Delivery Note", row.name, force=True, ignore_permissions=True)
+			frappe.db.commit()  # nosemgrep
+			_next_retry_count = max_retry_count + 1
+			frappe.logger().info(
+				f"DN Drive scan: Retrying previously failed {filename} "
+				f"(attempt {_next_retry_count}/{MAX_DRIVE_RETRIES}, "
+				f"{len(existing_rows)} record(s) cleared)"
+			)
+		else:
+			return False
+
+	# Download file content
+	file_content = _download_file(service, drive_file_id)
+	if not file_content:
+		frappe.log_error(title="DN Drive Scan Error", message=f"Empty content for {filename}")
+		return False
+
+	if len(file_content) > MAX_PDF_SIZE_BYTES:
+		frappe.log_error(
+			title="DN Drive Scan Error",
+			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+		)
+		return False
+
+	# Validate magic bytes
+	from erpocr_integration.api import validate_file_magic_bytes
+
+	if not validate_file_magic_bytes(file_content, file_mime_type):
+		frappe.log_error(
+			title="DN Drive Scan Error",
+			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		)
+		return False
+
+	# Create OCR Delivery Note placeholder with drive_file_id for dedup
+	ocr_dn = frappe.get_doc(
+		{
+			"doctype": "OCR Delivery Note",
+			"status": "Pending",
+			"source_type": "Gemini Drive Scan",
+			"uploaded_by": "Administrator",
+			"company": settings.default_company,
+			"drive_file_id": drive_file_id,
+			"drive_retry_count": _next_retry_count,
+		}
+	)
+	ocr_dn.insert(ignore_permissions=True)
+	frappe.db.commit()  # nosemgrep
+
+	# Save the scan file as a private attachment on the OCR DN
+	frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": filename,
+			"content": file_content,
+			"attached_to_doctype": "OCR Delivery Note",
+			"attached_to_name": ocr_dn.name,
+			"is_private": 1,
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.commit()  # nosemgrep
+
+	# Enqueue DN Gemini extraction
+	try:
+		stagger_delay = min(queue_position * 5, 240)
+		frappe.enqueue(
+			"erpocr_integration.dn_api.dn_gemini_process",
+			queue="long",
+			timeout=300 + stagger_delay,
+			file_content=file_content,
+			filename=filename,
+			ocr_dn_name=ocr_dn.name,
+			mime_type=file_mime_type,
+			queue_position=queue_position,
+		)
+		frappe.logger().info(f"DN Drive scan: Queued {filename} for DN processing")
+		return True
+	except Exception as e:
+		frappe.delete_doc("OCR Delivery Note", ocr_dn.name, force=True, ignore_permissions=True)
+		frappe.db.commit()  # nosemgrep
+		frappe.log_error(
+			title="DN Drive Scan Enqueue Failed", message=f"Failed to enqueue DN {filename}: {e!s}"
+		)
+		return False

@@ -432,3 +432,223 @@ def _transform_to_ocr_import_format(gemini_data: dict, filename: str) -> dict:
 		"line_items": line_items,
 		"source_filename": filename,
 	}
+
+
+# ---------------------------------------------------------------------------
+# Delivery Note extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_delivery_note_data(pdf_content: bytes, filename: str, mime_type: str = "application/pdf") -> dict:
+	"""
+	Extract delivery note data from a scan using Gemini API.
+
+	Unlike invoices, each scan produces exactly one delivery note (no multi-document support).
+	Returns a single dict with header fields and line items — no financial data.
+
+	Args:
+		pdf_content: Raw file bytes (PDF or image)
+		filename: Original filename for logging
+		mime_type: MIME type for Gemini API
+
+	Returns:
+		dict with "header_fields", "line_items", "raw_response", "extraction_time", "source_filename"
+
+	Raises:
+		Exception: If API call fails or returns invalid data
+	"""
+	start_time = time.time()
+
+	settings = frappe.get_single("OCR Settings")
+	api_key = settings.get_password("gemini_api_key")
+	if not api_key:
+		frappe.throw(_("Gemini API key not configured in OCR Settings"))
+
+	model = settings.gemini_model or "gemini-2.5-flash"
+
+	prompt = _build_dn_extraction_prompt()
+	schema = _build_dn_extraction_schema()
+
+	try:
+		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+	except Exception as e:
+		frappe.log_error(
+			title="Gemini API Error (DN)",
+			message=f"Gemini API call failed for DN {filename}\n{frappe.get_traceback()}",
+		)
+		raise Exception(f"Failed to call Gemini API: {e!s}") from e
+
+	is_valid, error_msg = _validate_gemini_response(response_data)
+	if not is_valid:
+		truncated = json.dumps(response_data, indent=2)[:500]
+		frappe.log_error(
+			title="Invalid Gemini Response (DN)",
+			message=f"Invalid Gemini response for DN {filename}\n{error_msg}\n{truncated}...",
+		)
+		raise Exception(f"Invalid Gemini response: {error_msg}")
+
+	try:
+		candidates = response_data.get("candidates", [])
+		content = candidates[0].get("content", {})
+		parts = content.get("parts", [])
+		text = parts[0].get("text", "")
+		extracted_data = json.loads(text)
+	except Exception as e:
+		truncated = json.dumps(response_data, indent=2)[:500]
+		frappe.log_error(
+			title="Gemini Parse Error (DN)",
+			message=f"Failed to parse Gemini DN response for {filename}\n{frappe.get_traceback()}\n{truncated}...",
+		)
+		raise Exception(f"Failed to parse Gemini response: {e!s}") from e
+
+	raw_response = json.dumps(response_data, indent=2)
+	extraction_time = time.time() - start_time
+
+	result = _transform_to_dn_format(extracted_data, filename)
+	result["raw_response"] = raw_response
+	result["extraction_time"] = extraction_time
+
+	return result
+
+
+def _build_dn_extraction_prompt() -> str:
+	"""Construct prompt for Gemini API delivery note extraction."""
+	return """Extract data from this delivery note (also called a goods received note, packing slip, or dispatch note).
+
+This is NOT an invoice — it is a delivery document that accompanies physical goods. Extract:
+
+**Supplier / Sender Information:**
+- Supplier/vendor name (if visible on the document)
+
+**Delivery Note Details:**
+- Delivery note number / GRN number / dispatch number
+- Delivery date (format: YYYY-MM-DD)
+- Vehicle registration / number plate (if present)
+- Driver name (if present)
+
+**Line Items:**
+For each item listed on the delivery note, extract:
+- Description (full text description of the item)
+- Product code / SKU / Item code (if present — may be in a separate column)
+- Quantity delivered (numeric quantity)
+- Unit of measure (e.g., kg, boxes, pcs, units, each — if specified)
+
+**Important Instructions:**
+- This is a SINGLE delivery note per scan (not a multi-document PDF)
+- Do NOT extract prices, rates, amounts, or any financial data — delivery notes typically don't have these
+- Return the delivery date in YYYY-MM-DD format
+- If a field is not found or not visible, return an empty string for that field
+- For line items, skip header rows — only extract actual data rows
+- Be precise with quantities — do not round or approximate
+- Product code may appear in a separate column from the description — extract both if available
+
+**Confidence Rating:**
+Rate your overall extraction confidence from 0.0 to 1.0:
+- 1.0 = perfectly clear, all fields extracted with high certainty
+- 0.7-0.9 = most fields clear, minor uncertainty
+- 0.4-0.6 = moderate quality, some fields may be incorrect
+- Below 0.4 = poor quality scan, significant uncertainty
+
+Return the extracted data as structured JSON matching the provided schema."""
+
+
+def _build_dn_extraction_schema() -> dict:
+	"""Build JSON schema for Gemini structured output — delivery note format."""
+	return {
+		"type": "object",
+		"properties": {
+			"supplier_name": {
+				"type": "string",
+				"description": "Supplier/vendor name if visible on the delivery note",
+			},
+			"delivery_note_number": {
+				"type": "string",
+				"description": "DN/GRN/dispatch number",
+			},
+			"delivery_date": {
+				"type": "string",
+				"description": "Delivery date in YYYY-MM-DD format",
+			},
+			"vehicle_number": {
+				"type": "string",
+				"description": "Vehicle registration/number plate (empty if not present)",
+			},
+			"driver_name": {
+				"type": "string",
+				"description": "Driver name (empty if not present)",
+			},
+			"confidence": {
+				"type": "number",
+				"description": "Overall extraction confidence from 0.0 to 1.0",
+			},
+			"line_items": {
+				"type": "array",
+				"description": "Array of items from the delivery note",
+				"items": {
+					"type": "object",
+					"properties": {
+						"description": {
+							"type": "string",
+							"description": "Item description",
+						},
+						"product_code": {
+							"type": "string",
+							"description": "Product code/SKU (empty if not present)",
+						},
+						"quantity": {
+							"type": "number",
+							"description": "Quantity delivered",
+						},
+						"unit": {
+							"type": "string",
+							"description": "Unit of measure (kg, boxes, pcs, etc. — empty if not specified)",
+						},
+					},
+					"required": ["description", "product_code", "quantity", "unit"],
+				},
+			},
+		},
+		"required": [
+			"supplier_name",
+			"delivery_note_number",
+			"delivery_date",
+			"vehicle_number",
+			"driver_name",
+			"confidence",
+			"line_items",
+		],
+	}
+
+
+def _transform_to_dn_format(gemini_data: dict, filename: str) -> dict:
+	"""Transform Gemini response to OCR Delivery Note dict format."""
+	from erpocr_integration.tasks.process_import import _clean_ocr_text, _parse_date
+
+	header_fields = {
+		"supplier_name": _clean_ocr_text(gemini_data.get("supplier_name", "")),
+		"delivery_note_number": _clean_ocr_text(gemini_data.get("delivery_note_number", "")),
+		"delivery_date": _parse_date(gemini_data.get("delivery_date", "")),
+		"vehicle_number": _clean_ocr_text(gemini_data.get("vehicle_number", "")),
+		"driver_name": _clean_ocr_text(gemini_data.get("driver_name", "")),
+		"confidence": gemini_data.get("confidence", 0.0),
+	}
+
+	line_items = []
+	for item in gemini_data.get("line_items", []):
+		description = _clean_ocr_text(item.get("description", ""))
+		product_code = _clean_ocr_text(item.get("product_code", ""))
+
+		line_items.append(
+			{
+				"description": description,
+				"product_code": product_code,
+				"quantity": item.get("quantity", 1.0),
+				"unit": _clean_ocr_text(item.get("unit", "")),
+			}
+		)
+
+	return {
+		"header_fields": header_fields,
+		"line_items": line_items,
+		"source_filename": filename,
+	}
