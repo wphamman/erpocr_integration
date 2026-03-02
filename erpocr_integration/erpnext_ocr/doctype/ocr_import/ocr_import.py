@@ -158,8 +158,8 @@ class OCRImport(Document):
 
 	def _update_status(self):
 		"""Auto-update status based on match states."""
-		# Don't change status if already completed, draft created, or in error
-		if self.status in ("Completed", "Draft Created", "Error"):
+		# Don't change status if already completed, draft created, no action, or in error
+		if self.status in ("Completed", "Draft Created", "No Action", "Error"):
 			return
 
 		# If PI, PR, or JE already created, mark as Draft Created
@@ -782,7 +782,10 @@ class OCRImport(Document):
 				"posting_date": self.invoice_date or frappe.utils.today(),
 				"cheque_no": self.invoice_number,
 				"cheque_date": self.invoice_date,
-				"user_remark": f"OCR Import: {self.name} — {self.supplier_name_ocr or self.supplier}",
+				"user_remark": "OCR Import: {} — {}".format(
+					self.name,
+					frappe.utils.escape_html(self.supplier_name_ocr or self.supplier or ""),
+				),
 				"accounts": accounts,
 			}
 		)
@@ -887,6 +890,28 @@ class OCRImport(Document):
 				_("Link cleared. {0} {1} was already deleted.").format(linked_doctype, linked_name),
 				indicator="blue",
 			)
+
+	@frappe.whitelist()
+	def mark_no_action(self, reason):
+		"""Mark this OCR Import as No Action Required with a reason."""
+		if not frappe.has_permission("OCR Import", "write", self.name):
+			frappe.throw(_("You don't have permission to modify this record."))
+
+		if self.status in ("Completed", "Draft Created"):
+			frappe.throw(_("Cannot mark as No Action when status is '{0}'.").format(self.status))
+
+		reason = (reason or "").strip()
+		if not reason:
+			frappe.throw(_("Please provide a reason for marking as No Action."))
+
+		self.status = "No Action"
+		self.no_action_reason = reason
+		self.save()
+
+		frappe.msgprint(
+			_("Marked as No Action: {0}").format(reason),
+			indicator="blue",
+		)
 
 	def _validate_account(self, account, label):
 		"""Validate that an account belongs to this company, is not a group, and is not disabled."""

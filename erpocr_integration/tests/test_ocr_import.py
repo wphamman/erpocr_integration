@@ -816,3 +816,69 @@ class TestExtractServicePattern:
 		"""Subscription with date range."""
 		result = _extract_service_pattern("Pro Plan - Jan 2026 to Feb 2026")
 		assert result == "pro plan"
+
+
+# ---------------------------------------------------------------------------
+# mark_no_action
+# ---------------------------------------------------------------------------
+
+
+class TestMarkNoAction:
+	def test_marks_no_action_with_reason(self, mock_frappe):
+		doc = _make_ocr_import(status="Needs Review")
+		mock_frappe.msgprint = MagicMock()
+
+		doc.mark_no_action("Receipt for OCR-IMP-00025")
+
+		assert doc.status == "No Action"
+		assert doc.no_action_reason == "Receipt for OCR-IMP-00025"
+		doc.save.assert_called_once()
+
+	def test_marks_no_action_from_matched(self, mock_frappe):
+		doc = _make_ocr_import(status="Matched")
+		mock_frappe.msgprint = MagicMock()
+
+		doc.mark_no_action("Delivery note — not an invoice")
+
+		assert doc.status == "No Action"
+
+	def test_marks_no_action_from_error(self, mock_frappe):
+		doc = _make_ocr_import(status="Error")
+		mock_frappe.msgprint = MagicMock()
+
+		doc.mark_no_action("Corrupted file, already processed elsewhere")
+
+		assert doc.status == "No Action"
+
+	def test_blocks_no_action_from_completed(self, mock_frappe):
+		doc = _make_ocr_import(status="Completed")
+
+		with pytest.raises(Exception):
+			doc.mark_no_action("Some reason")
+
+	def test_blocks_no_action_from_draft_created(self, mock_frappe):
+		doc = _make_ocr_import(status="Draft Created")
+
+		with pytest.raises(Exception):
+			doc.mark_no_action("Some reason")
+
+	def test_requires_reason(self, mock_frappe):
+		doc = _make_ocr_import(status="Needs Review")
+
+		with pytest.raises(Exception):
+			doc.mark_no_action("")
+
+	def test_requires_non_whitespace_reason(self, mock_frappe):
+		doc = _make_ocr_import(status="Needs Review")
+
+		with pytest.raises(Exception):
+			doc.mark_no_action("   ")
+
+	def test_update_status_preserves_no_action(self, mock_frappe):
+		"""_update_status should not overwrite No Action status."""
+		doc = _make_ocr_import(status="No Action")
+		doc.no_action_reason = "Not an invoice"
+
+		doc._update_status()
+
+		assert doc.status == "No Action"

@@ -209,6 +209,35 @@ frappe.ui.form.on('OCR Import', {
 			}
 		}
 
+		// "No Action Required" button — for receipts, delivery notes, etc. that don't need PI/PR/JE
+		if (!frm.is_new() && !['Completed', 'Draft Created', 'No Action', 'Pending'].includes(frm.doc.status)) {
+			frm.add_custom_button(__('No Action Required'), function() {
+				frappe.prompt(
+					{
+						fieldname: 'reason',
+						fieldtype: 'Small Text',
+						label: __('Reason'),
+						reqd: 1,
+						description: __('e.g., "Receipt for OCR-IMP-00025", "Delivery note — not an invoice", "Duplicate"')
+					},
+					function(values) {
+						frappe.call({
+							method: 'mark_no_action',
+							doc: frm.doc,
+							args: { reason: values.reason },
+							callback: function(r) {
+								if (!r.exc) {
+									frm.reload_doc();
+								}
+							}
+						});
+					},
+					__('Mark as No Action'),
+					__('Confirm')
+				);
+			}, __('Actions'));
+		}
+
 		// Add retry button for failed extractions
 		if (frm.doc.status === 'Error' && ['Gemini Manual Upload', 'Gemini Email', 'Gemini Drive Scan'].includes(frm.doc.source_type)) {
 			frm.add_custom_button(__('Retry Extraction'), function() {
@@ -673,6 +702,8 @@ function set_status_intro(frm) {
 		} else {
 			frm.set_intro(__('Draft created.'), 'blue');
 		}
+	} else if (doc.status === 'No Action') {
+		frm.set_intro(__('No Action Required: {0}', [frappe.utils.escape_html(doc.no_action_reason || '')]), 'grey');
 	} else if (doc.status === 'Completed') {
 		// Show link to submitted document
 		let link = '';
@@ -747,7 +778,7 @@ function create_document(frm, doc_type, method_name) {
 
 function check_and_show_duplicates(frm) {
 	if (frm.is_new()) return;
-	if (['Pending', 'Extracting', 'Processing', 'Error'].includes(frm.doc.status)) return;
+	if (['Pending', 'Extracting', 'Processing', 'Error', 'No Action'].includes(frm.doc.status)) return;
 
 	frappe.call({
 		method: 'erpocr_integration.api.check_duplicates',

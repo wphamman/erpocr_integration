@@ -13,6 +13,7 @@ frappe.listview_settings['OCR Import'] = {
 			'Matched':       [__('Matched'), 'blue', 'status'],
 			'Draft Created': [__('Draft Created'), 'purple', 'status'],
 			'Completed':     [__('Completed'), 'green', 'status'],
+			'No Action':     [__('No Action'), 'grey', 'status'],
 			'Error':         [__('Error'), 'red', 'status']
 		};
 		return status_map[doc.status] || [__(doc.status), 'grey', 'status'];

@@ -53,6 +53,7 @@
 		"purchase_receipt",
 		"journal_entry",
 		"error_log",
+		"no_action_reason",
 		"section_break_raw",
 		"raw_payload"
 	],
@@ -72,7 +73,7 @@
 			"in_list_view": 1,
 			"in_standard_filter": 1,
 			"label": "Status",
-			"options": "Pending\nNeeds Review\nMatched\nDraft Created\nCompleted\nError",
+			"options": "Pending\nNeeds Review\nMatched\nDraft Created\nCompleted\nNo Action\nError",
 			"read_only": 1
 		},
 		{
@@ -358,6 +359,14 @@
 			"label": "Error Log",
 			"options": "Error Log",
 			"read_only": 1
+		},
+		{
+			"depends_on": "eval:doc.status=='No Action'",
+			"fieldname": "no_action_reason",
+			"fieldtype": "Small Text",
+			"label": "No Action Reason",
+			"read_only": 1,
+			"description": "Reason this record was marked as No Action Required"
 		},
 		{
 			"collapsible": 1,
