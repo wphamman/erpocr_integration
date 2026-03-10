@@ -320,16 +320,26 @@ def retry_fleet_extraction(ocr_fleet_name: str):
 	frappe.db.set_value("OCR Fleet Slip", ocr_fleet_name, "status", "Pending")
 	frappe.db.commit()  # nosemgrep
 
-	frappe.enqueue(
-		"erpocr_integration.fleet_api.fleet_gemini_process",
-		queue="long",
-		timeout=300,
-		file_content=file_content,
-		filename=filename,
-		ocr_fleet_name=ocr_fleet_name,
-		mime_type=mime_type,
-		queue_position=0,
-	)
+	try:
+		frappe.enqueue(
+			"erpocr_integration.fleet_api.fleet_gemini_process",
+			queue="long",
+			timeout=300,
+			file_content=file_content,
+			filename=filename,
+			ocr_fleet_name=ocr_fleet_name,
+			mime_type=mime_type,
+			queue_position=0,
+		)
+	except Exception:
+		# Enqueue failed — revert to Error so it doesn't sit as stale Pending
+		frappe.db.set_value("OCR Fleet Slip", ocr_fleet_name, "status", "Error")
+		frappe.db.commit()  # nosemgrep
+		frappe.log_error(
+			title="OCR Fleet Retry Enqueue Error",
+			message=f"Failed to enqueue retry for {ocr_fleet_name}\n{frappe.get_traceback()}",
+		)
+		frappe.throw(_("Failed to start retry. Please try again."))
 
 	frappe.msgprint(_("Retry extraction queued. Please wait a moment and refresh."), indicator="blue")
 
