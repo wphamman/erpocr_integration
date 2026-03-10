@@ -133,7 +133,7 @@ def _populate_ocr_dn(ocr_dn, extracted_data: dict, settings):
 			"items",
 			{
 				"description_ocr": description,
-				"item_name": product_code or description,
+				"item_name": (product_code or description)[:140],
 				"qty": line.get("quantity", 1.0),
 				"uom": line.get("unit", ""),
 				"match_status": "Unmatched",

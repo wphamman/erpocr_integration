@@ -417,7 +417,7 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 			"items",
 			{
 				"description_ocr": description,
-				"item_name": product_code or description,
+				"item_name": (product_code or description)[:140],
 				"qty": line.get("quantity", 1.0),
 				"rate": line.get("unit_price", 0.0),
 				"amount": line.get("amount", 0.0),
