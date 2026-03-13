@@ -159,7 +159,7 @@ class OCRDeliveryNote(Document):
 		for po_item, ocr_item in zip(po.items, matched_items, strict=False):
 			ocr_desc = ocr_item.description_ocr or ocr_item.item_name
 			if ocr_desc and ocr_desc != po_item.item_name:
-				po_item.db_set({"item_name": ocr_desc, "description": ocr_desc})
+				po_item.db_set({"item_name": ocr_desc[:140], "description": ocr_desc})
 
 		# Copy scan attachment to PO
 		self._copy_scan_to_document("Purchase Order", po.name)
@@ -261,7 +261,7 @@ class OCRDeliveryNote(Document):
 		for pr_item, ocr_item in zip(pr.items, matched_items, strict=False):
 			ocr_desc = ocr_item.description_ocr or ocr_item.item_name
 			if ocr_desc and ocr_desc != pr_item.item_name:
-				pr_item.db_set({"item_name": ocr_desc, "description": ocr_desc})
+				pr_item.db_set({"item_name": ocr_desc[:140], "description": ocr_desc})
 
 		# Copy scan attachment to PR
 		self._copy_scan_to_document("Purchase Receipt", pr.name)

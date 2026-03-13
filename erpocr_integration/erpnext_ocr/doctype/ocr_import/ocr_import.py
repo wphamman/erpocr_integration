@@ -364,7 +364,8 @@ class OCRImport(Document):
 				pi_item["item_code"] = settings.default_item
 			else:
 				# No matched item and no default — use description only
-				pi_item["item_name"] = item.item_name or item.description_ocr or "OCR Imported Item"
+				fallback_name = item.item_name or item.description_ocr or "OCR Imported Item"
+				pi_item["item_name"] = fallback_name[:140]
 
 			# Row-level accounting fields (from service mapping) take precedence over defaults
 			if item.expense_account:
@@ -460,7 +461,7 @@ class OCRImport(Document):
 		for pi_item, ocr_item in zip(pi.items, self.items, strict=False):
 			ocr_desc = ocr_item.description_ocr or ocr_item.item_name
 			if ocr_desc and ocr_desc != pi_item.item_name:
-				pi_item.db_set({"item_name": ocr_desc, "description": ocr_desc})
+				pi_item.db_set({"item_name": ocr_desc[:140], "description": ocr_desc})
 
 		# Add comment with original invoice link (if available from Drive)
 		if self.drive_link and self.drive_link.startswith("https://"):
@@ -615,7 +616,7 @@ class OCRImport(Document):
 		for pr_item, ocr_item in zip(pr.items, matched_items, strict=False):
 			ocr_desc = ocr_item.description_ocr or ocr_item.item_name
 			if ocr_desc and ocr_desc != pr_item.item_name:
-				pr_item.db_set({"item_name": ocr_desc, "description": ocr_desc})
+				pr_item.db_set({"item_name": ocr_desc[:140], "description": ocr_desc})
 
 		# Add comment with original invoice link (if available from Drive)
 		if self.drive_link and self.drive_link.startswith("https://"):
