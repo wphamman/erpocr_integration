@@ -341,11 +341,30 @@ def gemini_process(
 					title="Drive Move Failed", message=f"Failed to move {filename} to archive: {e!s}"
 				)
 
-		# Publish realtime update — no auto-creation, user reviews and creates
+		# Auto-draft: attempt to create documents for high-confidence records
+		if getattr(settings, "enable_auto_draft", 0):
+			from erpocr_integration.tasks.auto_draft import attempt_auto_draft
+
+			for doc_name in all_ocr_import_names:
+				try:
+					ocr_doc = frappe.get_doc("OCR Import", doc_name)
+					attempt_auto_draft(ocr_doc, settings)
+				except Exception:
+					frappe.log_error(
+						title="Auto-Draft Error",
+						message=f"Auto-draft failed for {doc_name}\n{frappe.get_traceback()}",
+					)
+
+		# Publish realtime update
 		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
-		msg = "Extraction complete! Please review and confirm matches."
-		if invoice_count > 1:
-			msg = f"Extraction complete! {invoice_count} invoices created. Please review."
+		if getattr(ocr_import_first, "auto_drafted", 0):
+			msg = "Auto-drafted! Document created automatically. Please review and submit."
+			if invoice_count > 1:
+				msg = f"{invoice_count} invoices extracted. High-confidence records auto-drafted."
+		else:
+			msg = "Extraction complete! Please review and confirm matches."
+			if invoice_count > 1:
+				msg = f"Extraction complete! {invoice_count} invoices created. Please review."
 		frappe.publish_realtime(
 			event="ocr_extraction_progress",
 			message={"ocr_import": ocr_import_name, "status": ocr_import_first.status, "message": msg},
