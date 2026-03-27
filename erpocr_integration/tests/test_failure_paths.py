@@ -189,12 +189,16 @@ class TestDriveScanDedup:
 		service = MagicMock()
 		file_info = {"id": "drive-retry-1", "name": "retry.pdf"}
 
-		mock_frappe.get_all = MagicMock(
-			return_value=[
-				SimpleNamespace(name="OCR-IMP-E1", status="Error"),
-				SimpleNamespace(name="OCR-IMP-E2", status="Error"),
-			]
-		)
+		# Return error records for OCR Import dedup check; empty list for OCR Statement check
+		def _get_all_side_effect(doctype, **kwargs):
+			if doctype == "OCR Import":
+				return [
+					SimpleNamespace(name="OCR-IMP-E1", status="Error"),
+					SimpleNamespace(name="OCR-IMP-E2", status="Error"),
+				]
+			return []
+
+		mock_frappe.get_all = MagicMock(side_effect=_get_all_side_effect)
 
 		with patch.object(
 			erpocr_integration.tasks.drive_integration,

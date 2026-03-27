@@ -398,6 +398,25 @@ def _process_scan_file(service, file_info: dict, settings, queue_position: int =
 			# At least one record succeeded or is still processing — skip
 			return False
 
+	# Also check if this file was already processed as a statement
+	existing_statements = frappe.get_all(
+		"OCR Statement",
+		filters={"drive_file_id": drive_file_id},
+		fields=["name", "status", "drive_retry_count"],
+	)
+	if existing_statements:
+		all_stmt_error = all(row.status == "Error" for row in existing_statements)
+		if all_stmt_error:
+			max_stmt_retry = max(getattr(row, "drive_retry_count", 0) or 0 for row in existing_statements)
+			if max_stmt_retry >= MAX_DRIVE_RETRIES:
+				return False
+			for row in existing_statements:
+				frappe.delete_doc("OCR Statement", row.name, force=True, ignore_permissions=True)
+			frappe.db.commit()  # nosemgrep
+			_next_retry_count = max(max_stmt_retry + 1, _next_retry_count)
+		else:
+			return False
+
 	# Download file content
 	pdf_content = _download_file(service, drive_file_id)
 	if not pdf_content:
@@ -421,6 +440,23 @@ def _process_scan_file(service, file_info: dict, settings, queue_position: int =
 			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
 		)
 		return False
+
+	# Classify document: invoice or statement
+	from erpocr_integration.tasks.classify_document import classify_document
+
+	doc_type, classification_confidence = classify_document(pdf_content, filename, file_mime_type)
+
+	if doc_type == "statement":
+		return _process_statement_file(
+			pdf_content,
+			filename,
+			file_mime_type,
+			drive_file_id,
+			settings,
+			queue_position,
+			_next_retry_count,
+			classification_confidence,
+		)
 
 	# Create OCR Import placeholder with drive_file_id for dedup
 	ocr_import = frappe.get_doc(
@@ -460,6 +496,56 @@ def _process_scan_file(service, file_info: dict, settings, queue_position: int =
 		frappe.delete_doc("OCR Import", ocr_import.name, force=True, ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
 		frappe.log_error(title="Drive Scan Enqueue Failed", message=f"Failed to enqueue {filename}: {e!s}")
+		return False
+
+
+def _process_statement_file(
+	pdf_content: bytes,
+	filename: str,
+	mime_type: str,
+	drive_file_id: str,
+	settings,
+	queue_position: int,
+	retry_count: int,
+	confidence: float,
+) -> bool:
+	"""Process a file classified as a supplier statement."""
+	ocr_statement = frappe.get_doc(
+		{
+			"doctype": "OCR Statement",
+			"status": "Pending",
+			"source_filename": filename,
+			"source_type": "Gemini Drive Scan",
+			"uploaded_by": "Administrator",
+			"company": settings.default_company,
+			"drive_file_id": drive_file_id,
+			"drive_retry_count": retry_count,
+			"classification_confidence": confidence,
+		}
+	)
+	ocr_statement.insert(ignore_permissions=True)
+	frappe.db.commit()  # nosemgrep
+
+	try:
+		stagger_delay = min(queue_position * 5, 240)
+		frappe.enqueue(
+			"erpocr_integration.statement_api.statement_gemini_process",
+			queue="long",
+			timeout=300 + stagger_delay,
+			file_content=pdf_content,
+			filename=filename,
+			ocr_statement_name=ocr_statement.name,
+			source_type="Gemini Drive Scan",
+			uploaded_by="Administrator",
+			mime_type=mime_type,
+			queue_position=queue_position,
+		)
+		frappe.logger().info(f"Drive scan: Queued statement {filename} for processing")
+		return True
+	except Exception as e:
+		frappe.delete_doc("OCR Statement", ocr_statement.name, force=True, ignore_permissions=True)
+		frappe.db.commit()  # nosemgrep
+		frappe.log_error(title="Statement Enqueue Error", message=f"Failed to enqueue {filename}: {e!s}")
 		return False
 
 
