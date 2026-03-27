@@ -128,14 +128,15 @@ def attempt_auto_draft(ocr_import, settings) -> bool:
 	# Check confidence
 	is_high, reason = _is_high_confidence(ocr_import)
 	if not is_high:
-		ocr_import.auto_draft_skipped_reason = reason
+		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", reason)
 		return False
 
 	# Gate on "Matched" status — _update_status() already validates that
 	# non-stock items have expense_account, etc. If the record didn't reach
 	# "Matched" after save, it needs human attention even if matches look good.
 	if ocr_import.status != "Matched":
-		ocr_import.auto_draft_skipped_reason = f"Status is '{ocr_import.status}' (requires 'Matched')"
+		reason = f"Status is '{ocr_import.status}' (requires 'Matched')"
+		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", reason)
 		return False
 
 	try:

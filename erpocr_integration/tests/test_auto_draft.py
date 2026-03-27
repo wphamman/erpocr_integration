@@ -294,7 +294,10 @@ class TestAttemptAutoDraft:
 		result = attempt_auto_draft(doc, settings)
 
 		assert result is False
-		assert "Needs Review" in (doc.auto_draft_skipped_reason or "")
+		# Reason persisted via db.set_value (not in-memory attribute)
+		mock_frappe.db.set_value.assert_called()
+		call_args = mock_frappe.db.set_value.call_args
+		assert "Needs Review" in str(call_args)
 		doc.create_purchase_invoice.assert_not_called()
 
 	def test_skips_when_low_confidence(self, mock_frappe):
@@ -311,7 +314,7 @@ class TestAttemptAutoDraft:
 		result = attempt_auto_draft(doc, settings)
 
 		assert result is False
-		assert doc.auto_draft_skipped_reason != ""
+		mock_frappe.db.set_value.assert_called()
 		doc.create_purchase_invoice.assert_not_called()
 
 	def test_skips_when_document_already_created(self, mock_frappe):
@@ -392,5 +395,6 @@ class TestAttemptAutoDraft:
 
 		attempt_auto_draft(doc, settings)
 
-		assert doc.auto_draft_skipped_reason
-		assert "supplier" in doc.auto_draft_skipped_reason.lower()
+		mock_frappe.db.set_value.assert_called()
+		call_args = mock_frappe.db.set_value.call_args
+		assert "supplier" in str(call_args).lower()

@@ -68,8 +68,8 @@ function render_stats(page, stats) {
 
 	let source_html = '';
 	Object.keys(stats.by_source || {}).forEach(function(src) {
-		source_html += '<div class="stat-row"><span>' + src + '</span><strong>' +
-			stats.by_source[src] + '</strong></div>';
+		source_html += '<div class="stat-row"><span>' + frappe.utils.escape_html(src) + '</span><strong>' +
+			(parseInt(stats.by_source[src]) || 0) + '</strong></div>';
 	});
 	$main.find('.source-breakdown').html(source_html);
 }
