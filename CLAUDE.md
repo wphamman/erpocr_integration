@@ -327,7 +327,7 @@ bench restart
 - [x] Client script: Create PI button, vehicle config, status intro, unauthorized warning
 - [x] OCR Settings: fleet_scan_folder_id, fleet_fuel_item, fleet_toll_item, fleet_default_supplier, fleet_expense_account
 - [x] Workspace: OCR Fleet Slip shortcut + link
-- [x] Test suite (124 new tests — unit + integration + workflow; 478 total)
+- [x] Test suite (124 new tests — unit + integration + workflow; 481 total)
 
 ### Future — Email Monitor Hardening
 - [ ] Replace X-GM-LABELS label manipulation with standard IMAP COPY + DELETE for moving emails from "OCR Invoices" to "OCR Processed" (more reliable across Gmail Workspace)
