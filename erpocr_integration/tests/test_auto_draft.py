@@ -1,11 +1,13 @@
 """Tests for auto-draft logic."""
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from erpocr_integration.tasks.auto_draft import (
 	_auto_detect_document_type,
 	_auto_link_purchase_order,
 	_is_high_confidence,
+	attempt_auto_draft,
 )
 
 
@@ -226,3 +228,169 @@ class TestAutoDetectDocumentType:
 	def test_purchase_invoice_when_no_po(self):
 		doc = _make_ocr_import(purchase_order=None, items=[_make_item()])
 		assert _auto_detect_document_type(doc) == "Purchase Invoice"
+
+
+def _make_settings(**overrides):
+	defaults = dict(enable_auto_draft=1)
+	defaults.update(overrides)
+	return SimpleNamespace(**defaults)
+
+
+class TestAttemptAutoDraft:
+	def test_creates_pi_when_high_confidence_and_matched(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			status="Matched",
+			document_type="",
+			purchase_order=None,
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			company="Test Co",
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock(return_value="PI-001")
+		doc.save = MagicMock()
+		settings = _make_settings()
+		mock_frappe.get_list.return_value = []  # No open POs
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is True
+		assert doc.document_type == "Purchase Invoice"
+		assert doc.auto_drafted == 1
+		doc.save.assert_called()
+		doc.create_purchase_invoice.assert_called_once()
+
+	def test_skips_when_auto_draft_disabled(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			document_type="",
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock()
+		settings = _make_settings(enable_auto_draft=0)
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+
+	def test_skips_when_status_needs_review(self, mock_frappe):
+		"""High confidence matches but _update_status set Needs Review (e.g. missing expense_account)."""
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			status="Needs Review",
+			document_type="",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock()
+		doc.save = MagicMock()
+		settings = _make_settings()
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		assert "Needs Review" in (doc.auto_draft_skipped_reason or "")
+		doc.create_purchase_invoice.assert_not_called()
+
+	def test_skips_when_low_confidence(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			document_type="",
+			supplier_match_status="Suggested",
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock()
+		doc.save = MagicMock()
+		settings = _make_settings()
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		assert doc.auto_draft_skipped_reason != ""
+		doc.create_purchase_invoice.assert_not_called()
+
+	def test_skips_when_document_already_created(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			document_type="Purchase Invoice",
+			purchase_invoice="PI-EXISTING",
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock()
+		settings = _make_settings()
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+
+	def test_links_po_before_creating_pi(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			status="Matched",
+			document_type="",
+			purchase_order=None,
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			company="Test Co",
+			items=[_make_item(item_code="ITEM-A")],
+		)
+		doc.create_purchase_invoice = MagicMock(return_value="PI-001")
+		doc.save = MagicMock()
+		settings = _make_settings()
+
+		# Mock: open PO with matching items
+		mock_frappe.get_list.return_value = [
+			SimpleNamespace(name="PO-001", transaction_date="2026-01-01", grand_total=1000, status="To Bill"),
+		]
+		mock_frappe.get_doc.return_value = SimpleNamespace(items=[SimpleNamespace(item_code="ITEM-A")])
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is True
+		assert doc.purchase_order == "PO-001"
+		doc.create_purchase_invoice.assert_called_once()
+
+	def test_falls_back_gracefully_on_create_error(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			status="Matched",
+			document_type="",
+			purchase_order=None,
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			company="Test Co",
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock(side_effect=Exception("PI creation failed"))
+		doc.save = MagicMock()
+		settings = _make_settings()
+		mock_frappe.get_list.return_value = []
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		assert "PI creation failed" in (doc.auto_draft_skipped_reason or "")
+
+	def test_sets_skipped_reason_on_low_confidence(self, mock_frappe):
+		doc = _make_ocr_import(
+			name="OCR-IMP-001",
+			document_type="",
+			supplier=None,
+			supplier_match_status="Unmatched",
+			items=[_make_item()],
+		)
+		doc.save = MagicMock()
+		settings = _make_settings()
+
+		attempt_auto_draft(doc, settings)
+
+		assert doc.auto_draft_skipped_reason
+		assert "supplier" in doc.auto_draft_skipped_reason.lower()

@@ -101,3 +101,75 @@ def _auto_detect_document_type(ocr_import) -> str:
 	Future: could detect PR (all stock items + PO) or JE (expense receipts).
 	"""
 	return "Purchase Invoice"
+
+
+def attempt_auto_draft(ocr_import, settings) -> bool:
+	"""Attempt to auto-draft a document from a high-confidence OCR Import.
+
+	Called after matching completes in gemini_process(). If confidence is high,
+	sets document_type, links PO if possible, saves, and calls the create method.
+	Falls back gracefully on any error — the record stays at its current status
+	(Matched/Needs Review) and the user can handle it manually.
+
+	Returns:
+	    True if auto-draft succeeded, False otherwise.
+	"""
+	if not getattr(settings, "enable_auto_draft", 0):
+		return False
+
+	# Don't auto-draft if a document already exists
+	if (
+		getattr(ocr_import, "purchase_invoice", None)
+		or getattr(ocr_import, "purchase_receipt", None)
+		or getattr(ocr_import, "journal_entry", None)
+	):
+		return False
+
+	# Check confidence
+	is_high, reason = _is_high_confidence(ocr_import)
+	if not is_high:
+		ocr_import.auto_draft_skipped_reason = reason
+		return False
+
+	# Gate on "Matched" status — _update_status() already validates that
+	# non-stock items have expense_account, etc. If the record didn't reach
+	# "Matched" after save, it needs human attention even if matches look good.
+	if ocr_import.status != "Matched":
+		ocr_import.auto_draft_skipped_reason = f"Status is '{ocr_import.status}' (requires 'Matched')"
+		return False
+
+	try:
+		# Auto-link PO if possible (sets ocr_import.purchase_order)
+		_auto_link_purchase_order(ocr_import)
+
+		# Auto-detect document type
+		doc_type = _auto_detect_document_type(ocr_import)
+		ocr_import.document_type = doc_type
+		ocr_import.auto_drafted = 1
+
+		# Save to persist document_type + PO link + auto_drafted flag
+		# (create_purchase_invoice checks these fields)
+		ocr_import.save(ignore_permissions=True)
+
+		# Create the document
+		if doc_type == "Purchase Invoice":
+			ocr_import.create_purchase_invoice()
+		elif doc_type == "Purchase Receipt":
+			ocr_import.create_purchase_receipt()
+
+		return True
+
+	except Exception as e:
+		# Fall back gracefully — record stays at Matched/Needs Review
+		ocr_import.auto_draft_skipped_reason = f"Auto-draft failed: {e}"
+		ocr_import.document_type = ""
+		ocr_import.auto_drafted = 0
+		try:
+			ocr_import.save(ignore_permissions=True)
+		except Exception:
+			pass  # Best-effort — don't mask the original error
+		frappe.log_error(
+			title="Auto-Draft Failed",
+			message=f"Auto-draft failed for {ocr_import.name}: {e}\n{frappe.get_traceback()}",
+		)
+		return False
