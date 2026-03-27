@@ -361,6 +361,22 @@
 			"read_only": 1
 		},
 		{
+			"fieldname": "auto_drafted",
+			"fieldtype": "Check",
+			"label": "Auto-Drafted",
+			"read_only": 1,
+			"default": "0",
+			"description": "Set automatically when this record was auto-drafted without human intervention"
+		},
+		{
+			"fieldname": "auto_draft_skipped_reason",
+			"fieldtype": "Small Text",
+			"label": "Auto-Draft Skip Reason",
+			"read_only": 1,
+			"hidden": 1,
+			"description": "Why auto-draft was not attempted or failed"
+		},
+		{
 			"depends_on": "eval:doc.status=='No Action'",
 			"fieldname": "no_action_reason",
 			"fieldtype": "Small Text",
