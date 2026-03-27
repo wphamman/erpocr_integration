@@ -21,6 +21,7 @@ doctype_js = {
 	"OCR Import": "public/js/ocr_import.js",
 	"OCR Delivery Note": "public/js/ocr_delivery_note.js",
 	"OCR Fleet Slip": "public/js/ocr_fleet_slip.js",
+	"OCR Statement": "public/js/ocr_statement.js",
 }
 # doctype_list_js = {"DocType": "public/js/doctype_list.js"}
 
