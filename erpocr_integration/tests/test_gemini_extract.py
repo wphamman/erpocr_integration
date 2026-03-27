@@ -1,6 +1,8 @@
 """Tests for erpocr_integration.tasks.gemini_extract — schema, validation, transform."""
 
 import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -9,6 +11,7 @@ from erpocr_integration.tasks.gemini_extract import (
 	_build_extraction_schema,
 	_transform_to_ocr_import_format,
 	_validate_gemini_response,
+	extract_statement_data,
 )
 
 # ---------------------------------------------------------------------------
@@ -256,3 +259,114 @@ class TestTransformToOcrImportFormat:
 		assert result["header_fields"]["subtotal"] == 0.0
 		assert result["line_items"][0]["quantity"] == 1.0
 		assert result["line_items"][0]["unit_price"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# extract_statement_data
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStatementData:
+	def test_extracts_statement_header_and_transactions(self, mock_frappe):
+		mock_settings = SimpleNamespace(gemini_model="gemini-2.5-flash")
+		mock_settings.get_password = MagicMock(return_value="fake-key")
+		mock_frappe.get_single.return_value = mock_settings
+
+		with patch("erpocr_integration.tasks.gemini_extract._call_gemini_api") as mock_api:
+			mock_api.return_value = {
+				"candidates": [
+					{
+						"content": {
+							"parts": [
+								{
+									"text": json.dumps(
+										{
+											"supplier_name": "Louma Trading",
+											"statement_date": "2026-02-28",
+											"period_from": "2026-02-01",
+											"period_to": "2026-02-28",
+											"opening_balance": 5000.0,
+											"closing_balance": 12000.0,
+											"currency": "ZAR",
+											"transactions": [
+												{
+													"reference": "IN238509",
+													"date": "2026-02-02",
+													"description": "Tax Invoice",
+													"debit": 19780.0,
+													"credit": 0,
+													"balance": 24780.0,
+												},
+												{
+													"reference": "PMT-001",
+													"date": "2026-02-15",
+													"description": "Payment received",
+													"debit": 0,
+													"credit": 10000.0,
+													"balance": 14780.0,
+												},
+											],
+										}
+									)
+								}
+							]
+						}
+					}
+				]
+			}
+
+			result = extract_statement_data(b"fake-pdf", "statement.pdf")
+
+		assert result["header_fields"]["supplier_name"] == "Louma Trading"
+		assert result["header_fields"]["statement_date"] == "2026-02-28"
+		assert result["header_fields"]["opening_balance"] == 5000.0
+		assert result["header_fields"]["closing_balance"] == 12000.0
+		assert len(result["transactions"]) == 2
+		assert result["transactions"][0]["reference"] == "IN238509"
+		assert result["transactions"][0]["debit"] == 19780.0
+		assert result["transactions"][1]["credit"] == 10000.0
+
+	def test_raises_on_empty_transactions(self, mock_frappe):
+		mock_settings = SimpleNamespace(gemini_model="gemini-2.5-flash")
+		mock_settings.get_password = MagicMock(return_value="fake-key")
+		mock_frappe.get_single.return_value = mock_settings
+
+		with patch("erpocr_integration.tasks.gemini_extract._call_gemini_api") as mock_api:
+			mock_api.return_value = {
+				"candidates": [
+					{
+						"content": {
+							"parts": [
+								{
+									"text": json.dumps(
+										{
+											"supplier_name": "Test",
+											"statement_date": "2026-02-28",
+											"period_from": "",
+											"period_to": "",
+											"opening_balance": 0,
+											"closing_balance": 0,
+											"currency": "ZAR",
+											"transactions": [],
+										}
+									)
+								}
+							]
+						}
+					}
+				]
+			}
+
+			with pytest.raises(Exception, match="No transactions"):
+				extract_statement_data(b"fake-pdf", "empty.pdf")
+
+	def test_raises_on_api_error(self, mock_frappe):
+		mock_settings = SimpleNamespace(gemini_model="gemini-2.5-flash")
+		mock_settings.get_password = MagicMock(return_value="fake-key")
+		mock_frappe.get_single.return_value = mock_settings
+
+		with patch("erpocr_integration.tasks.gemini_extract._call_gemini_api") as mock_api:
+			mock_api.side_effect = Exception("API timeout")
+
+			with pytest.raises(Exception, match="Failed to call Gemini API"):
+				extract_statement_data(b"fake-pdf", "timeout.pdf")

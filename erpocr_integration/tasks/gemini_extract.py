@@ -923,3 +923,133 @@ def _transform_to_fleet_format(gemini_data: dict, filename: str) -> dict:
 		"toll_details": toll,
 		"source_filename": filename,
 	}
+
+
+# ---------------------------------------------------------------------------
+# Statement extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_statement_data(pdf_content: bytes, filename: str, mime_type: str = "application/pdf") -> dict:
+	"""Extract transaction lines from a supplier statement using Gemini API."""
+	start_time = time.time()
+
+	settings = frappe.get_single("OCR Settings")
+	api_key = settings.get_password("gemini_api_key")
+	if not api_key:
+		frappe.throw(_("Gemini API key not configured in OCR Settings"))
+
+	model = settings.gemini_model or "gemini-2.5-flash"
+	prompt = _build_statement_prompt()
+	schema = _build_statement_schema()
+
+	try:
+		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+	except Exception as e:
+		frappe.log_error(
+			title="Gemini API Error",
+			message=f"Statement extraction failed for {filename}\n{frappe.get_traceback()}",
+		)
+		raise Exception(f"Failed to call Gemini API: {e!s}") from e
+
+	is_valid, error_msg = _validate_gemini_response(response_data)
+	if not is_valid:
+		raise Exception(f"Invalid Gemini response: {error_msg}")
+
+	try:
+		candidates = response_data.get("candidates", [])
+		text = candidates[0]["content"]["parts"][0]["text"]
+		extracted = json.loads(text)
+	except Exception as e:
+		raise Exception(f"Failed to parse Gemini response: {e!s}") from e
+
+	transactions = extracted.get("transactions", [])
+	if not transactions:
+		raise Exception("No transactions found in statement")
+
+	from erpocr_integration.tasks.process_import import _clean_ocr_text, _parse_date
+
+	header_fields = {
+		"supplier_name": _clean_ocr_text(extracted.get("supplier_name", "")),
+		"statement_date": _parse_date(extracted.get("statement_date", "")),
+		"period_from": _parse_date(extracted.get("period_from", "")),
+		"period_to": _parse_date(extracted.get("period_to", "")),
+		"opening_balance": extracted.get("opening_balance") or 0.0,
+		"closing_balance": extracted.get("closing_balance") or 0.0,
+		"currency": (extracted.get("currency") or "").upper().strip(),
+	}
+
+	parsed_transactions = []
+	for txn in transactions:
+		parsed_transactions.append(
+			{
+				"reference": _clean_ocr_text(txn.get("reference", "")),
+				"date": _parse_date(txn.get("date", "")),
+				"description": _clean_ocr_text(txn.get("description", "")),
+				"debit": txn.get("debit") or 0.0,
+				"credit": txn.get("credit") or 0.0,
+				"balance": txn.get("balance") or 0.0,
+			}
+		)
+
+	return {
+		"header_fields": header_fields,
+		"transactions": parsed_transactions,
+		"raw_response": json.dumps(response_data, indent=2),
+		"extraction_time": time.time() - start_time,
+		"source_filename": filename,
+	}
+
+
+def _build_statement_prompt() -> str:
+	return """Extract ALL transaction lines from this supplier account statement.
+
+For each transaction line, extract:
+- reference: The invoice number, credit note number, or payment reference
+- date: Transaction date in YYYY-MM-DD format
+- description: Description text (e.g., "Tax Invoice", "Payment", "Credit Note")
+- debit: Amount charged/invoiced (0 if this is a payment/credit)
+- credit: Amount paid/credited (0 if this is an invoice/debit)
+- balance: Running balance after this transaction
+
+Also extract the statement header:
+- supplier_name: The supplier/vendor name
+- statement_date: The date the statement was generated
+- period_from: Start of the statement period
+- period_to: End of the statement period
+- opening_balance: Balance at the start of the period
+- closing_balance: Balance at the end of the period
+- currency: Currency code (e.g., ZAR, USD)
+
+Extract EVERY line — do not skip any transactions. Include payments, credit notes, and debit notes alongside invoices."""
+
+
+def _build_statement_schema() -> dict:
+	return {
+		"type": "object",
+		"properties": {
+			"supplier_name": {"type": "string"},
+			"statement_date": {"type": "string"},
+			"period_from": {"type": "string"},
+			"period_to": {"type": "string"},
+			"opening_balance": {"type": "number"},
+			"closing_balance": {"type": "number"},
+			"currency": {"type": "string"},
+			"transactions": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"reference": {"type": "string"},
+						"date": {"type": "string"},
+						"description": {"type": "string"},
+						"debit": {"type": "number"},
+						"credit": {"type": "number"},
+						"balance": {"type": "number"},
+					},
+					"required": ["reference", "date", "debit", "credit"],
+				},
+			},
+		},
+		"required": ["supplier_name", "transactions"],
+	}
