@@ -436,7 +436,7 @@ class TestUnmatchedVehicleWorkflow:
 		_run_fleet_matching(doc, settings)
 
 		assert doc.vehicle_match_status == "Unmatched"
-		assert doc.fleet_vehicle is None
+		assert doc.fleet_vehicle == ""
 
 
 # ---------------------------------------------------------------------------

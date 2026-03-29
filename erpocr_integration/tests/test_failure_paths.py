@@ -458,3 +458,38 @@ class TestRetryGeminiExtraction:
 				result = erpocr_integration.api.retry_gemini_extraction(f"OCR-IMP-{source_type}")
 
 			assert result is not None
+
+	def test_retries_email_origin_from_attachment(self, mock_frappe):
+		"""Email-origin OCR Import can retry via attached File (saved by email_monitor)."""
+		mock_file = MagicMock()
+		mock_file.get_content.return_value = b"%PDF-1.4 email pdf"
+
+		doc = SimpleNamespace(
+			name="OCR-IMP-EMAIL",
+			status="Error",
+			source_type="Gemini Email",
+			drive_file_id=None,
+			source_filename="invoice.pdf",
+			db_set=MagicMock(),
+		)
+
+		def get_doc_side_effect(doctype, name=None):
+			if doctype == "OCR Import":
+				return doc
+			if doctype == "File":
+				return mock_file
+			return MagicMock()
+
+		mock_frappe.get_doc.side_effect = get_doc_side_effect
+		mock_frappe.get_all.return_value = [
+			SimpleNamespace(name="FILE-001", file_url="/private/files/invoice.pdf")
+		]
+		mock_frappe.db.count.return_value = 0
+		mock_frappe.enqueue = MagicMock()
+
+		result = erpocr_integration.api.retry_gemini_extraction("OCR-IMP-EMAIL")
+
+		mock_frappe.enqueue.assert_called_once()
+		call_kwargs = mock_frappe.enqueue.call_args[1]
+		assert call_kwargs["pdf_content"] == b"%PDF-1.4 email pdf"
+		assert result is not None

@@ -398,6 +398,56 @@ class TestCreatePurchaseReceipt:
 		assert pr_item["purchase_order"] == "PO-00001"
 		assert pr_item["purchase_order_item"] == "poi-001"
 
+	def test_pr_po_fallback_when_row_refs_missing(self, mock_frappe):
+		"""PR auto-matches PO items by item_code when row-level refs are missing."""
+		mock_pr = MagicMock()
+		mock_pr.name = "PR-00003"
+		mock_pr.items = []
+		mock_frappe.get_doc.return_value = mock_pr
+
+		def db_get_value_side_effect(doctype, name, fields=None, **kw):
+			if doctype == "OCR Delivery Note":
+				return SimpleNamespace(purchase_order_result=None, purchase_receipt=None)
+			if doctype == "Purchase Order Item":
+				return 100.0  # PO rate
+			if doctype == "Item" and fields == "is_stock_item":
+				return 1
+			if doctype == "Item":
+				return SimpleNamespace(last_purchase_rate=50, standard_rate=60)
+			return None
+
+		mock_frappe.db.get_value.side_effect = db_get_value_side_effect
+		mock_frappe.get_cached_doc.return_value = SimpleNamespace(
+			dn_default_warehouse="",
+			default_warehouse="",
+			get=lambda k, d=None: d,
+		)
+		# Return PO items for the fallback lookup
+		mock_frappe.get_all.return_value = [
+			SimpleNamespace(name="poi-auto-001", item_code="SR-12-6"),
+		]
+
+		items = [
+			_make_dn_item(
+				item_code="SR-12-6",
+				purchase_order_item=None,  # No row-level ref (user skipped Match PO Items)
+				qty=50,
+			)
+		]
+		doc = _make_ocr_dn(
+			status="Matched",
+			document_type="Purchase Receipt",
+			purchase_order="PO-00001",
+			items=items,
+		)
+		doc.create_purchase_receipt()
+
+		call_args = mock_frappe.get_doc.call_args
+		pr_dict = call_args[0][0]
+		pr_item = pr_dict["items"][0]
+		assert pr_item["purchase_order"] == "PO-00001"
+		assert pr_item["purchase_order_item"] == "poi-auto-001"
+
 
 # ---------------------------------------------------------------------------
 # TestUnlinkDocument

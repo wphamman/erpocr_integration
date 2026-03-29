@@ -153,16 +153,26 @@ def _run_fleet_matching(ocr_fleet, settings):
 	_match_vehicle(ocr_fleet, settings)
 
 
+def _clear_vehicle_links(ocr_fleet):
+	"""Clear all vehicle-derived fields (used on unmatched paths and retry)."""
+	ocr_fleet.fleet_vehicle = ""
+	ocr_fleet.vehicle_match_status = "Unmatched"
+	ocr_fleet.fleet_card_supplier = ""
+	ocr_fleet.posting_mode = ""
+	ocr_fleet.expense_account = ""
+	ocr_fleet.cost_center = ""
+
+
 def _match_vehicle(ocr_fleet, settings):
 	"""Match extracted vehicle_registration to Fleet Vehicle."""
 	reg = (ocr_fleet.vehicle_registration or "").strip().upper()
 	if not reg:
-		ocr_fleet.vehicle_match_status = "Unmatched"
+		_clear_vehicle_links(ocr_fleet)
 		return
 
 	# Check if Fleet Vehicle DocType exists (fleet_management app may not be installed)
 	if not frappe.db.exists("DocType", "Fleet Vehicle"):
-		ocr_fleet.vehicle_match_status = "Unmatched"
+		_clear_vehicle_links(ocr_fleet)
 		return
 
 	# Exact match on registration
@@ -208,12 +218,7 @@ def _match_vehicle(ocr_fleet, settings):
 			_apply_vehicle_config(ocr_fleet, v, settings)
 			return
 
-	ocr_fleet.fleet_vehicle = ""
-	ocr_fleet.vehicle_match_status = "Unmatched"
-	ocr_fleet.fleet_card_supplier = ""
-	ocr_fleet.posting_mode = ""
-	ocr_fleet.expense_account = ""
-	ocr_fleet.cost_center = ""
+	_clear_vehicle_links(ocr_fleet)
 
 
 def _apply_vehicle_config(ocr_fleet, vehicle, settings):

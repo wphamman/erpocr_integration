@@ -382,7 +382,7 @@ class TestMatchVehicle:
 		_match_vehicle(doc, settings)
 
 		assert doc.vehicle_match_status == "Unmatched"
-		assert doc.fleet_vehicle is None
+		assert doc.fleet_vehicle == ""
 
 	def test_registration_uppercased(self, mock_frappe):
 		"""Registration is uppercased for matching."""
