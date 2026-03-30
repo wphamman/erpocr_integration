@@ -63,7 +63,7 @@ Now you can scan a slip, tap the home screen shortcut, and upload — all in a f
 1. Forward the invoice email (with PDF or image attached) to the designated email address
 2. That's it — the system checks for new emails every hour
 
-The attachment is extracted automatically. You can forward emails with multiple attachments — each one is processed separately. Both PDF and image attachments are accepted.
+The attachment is extracted automatically. You can forward emails with multiple attachments — each one is processed separately. Both PDF and image attachments are accepted. A copy of the file is saved on the record, so the accounting team can retry extraction even after the original email is deleted.
 
 ### Option C: Manual Upload in ERPNext
 

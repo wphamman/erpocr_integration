@@ -246,7 +246,7 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | **Matched** | All suppliers and items auto-matched | Select document type and create the document |
 | **Draft Created** | Document draft created, not yet submitted | Review and submit the draft in ERPNext |
 | **Completed** | Draft has been submitted | All done |
-| **Error** | Something went wrong during extraction | Check details, click Retry Extraction, or re-upload |
+| **Error** | Something went wrong during extraction | Check details, click Retry Extraction (works even for email-sourced imports), or re-upload |
 
 ---
 
@@ -274,6 +274,7 @@ The more invoices you process, the less manual work is needed. After a few invoi
 | Problem | What to Do |
 |---|---|
 | Status stuck on "Pending" for more than 5 minutes | The background job may have failed. Check Error Log, or try uploading again. |
+| Retry shows "Original file not available" | This shouldn't happen for recent imports. All sources (manual upload, email, Drive) now save a copy of the file. For very old imports created before this fix, re-upload the file. |
 | Many files failing with "429 Too Many Requests" | You've hit the Gemini API rate limit. The free tier only allows 15 requests/minute and 1,500/day. Link a billing account in Google AI Studio to upgrade to Tier 1 (1,000 RPM). Failed files will auto-retry on the next Drive scan poll (every 15 min). |
 | Supplier not matching | The supplier name on the invoice may differ from ERPNext (e.g. "ABC Pty Ltd" vs "ABC (Pty) Ltd"). Select manually and confirm — next time it will match. |
 | Items not matching | Item descriptions on invoices often differ from ERPNext item names. Confirm once and it learns. |

@@ -130,7 +130,7 @@ The accounting team then reviews the data and creates a Purchase Invoice from it
 Usually 5–30 seconds after the system picks up the file. The folder is checked every 15 minutes, so there may be a short wait before processing starts.
 
 **What if the vehicle registration isn't on the slip?**
-The system will create the record but mark the vehicle as "Unmatched". The accounting team will link it to the correct vehicle manually.
+The system will create the record but mark the vehicle as "Unmatched" and the slip stays in "Needs Review" status. The accounting team must link it to the correct Fleet Vehicle in ERPNext before a Purchase Invoice can be created — this ensures every fuel/toll charge is traceable to a verified vehicle.
 
 **What if I take a blurry photo?**
 The AI will try its best, but blurry or faded slips reduce accuracy. The accounting team will see a low confidence score and verify the data. Scan slips as soon as possible — thermal paper fades fast.
