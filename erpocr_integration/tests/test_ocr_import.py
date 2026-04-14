@@ -19,7 +19,9 @@ from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
 
 class TestResolveOcrDescription:
 	def test_prefers_description_ocr(self):
-		item = SimpleNamespace(description_ocr="Widget for Project X", item_name="WIDG-01", item_code="WIDG-01")
+		item = SimpleNamespace(
+			description_ocr="Widget for Project X", item_name="WIDG-01", item_code="WIDG-01"
+		)
 		assert _resolve_ocr_description(item) == "Widget for Project X"
 
 	def test_falls_back_to_user_edited_item_name(self):
@@ -43,6 +45,7 @@ class TestResolveOcrDescription:
 	def test_tolerates_none_fields(self):
 		item = SimpleNamespace(description_ocr=None, item_name=None, item_code=None)
 		assert _resolve_ocr_description(item) == ""
+
 
 # ---------------------------------------------------------------------------
 # Helpers
