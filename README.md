@@ -12,7 +12,7 @@
   <a href="https://github.com/wphamman/erpocr_integration/blob/master/license.txt">
     <img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License: GPLv3">
   </a>
-  <img src="https://img.shields.io/badge/version-0.8.2-green" alt="Version 0.8.2">
+  <img src="https://img.shields.io/badge/version-0.8.4-green" alt="Version 0.8.4">
   <img src="https://img.shields.io/badge/ERPNext-v15-blue" alt="ERPNext v15">
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p>

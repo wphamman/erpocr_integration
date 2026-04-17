@@ -140,6 +140,9 @@ def _run_statement_matching(ocr_statement) -> None:
 @frappe.whitelist()
 def rereconcile_statement(statement_name: str) -> None:
 	"""Re-run reconciliation after manual supplier change."""
+	if not frappe.has_permission("OCR Statement", "write", statement_name):
+		frappe.throw(_("You don't have permission to re-reconcile this statement."))
+
 	doc = frappe.get_doc("OCR Statement", statement_name)
 	if not doc.supplier:
 		frappe.throw(_("Please select a supplier first."))
