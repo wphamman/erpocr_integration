@@ -357,9 +357,7 @@ bench restart
 - [x] Email move: standard IMAP `COPY` + `STORE \Deleted` is now the primary path; X-GM-LABELS kept as a fallback for label-only Gmail setups (more reliable across Gmail Workspace)
 - [x] Statement auto-refresh: Purchase Invoice `on_submit`/`on_cancel` re-runs reconciliation on any OCR Statement in status "Reconciled" for that supplier (Reviewed statements untouched); failures never block PI submit
 - [x] Stats role widened: `System Manager` + `Accounts Manager` (owner/finance) — OCR Manager (operations) stays off the dashboard
-
-### Future — Email Monitor Hardening
-- [ ] Add `\Seen` flag removal guard after Phase 2 read-write operations (prevent accidentally marking emails as read)
+- [x] `\Seen` removal guard: any email fetched in Phase 1 but not successfully moved gets `STORE -FLAGS \Seen` in Phase 2, so misbehaving IMAP proxies can't strand failed emails out of the UNSEEN search
 
 ## Configuration
 

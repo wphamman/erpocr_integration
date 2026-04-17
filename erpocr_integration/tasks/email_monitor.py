@@ -77,9 +77,12 @@ def poll_email_inbox():
 					message=f"Failed to process email UID {email_uid}\n{frappe.get_traceback()}",
 				)
 
-		# Phase 2: Read-write — move processed emails to "OCR Processed".
-		# Re-select the folder in read-write mode so STORE commands work.
-		if uids_to_move:
+		# Phase 2: Read-write — move processed emails to "OCR Processed" and
+		# clear \Seen on any emails we touched but did NOT successfully process,
+		# so the next UNSEEN poll retries them. We enter this block whenever we
+		# examined any emails (not just when we have successful moves) so the
+		# flag-clear pass runs even on all-failed batches.
+		if email_uids:
 			mail.close()
 			if not _select_folder(mail, folder_name, readonly=False):
 				frappe.log_error(
@@ -91,7 +94,8 @@ def poll_email_inbox():
 			# Validate UIDs still exist after re-select.  Handles two edge cases:
 			# - UIDVALIDITY changed between phases (all UIDs become invalid)
 			# - Messages moved/deleted between phases (individual UIDs gone)
-			uid_csv = b",".join(uids_to_move).decode()
+			all_fetched_uids = list(email_uids)
+			uid_csv = b",".join(all_fetched_uids).decode()
 			status, data = mail.uid("search", None, f"UID {uid_csv}")
 			if status == "OK" and data[0]:
 				valid_uids = set(data[0].split())
@@ -102,12 +106,14 @@ def poll_email_inbox():
 						f"(moved between phases), skipping"
 					)
 				uids_to_move = [u for u in uids_to_move if u in valid_uids]
+				all_fetched_uids = [u for u in all_fetched_uids if u in valid_uids]
 			else:
 				# Search failed or returned empty — none of the UIDs are valid
 				frappe.logger().warning(
 					"Email monitoring: UID validation returned no results, skipping all moves"
 				)
 				uids_to_move = []
+				all_fetched_uids = []
 
 			for email_uid in uids_to_move:
 				try:
@@ -128,6 +134,19 @@ def poll_email_inbox():
 						title="Email Monitoring Error",
 						message=f"Failed to move email UID {email_uid} to processed\n{frappe.get_traceback()}",
 					)
+
+			# \Seen removal guard — for any email we examined but did not
+			# successfully process (failed Phase 1 or failed UID validation),
+			# clear \Seen so the next UNSEEN poll picks it up again. Phase 1
+			# uses BODY.PEEK[] in readonly mode and should never set \Seen,
+			# but some IMAP proxies have been observed to set it anyway. This
+			# pass is best-effort defensive — errors are swallowed.
+			failed_uids = [u for u in all_fetched_uids if u not in uids_to_move]
+			for email_uid in failed_uids:
+				try:
+					mail.uid("store", email_uid, "-FLAGS", "\\Seen")
+				except Exception:
+					pass
 
 			# Expunge deleted messages (if any were marked for deletion)
 			try:

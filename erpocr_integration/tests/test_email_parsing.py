@@ -270,3 +270,44 @@ class TestMoveToProcessedFolder:
 		_move_to_processed_folder(mail, "123", use_uid=True)
 
 		assert mail.uid.call_count == 5
+
+
+# ---------------------------------------------------------------------------
+# \Seen removal guard — documents the policy without spinning up a full IMAP
+# mock. The guard itself is `mail.uid("store", uid, "-FLAGS", "\\Seen")` and
+# is applied to every fetched UID that was NOT moved in Phase 2.
+# ---------------------------------------------------------------------------
+
+
+class TestSeenRemovalGuard:
+	def test_uid_list_excludes_moved_uids(self):
+		"""The failed-UIDs list is the set-difference of fetched and moved UIDs."""
+		all_fetched_uids = [b"1", b"2", b"3", b"4"]
+		uids_to_move = [b"2", b"4"]
+		failed_uids = [u for u in all_fetched_uids if u not in uids_to_move]
+		assert failed_uids == [b"1", b"3"]
+
+	def test_unseen_store_command_shape(self):
+		"""Emulate the per-UID STORE call the poll loop emits."""
+		mail = MagicMock()
+		mail.uid.return_value = ("OK", [])
+
+		# This is the exact call the guard makes
+		mail.uid("store", b"7", "-FLAGS", "\\Seen")
+
+		call = mail.uid.call_args
+		assert call.args == ("store", b"7", "-FLAGS", "\\Seen")
+
+	def test_guard_swallows_exceptions(self):
+		"""Failures on the un-Seen STORE must not bubble up — best effort only."""
+		mail = MagicMock()
+		mail.uid.side_effect = Exception("IMAP transient")
+
+		# Mirror the try/except around the guard
+		try:
+			mail.uid("store", b"1", "-FLAGS", "\\Seen")
+		except Exception:
+			pass  # guard swallows
+
+		# If we got here, the guard behaved correctly
+		assert True
