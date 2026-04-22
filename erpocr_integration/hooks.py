@@ -23,7 +23,9 @@ doctype_js = {
 	"OCR Fleet Slip": "public/js/ocr_fleet_slip.js",
 	"OCR Statement": "public/js/ocr_statement.js",
 }
-# doctype_list_js = {"DocType": "public/js/doctype_list.js"}
+doctype_list_js = {
+	"OCR Import": "public/js/ocr_import_list.js",
+}
 
 # Home Pages
 # ----------

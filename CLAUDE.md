@@ -359,6 +359,11 @@ bench restart
 - [x] Stats role widened: `System Manager` + `Accounts Manager` (owner/finance) — OCR Manager (operations) stays off the dashboard
 - [x] `\Seen` removal guard: any email fetched in Phase 1 but not successfully moved gets `STORE -FLAGS \Seen` in Phase 2, so misbehaving IMAP proxies can't strand failed emails out of the UNSEEN search
 
+### v1.0 — Stable + Operational Polish
+- [x] CHANGELOG.md curated from git history (Phases 1–9 + all point releases)
+- [x] Audit log: `track_changes: 1` is enabled on OCR Import / DN / Fleet Slip / Statement parent DocTypes — Frappe's standard Version log captures every supplier/item-match override (including child-table diffs) and surfaces them on each form's Activity timeline. No custom audit code needed; the trail is already there.
+- [x] Bulk actions on OCR Import list view (`public/js/ocr_import_list.js`): "Create Purchase Invoice" runs `create_purchase_invoice` over selected Matched/Needs Review records; "Unlink & Reset Drafts" runs `unlink_document` over selected Draft Created records. Per-record errors are surfaced in a summary dialog; status guards on the existing whitelisted methods prevent unsafe operations.
+
 ## Configuration
 
 ### Getting Gemini API Key
