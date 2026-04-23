@@ -2,6 +2,12 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-04-23
+
+### Fixed
+- Item codes selected manually on an OCR Import now flow through to the created Purchase Invoice / Purchase Receipt correctly. If the user had previously run "Match PO Items" or "Match PR Items" and then changed an item_code on the OCR row, the draft PI/PR was being created with the *old* item_code because ERPNext's PI-from-PR sync resynced it from the stale `pr_detail` / `po_detail` ref. Both the client and server now drop those refs when the OCR row's item_code no longer matches the referenced PO/PR item's item_code.
+- Manual supplier and item overrides now teach the system. Previously, the alias-save on_update gate required `match_status == "Confirmed"`, but the UI never flipped match_status when the user picked a value manually — so the same OCR text hit the matcher as Unmatched forever. The form now auto-sets `match_status = "Confirmed"` (and `supplier_match_status = "Confirmed"`) when the user picks from the Link dropdown, so the alias saves on the next write.
+
 ## [1.0.1] — 2026-04-22
 
 ### Fixed
@@ -198,6 +204,7 @@ First stable release. The full pipeline — invoices, delivery notes, fleet slip
 - Supplier and item matching with alias learning.
 - Automatic draft PI creation with tax, currency, and PO linkage.
 
+[1.0.2]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.2
 [1.0.1]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.1
 [1.0.0]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.0
 [0.9.1]: https://github.com/wphamman/erpocr_integration/releases/tag/v0.9.1

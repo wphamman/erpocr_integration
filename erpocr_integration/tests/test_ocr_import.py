@@ -1188,3 +1188,119 @@ class TestMarkNoAction:
 		doc._update_status()
 
 		assert doc.status == "No Action"
+
+
+# ---------------------------------------------------------------------------
+# Stale PO/PR item-ref clearing at create time
+#
+# Scenario: user runs Match PO / Match PR (captures po_detail/pr_detail by
+# matching OCR item_codes at that moment), then changes item_code on the OCR
+# row. Without the stale-ref guard, ERPNext's PI/PR-from-PO/PR sync pulls the
+# *old* PR/PO item_code back onto the new PI/PR at insert time, and the user
+# has to reselect item_codes on the draft.
+# ---------------------------------------------------------------------------
+
+
+def _stale_ref_db_get_value(po_item_codes=None, pr_item_codes=None, **handler_kwargs):
+	"""Return a db.get_value side_effect that also answers Purchase Order Item and
+	Purchase Receipt Item item_code lookups from caller-provided dicts."""
+	base = _db_get_value_handler(**handler_kwargs)
+	po_item_codes = po_item_codes or {}
+	pr_item_codes = pr_item_codes or {}
+
+	def handler(doctype, name, fields=None, **kwargs):
+		if doctype == "Purchase Order Item":
+			return po_item_codes.get(name)
+		if doctype == "Purchase Receipt Item":
+			return pr_item_codes.get(name)
+		return base(doctype, name, fields, **kwargs)
+
+	return handler
+
+
+class TestStalePORefClearing:
+	def test_pi_drops_stale_po_detail_when_item_code_changed(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="NEW-CODE", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		# Saved ref points at a PO item with a DIFFERENT item_code
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_codes={"po-item-row-1": "OLD-CODE"}
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		pi_item = pi_dict["items"][0]
+		assert pi_item["item_code"] == "NEW-CODE"
+		# Stale po_detail must have been dropped so ERPNext doesn't resync it
+		assert "po_detail" not in pi_item
+		assert "purchase_order" not in pi_item
+
+	def test_pi_keeps_matching_po_detail(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="MATCH-CODE", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_codes={"po-item-row-1": "MATCH-CODE"}
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["po_detail"] == "po-item-row-1"
+		assert pi_item["purchase_order"] == "PO-00001"
+
+	def test_pi_drops_stale_pr_detail_when_item_code_changed(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			purchase_receipt_link="PR-00001",
+			items=[
+				_make_item(
+					item_code="NEW-CODE",
+					purchase_order_item="po-item-row-1",
+					pr_detail="pr-item-row-1",
+				)
+			],
+		)
+		mock_frappe.db.exists.return_value = True  # PR-belongs-to-PO validation
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		# Both PO and PR saved refs point at OLD item_code
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_codes={"po-item-row-1": "OLD-CODE"},
+			pr_item_codes={"pr-item-row-1": "OLD-CODE"},
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["item_code"] == "NEW-CODE"
+		assert "po_detail" not in pi_item
+		assert "pr_detail" not in pi_item
+
+	def test_pr_drops_stale_po_ref_when_item_code_changed(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Receipt",
+			status="Matched",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="NEW-CODE", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PR-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_codes={"po-item-row-1": "OLD-CODE"},
+			item_is_stock=1,
+		)
+
+		doc.create_purchase_receipt()
+
+		pr_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pr_item["item_code"] == "NEW-CODE"
+		assert "purchase_order_item" not in pr_item
+		assert "purchase_order" not in pr_item

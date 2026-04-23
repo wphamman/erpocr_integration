@@ -325,11 +325,16 @@ frappe.ui.form.on('OCR Import', {
 		}
 	},
 
-	// Stale field clearing: when supplier changes, always clear PO/PR and item-level refs
+	// Stale field clearing: when supplier changes, always clear PO/PR and item-level refs.
+	// Also mark the supplier as Confirmed so the alias saves on next save — otherwise a
+	// manual override never teaches the system and the same OCR text never auto-matches.
 	supplier: function(frm) {
 		frm.set_value('purchase_order', '');
 		frm.set_value('purchase_receipt_link', '');
 		clear_item_po_pr_fields(frm);
+		if (frm.doc.supplier && frm.doc.supplier_name_ocr) {
+			frm.set_value('supplier_match_status', 'Confirmed');
+		}
 	},
 
 	// When PO changes, clear PR link and item-level refs
@@ -370,6 +375,27 @@ frappe.ui.form.on('OCR Import', {
 					}
 				}
 			});
+		}
+	}
+});
+
+// When the user manually picks or changes an item_code on an OCR row, treat it as an
+// explicit confirmation so the alias saves (otherwise the same OCR text stays Unmatched
+// forever) and clear any stale PO/PR item refs — those refs were captured against the
+// previous item_code and, if left in place, ERPNext's PI-from-PR sync will overwrite
+// the user's new item_code at insert time.
+frappe.ui.form.on('OCR Import Item', {
+	item_code: function(frm, cdt, cdn) {
+		let row = locals[cdt][cdn];
+		if (!row.item_code) return;
+		if (row.match_status !== 'Confirmed') {
+			frappe.model.set_value(cdt, cdn, 'match_status', 'Confirmed');
+		}
+		if (row.purchase_order_item) {
+			frappe.model.set_value(cdt, cdn, 'purchase_order_item', '');
+		}
+		if (row.pr_detail) {
+			frappe.model.set_value(cdt, cdn, 'pr_detail', '');
 		}
 	}
 });

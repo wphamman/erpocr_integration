@@ -467,9 +467,16 @@ class OCRImport(Document):
 			if settings.default_warehouse:
 				pi_item["warehouse"] = settings.default_warehouse
 
-			# PO refs (links PI item back to PO item — marks PO as billed)
-			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback
+			# PO refs (links PI item back to PO item — marks PO as billed).
+			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback.
+			# Safety: if the saved ref points at a PO item with a different item_code
+			# than the OCR row's current item_code, drop it — ERPNext's PI-from-PO
+			# sync would otherwise overwrite the user's item_code at insert time.
 			po_detail = item.purchase_order_item
+			if po_detail and item.item_code:
+				ref_code = frappe.db.get_value("Purchase Order Item", po_detail, "item_code")
+				if ref_code and ref_code != item.item_code:
+					po_detail = None
 			if not po_detail and self.purchase_order and item.item_code:
 				candidates = po_items_by_code.get(item.item_code, [])
 				if candidates:
@@ -479,9 +486,17 @@ class OCRImport(Document):
 				pi_item["purchase_order"] = self.purchase_order
 				pi_item["po_detail"] = po_detail
 
-			# PR refs — only valid when a PO is also set (PR must be against the PO)
-			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback
+			# PR refs — only valid when a PO is also set (PR must be against the PO).
+			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback.
+			# Safety: same stale-ref check as for PO — drop pr_detail if it points at a
+			# PR row whose item_code disagrees with the OCR row's current item_code.
+			# Without this, changing item_code after running Match PR Items causes ERPNext
+			# to sync the stale PR's item_code back onto the PI at insert time.
 			pr_detail = item.pr_detail
+			if pr_detail and item.item_code:
+				ref_code = frappe.db.get_value("Purchase Receipt Item", pr_detail, "item_code")
+				if ref_code and ref_code != item.item_code:
+					pr_detail = None
 			if not pr_detail and self.purchase_receipt_link and self.purchase_order and item.item_code:
 				candidates = pr_items_by_code.get(item.item_code, [])
 				if candidates:
@@ -633,10 +648,16 @@ class OCRImport(Document):
 			if settings.default_warehouse:
 				pr_item["warehouse"] = settings.default_warehouse
 
-			# PO refs (links PR item back to PO item — marks PO as received)
-			# Note: PR uses field name `purchase_order_item`, not `po_detail` (ERPNext v15 schema)
-			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback
+			# PO refs (links PR item back to PO item — marks PO as received).
+			# Note: PR uses field name `purchase_order_item`, not `po_detail` (ERPNext v15 schema).
+			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback.
+			# Safety: drop the saved ref if it points at a PO row with a different
+			# item_code than the OCR row's current item_code (same rationale as PI).
 			po_detail = item.purchase_order_item
+			if po_detail and item.item_code:
+				ref_code = frappe.db.get_value("Purchase Order Item", po_detail, "item_code")
+				if ref_code and ref_code != item.item_code:
+					po_detail = None
 			if not po_detail and self.purchase_order and item.item_code:
 				candidates = po_items_by_code.get(item.item_code, [])
 				if candidates:
