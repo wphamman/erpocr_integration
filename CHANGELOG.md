@@ -2,6 +2,11 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-04-23
+
+### Added
+- New role **OCR Fleet Slip Reader** — narrow, read-only access to `OCR Fleet Slip` only. Intended for cross-app integration with `fleet_management`, where the Fleet Manager needs to click through from the Fuel Efficiency Tracker to a fuel slip scan for fraud review (Wesbank-reported litres vs driver's handwritten correction). Grants `read + report + print` on `OCR Fleet Slip` and **nothing else** — explicitly excluded from `OCR Statement`, `OCR Supplier Alias`, `OCR Delivery Note`, `OCR Import`, and every other OCR doctype so supplier/invoice data stays private. Shipped as a fixture; assign via `User → Roles` after migrate. Scope is locked down by a regression test (`tests/test_fleet_slip_reader_role.py`) that fails the build if the role appears anywhere beyond its intended doctype.
+
 ## [1.0.2] — 2026-04-23
 
 ### Fixed
@@ -204,6 +209,7 @@ First stable release. The full pipeline — invoices, delivery notes, fleet slip
 - Supplier and item matching with alias learning.
 - Automatic draft PI creation with tax, currency, and PO linkage.
 
+[1.0.3]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.3
 [1.0.2]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.2
 [1.0.1]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.1
 [1.0.0]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.0

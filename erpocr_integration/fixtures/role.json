@@ -7,5 +7,13 @@
 		"desk_access": 1,
 		"search_bar": 1,
 		"notifications": 1
+	},
+	{
+		"doctype": "Role",
+		"name": "OCR Fleet Slip Reader",
+		"role_name": "OCR Fleet Slip Reader",
+		"is_custom": 0,
+		"desk_access": 1,
+		"disabled": 0
 	}
 ]
