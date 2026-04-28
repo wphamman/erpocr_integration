@@ -150,9 +150,7 @@ class OCRFleetSlip(Document):
 		# so OCR-generated fleet PIs land in those reports without users having
 		# to remember to tag the vehicle. Runtime feature-detect only — no
 		# import/dependency on fleet_management.
-		if self.fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field(
-			"custom_fleet_vehicle"
-		):
+		if self.fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle"):
 			pi_dict["custom_fleet_vehicle"] = self.fleet_vehicle
 
 		# Apply tax template
