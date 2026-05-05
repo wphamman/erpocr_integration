@@ -106,6 +106,68 @@ def match_item(ocr_text: str) -> tuple[str | None, str]:
 	return None, "Unmatched"
 
 
+def match_item_by_supplier_part(supplier: str, product_code: str) -> tuple[str | None, str]:
+	"""
+	Match using ERPNext's standard `Item Supplier` child table:
+	(supplier, supplier_part_no=product_code) → item_code.
+
+	This is the highest-precision matching tier — supplier-scoped, deterministic,
+	and uses the exact mapping ERPNext is designed to capture.
+
+	Multi-hit policy: if the same (supplier, supplier_part_no) appears against
+	more than one parent Item, the data is ambiguous (ERPNext does not enforce
+	global uniqueness on this pair). We skip the match entirely and log so the
+	site can clean up the duplicates — better than silently picking one and
+	giving the UI a false sense of direction.
+
+	Args:
+		supplier: ERPNext Supplier name (the OCR Import's confirmed supplier)
+		product_code: Supplier's own SKU as printed on the invoice
+
+	Returns:
+		tuple: (item_code, "Auto Matched") on a single unambiguous hit,
+		       (None, "Unmatched") on zero hits or multi-hit ambiguity.
+	"""
+	if not supplier or not product_code:
+		return None, "Unmatched"
+
+	supplier = supplier.strip()
+	product_code = product_code.strip()
+	if not supplier or not product_code:
+		return None, "Unmatched"
+
+	# Item Supplier is a child table; query by parenttype + supplier + supplier_part_no
+	rows = frappe.get_all(
+		"Item Supplier",
+		filters={
+			"parenttype": "Item",
+			"supplier": supplier,
+			"supplier_part_no": product_code,
+		},
+		fields=["parent"],
+		limit_page_length=2,  # we only need to know "exactly one" vs "more"
+		ignore_permissions=True,
+	)
+
+	if not rows:
+		return None, "Unmatched"
+
+	if len(rows) > 1:
+		# Ambiguous — log for site cleanup, fall through to description tiers
+		frappe.log_error(
+			title="OCR: ambiguous Item Supplier match",
+			message=(
+				f"Supplier '{supplier}' + product_code '{product_code}' "
+				f"resolves to multiple Items: {[r.parent for r in rows]}. "
+				"Falling through to description-based matching. "
+				"Clean up the duplicate Item Supplier rows in ERPNext to enable auto-matching."
+			),
+		)
+		return None, "Unmatched"
+
+	return rows[0].parent, "Auto Matched"
+
+
 def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, str, float]:
 	"""
 	Fuzzy fallback for supplier matching using difflib.SequenceMatcher.

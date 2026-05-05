@@ -132,8 +132,12 @@ class TestPopulateOcrImport:
 
 		assert len(doc.items) == 0
 
-	def test_item_name_uses_product_code_when_available(self, sample_settings):
-		"""item_name should be product_code if present, else description."""
+	def test_product_code_stored_in_own_field(self, sample_settings):
+		"""v1.1+: product_code goes to its own field; item_name = description always.
+
+		Pre-v1.1, product_code was packed into item_name as a matching shortcut.
+		That coupling was dropped in favour of the dedicated field + the new
+		Item Supplier matching tier. See CHANGELOG 1.1.0."""
 		doc = self._make_ocr_import_mock()
 		drive_result = {"file_id": None, "shareable_link": None, "folder_path": None}
 		data = {
@@ -158,8 +162,12 @@ class TestPopulateOcrImport:
 
 		_populate_ocr_import(doc, data, sample_settings, drive_result)
 
-		assert doc.items[0].item_name == "WA-01"  # product_code takes priority
-		assert doc.items[1].item_name == "Service Fee"  # Falls back to description
+		# product_code lives in its own field
+		assert doc.items[0].product_code == "WA-01"
+		assert doc.items[1].product_code == ""
+		# item_name is the description regardless of product_code presence
+		assert doc.items[0].item_name == "Widget A"
+		assert doc.items[1].item_name == "Service Fee"
 
 
 # ---------------------------------------------------------------------------

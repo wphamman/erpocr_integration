@@ -2,6 +2,35 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-04-28
+
+OCR Import item matching now uses ERPNext's standard `Item Supplier` table, and learns supplier-product mappings as users confirm matches. Defaults adapt to the deploying site's data — no Starpops-specific behaviour.
+
+### Schema
+- New field `product_code` on `OCR Import Item` (Data, length 140, read-only). Stores the supplier's own SKU as printed on the invoice — previously this signal was packed into `item_name` as a matching shortcut, which has been dropped in favour of a dedicated field.
+- `_populate_ocr_import` now stores `product_code` separately. `item_name` always holds the description; the old "product_code or description" coupling is gone.
+
+### Matching pipeline
+The item matching pipeline gains two new tiers. New precedence (highest specificity first):
+1. **NEW: `match_item_by_supplier_part`** — looks up `Item Supplier` rows by `(parent.supplier, supplier_part_no=product_code)`. Highest precision because it's supplier-scoped and deterministic. Runs first so a correct supplier-product mapping isn't shadowed by `OCR Item Alias` (which is global, not supplier-scoped). Multi-hit policy: ambiguity is logged and skipped — matching falls through to description tiers rather than picking arbitrarily.
+2. `match_item` — alias / `Item.item_name` / `Item.name` exact match on description (existing).
+3. `match_service_item` — pattern-based service mapping (existing).
+4. `match_item_fuzzy` — difflib fuzzy match on description (existing).
+5. **NEW: `default_item` fallback** — only fires if `OCR Settings.default_item` is configured. Returns `match_status="Suggested"` so the user still confirms (and so `auto_draft` skips it). For sites that haven't set `default_item`, behaviour is unchanged from previous versions.
+
+### Incremental learning (Item Supplier auto-populate)
+- New background job `tasks/learn_item_supplier.py`. When a user confirms an OCR Import item that has all of: `item_code`, `product_code`, parent supplier, and is NOT the `default_item` — the job appends a row to ERPNext's standard `Item Supplier` child table on the matched Item, populating tier 2's lookup for future invoices.
+- **Permission posture**: the job sets the originating user (`frappe.set_user`) and checks `frappe.has_permission("Item", "write")` before touching Item master. **No `ignore_permissions` on `Item.save`** — sites that don't grant Item write to OCR Manager get silent skip + log; matching still works without learning.
+- **Async, deduplicated**: enqueued on the `short` queue with dedup key `item_code:supplier:product_code` so concurrent confirms collapse without races. The job ALSO does a final DB existence re-check before append (defence-in-depth).
+- **Failure-tolerant**: queue glitches and Item validate failures are caught and logged, never break the user's confirm flow.
+- Existing `_save_item_alias` and `_save_service_mapping` now skip when `item_code == default_item` — those mappings would be redundant with tier 5 fallback and pollute the alias / service tables with one-shot rows.
+
+### Why this matters
+Sites that populate `Item Supplier` (the ERPNext-recommended workflow) — or build it up incrementally as users confirm OCR matches — get supplier-product item matches first time, every time, with no per-supplier alias training. Sites that prefer description-only matching keep the existing tier 1/3/4 behaviour. Sites that bulk-process expense invoices can set `default_item` and skip individual confirmation clicks.
+
+### Tests
+- +20 tests across `test_matching.py` (tier 2 with multi-hit), `test_learn_item_supplier.py` (background job: permissions, dedup, idempotency, failure tolerance), `test_ocr_import.py` (on_update flow: default_item skip, enqueue, no-supplier guard, queue-failure resilience), `test_api.py` (product_code stored in own field). 449 tests pass.
+
 ## [1.0.5] — 2026-04-28
 
 Optional `fleet_management` integration: tag fleet PIs with the matched vehicle when both apps are installed.

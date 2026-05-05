@@ -89,6 +89,7 @@ def _make_item(**overrides):
 	"""Create a mock OCR Import Item row."""
 	defaults = dict(
 		description_ocr="Test Item",
+		product_code="",
 		item_code="ITEM-001",
 		item_name="Test Item",
 		qty=1,
@@ -1304,3 +1305,153 @@ class TestStalePORefClearing:
 		assert pr_item["item_code"] == "NEW-CODE"
 		assert "purchase_order_item" not in pr_item
 		assert "purchase_order" not in pr_item
+
+
+# ---------------------------------------------------------------------------
+# on_update — alias / mapping / Item Supplier learning
+# ---------------------------------------------------------------------------
+
+
+class TestOnUpdateLearning:
+	"""Covers v1.1 changes:
+	- skip alias / service mapping / Item Supplier learning when item_code == default_item
+	- enqueue Item Supplier learning when product_code + item_code + supplier are all set
+	"""
+
+	def _settings(self, mock_frappe, default_item="", **overrides):
+		"""Set up OCR Settings cache with the given default_item."""
+		settings = SimpleNamespace(default_item=default_item, **overrides)
+		settings.get = lambda key, default=None: getattr(settings, key, default)
+		mock_frappe.get_cached_doc.return_value = settings
+		return settings
+
+	def test_skips_all_learning_when_item_is_default_item(self, mock_frappe):
+		"""default_item matches: NO alias, NO service mapping, NO Item Supplier enqueue."""
+		self._settings(mock_frappe, default_item="ITEM001")
+		doc = _make_ocr_import(
+			items=[
+				_make_item(
+					item_code="ITEM001",
+					match_status="Confirmed",
+					expense_account="5000 - X - TC",
+					product_code="P-999",
+				)
+			],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+		doc._enqueue_item_supplier_learning = MagicMock()
+
+		doc.on_update()
+
+		doc._save_item_alias.assert_not_called()
+		doc._save_service_mapping.assert_not_called()
+		doc._enqueue_item_supplier_learning.assert_not_called()
+
+	def test_saves_alias_when_item_is_real_stock(self, mock_frappe):
+		"""Real stock item: alias saved as before."""
+		self._settings(mock_frappe, default_item="ITEM001")
+		doc = _make_ocr_import(
+			items=[_make_item(item_code="000060", match_status="Confirmed", product_code="")],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+		doc._enqueue_item_supplier_learning = MagicMock()
+
+		doc.on_update()
+
+		doc._save_item_alias.assert_called_once()
+
+	def test_enqueues_item_supplier_when_all_signals_present(self, mock_frappe):
+		"""Real stock + product_code + supplier → enqueue Item Supplier learning."""
+		self._settings(mock_frappe, default_item="ITEM001")
+		doc = _make_ocr_import(
+			supplier="Acme",
+			items=[
+				_make_item(
+					item_code="000060",
+					match_status="Confirmed",
+					product_code="ACME-STUD-63",
+				)
+			],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+
+		doc.on_update()
+
+		# enqueue went via frappe.enqueue with the right job_id + payload
+		mock_frappe.enqueue.assert_called_once()
+		kwargs = mock_frappe.enqueue.call_args.kwargs
+		assert kwargs["item_code"] == "000060"
+		assert kwargs["supplier"] == "Acme"
+		assert kwargs["product_code"] == "ACME-STUD-63"
+		assert kwargs["queue"] == "short"
+		assert kwargs["deduplicate"] is True
+		assert "000060" in kwargs["job_id"]
+		assert "Acme" in kwargs["job_id"]
+		assert "acme-stud-63" in kwargs["job_id"]  # normalized lower
+
+	def test_skips_enqueue_when_no_product_code(self, mock_frappe):
+		"""No product_code on the row → don't enqueue learning."""
+		self._settings(mock_frappe, default_item="")
+		doc = _make_ocr_import(
+			items=[_make_item(item_code="000060", match_status="Confirmed", product_code="")],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+
+		doc.on_update()
+
+		mock_frappe.enqueue.assert_not_called()
+
+	def test_skips_enqueue_when_no_supplier(self, mock_frappe):
+		"""No supplier on parent → don't enqueue learning."""
+		self._settings(mock_frappe, default_item="")
+		doc = _make_ocr_import(
+			supplier="",
+			items=[_make_item(item_code="000060", match_status="Confirmed", product_code="ACME-STUD-63")],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+
+		doc.on_update()
+
+		mock_frappe.enqueue.assert_not_called()
+
+	def test_does_not_enqueue_when_match_not_confirmed(self, mock_frappe):
+		"""Suggested / Auto Matched / Unmatched: no learning until user confirms."""
+		self._settings(mock_frappe, default_item="")
+		doc = _make_ocr_import(
+			supplier="Acme",
+			items=[_make_item(item_code="000060", match_status="Suggested", product_code="ACME-STUD-63")],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+
+		doc.on_update()
+
+		mock_frappe.enqueue.assert_not_called()
+		doc._save_item_alias.assert_not_called()
+
+	def test_enqueue_failure_does_not_break_save(self, mock_frappe):
+		"""Queue glitch must not propagate and break the user's confirm flow."""
+		self._settings(mock_frappe, default_item="")
+		mock_frappe.enqueue = MagicMock(side_effect=Exception("redis down"))
+
+		doc = _make_ocr_import(
+			supplier="Acme",
+			items=[_make_item(item_code="000060", match_status="Confirmed", product_code="ACME-STUD-63")],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+
+		# Should NOT raise
+		doc.on_update()
+		mock_frappe.log_error.assert_called()

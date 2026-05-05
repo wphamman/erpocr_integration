@@ -140,6 +140,7 @@ def reset_frappe_mock():
 	_frappe_mock.log_error.reset_mock()
 	_frappe_mock.enqueue.reset_mock()
 	_frappe_mock.delete_doc.reset_mock()
+	_frappe_mock.set_user.reset_mock()
 	_frappe_mock.msgprint = MagicMock()
 	_frappe_mock.throw = MagicMock(side_effect=Exception)
 	_frappe_mock.has_permission = MagicMock(return_value=True)

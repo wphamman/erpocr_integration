@@ -121,6 +121,93 @@ class TestMatchItem:
 
 
 # ---------------------------------------------------------------------------
+# match_item_by_supplier_part (Item Supplier lookup, tier 2)
+# ---------------------------------------------------------------------------
+
+
+class TestMatchItemBySupplierPart:
+	def test_empty_supplier(self, mock_frappe):
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("", "P-001")
+		assert result is None
+		assert status == "Unmatched"
+
+	def test_empty_product_code(self, mock_frappe):
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("Acme Trading", "")
+		assert result is None
+		assert status == "Unmatched"
+
+	def test_whitespace_only_inputs(self, mock_frappe):
+		"""Whitespace-only inputs should be treated as empty after strip."""
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("  ", "  ")
+		assert result is None
+		assert status == "Unmatched"
+
+	def test_single_match(self, mock_frappe):
+		"""Exactly one Item Supplier hit → Auto Matched."""
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(parent="ITEM-001")])
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("Acme", "P-001")
+		assert result == "ITEM-001"
+		assert status == "Auto Matched"
+
+		# Verify filters used
+		call_kwargs = mock_frappe.get_all.call_args
+		assert call_kwargs.args[0] == "Item Supplier"
+		filters = call_kwargs.kwargs["filters"]
+		assert filters["parenttype"] == "Item"
+		assert filters["supplier"] == "Acme"
+		assert filters["supplier_part_no"] == "P-001"
+
+	def test_no_match(self, mock_frappe):
+		"""Zero hits → Unmatched, fall through to description tiers."""
+		mock_frappe.get_all = MagicMock(return_value=[])
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("Acme", "P-001")
+		assert result is None
+		assert status == "Unmatched"
+
+	def test_multi_hit_skipped_with_log(self, mock_frappe):
+		"""Multi-hit ambiguity → skip + log; do NOT pick first."""
+		mock_frappe.get_all = MagicMock(
+			return_value=[
+				SimpleNamespace(parent="ITEM-001"),
+				SimpleNamespace(parent="ITEM-002"),
+			]
+		)
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("Acme", "P-001")
+		assert result is None
+		assert status == "Unmatched"
+		# log_error called with the candidate items in the message
+		mock_frappe.log_error.assert_called_once()
+		log_message = mock_frappe.log_error.call_args.kwargs["message"]
+		assert "ITEM-001" in log_message
+		assert "ITEM-002" in log_message
+		assert "Acme" in log_message
+		assert "P-001" in log_message
+
+	def test_strips_inputs(self, mock_frappe):
+		"""Surrounding whitespace is stripped before query."""
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(parent="ITEM-001")])
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, _status = match_item_by_supplier_part("  Acme  ", "  P-001  ")
+		assert result == "ITEM-001"
+		filters = mock_frappe.get_all.call_args.kwargs["filters"]
+		assert filters["supplier"] == "Acme"
+		assert filters["supplier_part_no"] == "P-001"
+
+
+# ---------------------------------------------------------------------------
 # match_supplier_fuzzy
 # ---------------------------------------------------------------------------
 

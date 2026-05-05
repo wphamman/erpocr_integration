@@ -436,7 +436,8 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 			"items",
 			{
 				"description_ocr": description,
-				"item_name": (product_code or description)[:140],
+				"product_code": product_code[:140] if product_code else "",
+				"item_name": description[:140],
 				"qty": line.get("quantity", 1.0),
 				"rate": line.get("unit_price", 0.0),
 				"amount": line.get("amount", 0.0),
@@ -452,9 +453,18 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 
 
 def _run_matching(ocr_import, header_fields: dict, settings):
-	"""Run supplier and item matching on an OCR Import record."""
+	"""Run supplier and item matching on an OCR Import record.
+
+	Item matching pipeline (precedence order):
+	  1. `match_item` (alias / Item.item_name / Item.name exact match on description)
+	  2. `match_item_by_supplier_part` — Item Supplier lookup (supplier, product_code)
+	  3. `match_service_item` — pattern-based service mapping
+	  4. `match_item_fuzzy` — difflib similarity on description
+	  5. `default_item` fallback — set in OCR Settings, status "Suggested"
+	"""
 	from erpocr_integration.tasks.matching import (
 		match_item,
+		match_item_by_supplier_part,
 		match_item_fuzzy,
 		match_service_item,
 		match_supplier,
@@ -462,6 +472,7 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 	)
 
 	fuzzy_threshold = settings.matching_threshold or 80
+	default_item = (settings.get("default_item") or "").strip()
 
 	# Supplier matching
 	if ocr_import.supplier_name_ocr:
@@ -488,13 +499,24 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 	for item in ocr_import.items:
 		matched_item, match_status = None, "Unmatched"
 
-		# Try product_code first (direct item_code match), then description
-		if item.item_name and item.item_name != item.description_ocr:
-			matched_item, match_status = match_item(item.item_name)
+		# Tier 1: Item Supplier lookup (supplier, product_code) → item_code.
+		# Highest precision: supplier-scoped, deterministic. Runs first so a
+		# correct supplier-product mapping isn't shadowed by a global (non
+		# supplier-scoped) description alias from OCR Item Alias.
+		# Auto-populated as users confirm matches (see _enqueue_item_supplier_learning).
+		if ocr_import.supplier and item.product_code:
+			supplier_part_item, supplier_part_status = match_item_by_supplier_part(
+				ocr_import.supplier, item.product_code
+			)
+			if supplier_part_item:
+				matched_item = supplier_part_item
+				match_status = supplier_part_status  # "Auto Matched"
+
+		# Tier 2: alias / exact name / exact item_code (description-based, global)
 		if not matched_item and item.description_ocr:
 			matched_item, match_status = match_item(item.description_ocr)
 
-		# If no item match, try service matching (pattern → item + name + GL + CC)
+		# Tier 3: service mapping (pattern → item + name + GL + CC)
 		if not matched_item and item.description_ocr:
 			service_match = match_service_item(
 				item.description_ocr, company=ocr_import.company, supplier=ocr_import.supplier
@@ -507,12 +529,18 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 				if service_match.get("item_name"):
 					item.item_name = service_match["item_name"]
 
-		# Fuzzy fallback for item
+		# Tier 4: fuzzy on description
 		if not matched_item and item.description_ocr:
 			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(item.description_ocr, fuzzy_threshold)
 			if fuzzy_item:
 				matched_item = fuzzy_item
 				match_status = fuzzy_status  # "Suggested"
+
+		# Tier 5: default_item fallback — only fires if explicitly configured.
+		# Status "Suggested" so user still confirms (and so auto_draft skips it).
+		if not matched_item and default_item:
+			matched_item = default_item
+			match_status = "Suggested"
 
 		if matched_item:
 			item.item_code = matched_item

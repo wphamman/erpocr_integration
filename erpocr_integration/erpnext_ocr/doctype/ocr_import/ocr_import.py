@@ -263,13 +263,68 @@ class OCRImport(Document):
 			if self.supplier_match_status == "Confirmed":
 				self._save_supplier_alias()
 
+		default_item = (frappe.get_cached_doc("OCR Settings").get("default_item") or "").strip()
+
 		for item in self.items:
 			if item.item_code and item.description_ocr and item.match_status == "Confirmed":
+				# Skip alias / service-mapping / Item-Supplier learning for the default
+				# fallback item — those mappings are redundant with tier 5 fallback and
+				# would only pollute the alias / Item Supplier tables with one-shot rows.
+				if item.item_code == default_item:
+					continue
+
 				self._save_item_alias(item)
 
 				# Only save service mapping alongside explicit item confirmation
 				if item.expense_account:
 					self._save_service_mapping(item)
+
+				# Enqueue Item Supplier learning (tier 2 input for future invoices)
+				if self.supplier and item.product_code:
+					self._enqueue_item_supplier_learning(item)
+
+	def _enqueue_item_supplier_learning(self, item):
+		"""Enqueue a background job to write the (supplier, product_code) → item_code
+		mapping into ERPNext's standard `Item Supplier` child table.
+
+		Done out-of-band because:
+		  - `Item.save()` is heavy (full validate + on_update chain on Item).
+		  - For an N-line invoice we'd otherwise pay N x Item.save in user's save path.
+		  - Avoids potential re-entry into OCRImport.on_update via Item hooks.
+
+		Permission posture: the worker uses the originating user's identity and
+		checks `has_permission("Item", "write")` before saving. Sites that don't
+		want OCR Manager mutating Item master simply don't grant Item write to
+		that role — learning is silently skipped, matching still works.
+
+		Dedup key: item_code:supplier:product_code (normalized). Collapses the
+		queue when the same line is confirmed multiple times in quick succession;
+		does NOT replace the in-job DB existence re-check.
+		"""
+		product_code = (item.product_code or "").strip()
+		if not product_code:
+			return
+
+		dedup_key = f"learn_item_supplier:{item.item_code}:{self.supplier}:{product_code.lower()}"
+
+		try:
+			# enqueue_after_commit=True: if the OCR Import transaction rolls back,
+			# the worker is never fired — prevents learning a mapping from a
+			# confirmation that never committed.
+			frappe.enqueue(
+				"erpocr_integration.tasks.learn_item_supplier.learn_item_supplier",
+				queue="short",
+				job_id=dedup_key,
+				deduplicate=True,
+				enqueue_after_commit=True,
+				item_code=item.item_code,
+				supplier=self.supplier,
+				product_code=product_code,
+				originating_user=frappe.session.user,
+			)
+		except Exception:
+			# Non-critical — never break OCR confirm flow on a queue glitch.
+			frappe.log_error(title="OCR: failed to enqueue Item Supplier learning")
 
 	def _save_supplier_alias(self):
 		"""Save supplier alias for future auto-matching."""

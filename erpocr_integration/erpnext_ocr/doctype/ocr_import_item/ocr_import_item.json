@@ -6,6 +6,7 @@
 	"engine": "InnoDB",
 	"field_order": [
 		"description_ocr",
+		"product_code",
 		"item_code",
 		"item_name",
 		"qty",
@@ -26,6 +27,13 @@
 			"in_list_view": 1,
 			"label": "OCR Description",
 			"read_only": 1
+		},
+		{
+			"fieldname": "product_code",
+			"fieldtype": "Data",
+			"label": "Supplier Product Code",
+			"read_only": 1,
+			"description": "The supplier's own SKU as printed on the invoice. Used by matching to look up `Item Supplier` and learn supplier-product mappings as users confirm matches."
 		},
 		{
 			"fieldname": "item_code",
