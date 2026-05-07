@@ -472,9 +472,7 @@ def route_to_invoice_pipeline(ocr_fleet_name: str):
 	# Completed / Draft Created already have downstream documents and shouldn't
 	# be re-routed; No Action records are already terminal.
 	if ocr_fleet.status in ("Completed", "Draft Created", "No Action"):
-		frappe.throw(
-			_("Cannot re-route a fleet slip in '{0}' status.").format(ocr_fleet.status)
-		)
+		frappe.throw(_("Cannot re-route a fleet slip in '{0}' status.").format(ocr_fleet.status))
 
 	# Find the original scan attachment
 	files = frappe.get_all(
@@ -541,7 +539,9 @@ def route_to_invoice_pipeline(ocr_fleet_name: str):
 			title="Fleet Re-route Enqueue Error",
 			message=f"Failed to enqueue re-routed extraction for {ocr_fleet_name} → {ocr_import.name}\n{frappe.get_traceback()}",
 		)
-		frappe.throw(_("Failed to start invoice extraction. The OCR Import was created but processing did not start."))
+		frappe.throw(
+			_("Failed to start invoice extraction. The OCR Import was created but processing did not start.")
+		)
 
 	# Race guard: reload before the No Action save and re-check terminal statuses.
 	# A concurrent doc_event (e.g. PI submit / cancel from a previously linked PI)

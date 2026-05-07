@@ -781,9 +781,7 @@ class TestRouteToInvoicePipeline:
 			return MagicMock()
 
 		mock_frappe.get_doc.side_effect = get_doc_side_effect
-		mock_frappe.get_all.return_value = [
-			SimpleNamespace(name="FILE-SRC", file_name="fleet_scan_001.pdf")
-		]
+		mock_frappe.get_all.return_value = [SimpleNamespace(name="FILE-SRC", file_name="fleet_scan_001.pdf")]
 		mock_frappe.has_permission = MagicMock(return_value=True)
 		mock_frappe.session.user = "danell@starpops.co.za"
 		# Replace enqueue with a fresh mock — conftest's reset_mock() clears
@@ -871,7 +869,10 @@ class TestRouteToInvoicePipeline:
 		# OCR Import status was rolled forward to Error before throw
 		set_value_calls = [c.args for c in mock_frappe.db.set_value.call_args_list]
 		assert any(
-			args[0] == "OCR Import" and args[1] == "OCR-IMP-NEW" and args[2] == "status" and args[3] == "Error"
+			args[0] == "OCR Import"
+			and args[1] == "OCR-IMP-NEW"
+			and args[2] == "status"
+			and args[3] == "Error"
 			for args in set_value_calls
 		)
 
