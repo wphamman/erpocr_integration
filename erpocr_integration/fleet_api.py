@@ -244,13 +244,16 @@ def _fuzzy_match_vehicle(normalized_reg: str, all_vehicles: list, threshold: flo
 	Returns:
 		Vehicle dict on a confident, unambiguous match; None otherwise.
 
-	Ambiguity guard: if the second-best score is within 0.05 of the best,
-	the match is too risky (e.g. CXX579L vs CXX579C both look plausible).
-	Posting an expense to the wrong vehicle is worse than asking the user
-	to pick — fall through to manual review.
-
-	Length guard: skip vehicles whose normalized length differs by >2 from
-	the OCR — different plate, not a misread.
+	Three guards prevent posting expenses to the wrong vehicle (worse than
+	asking the user to pick):
+	  1. Length guard — skip candidates whose normalized length differs
+	     by >2 from the OCR.
+	  2. Plausibility-band guard — if more than one candidate scores
+	     within 0.15 of the best, the input could plausibly belong to
+	     either vehicle (e.g. sequential plates CXX578L vs CXX579L when
+	     OCR yields CXX5781). Refuse the match.
+	  3. Tight-ambiguity guard — if the second-best is within 0.05 of
+	     the best, they're effectively tied; refuse.
 	"""
 	from difflib import SequenceMatcher
 
@@ -273,7 +276,16 @@ def _fuzzy_match_vehicle(normalized_reg: str, all_vehicles: list, threshold: flo
 	if best_ratio < threshold:
 		return None
 
-	# Ambiguity guard: second-best within 0.05 → too close to call
+	# Plausibility-band guard: more than one vehicle within 0.15 of best
+	# means the OCR input could plausibly be EITHER. Sequential-plate fleets
+	# (CXX578L, CXX579L) trigger this on a single-digit OCR slip — without
+	# this guard, a misread of CXX579L → CXX5781 would silently match
+	# CXX578L instead.
+	plausible = [r for r, _v in scores if r >= best_ratio - 0.15]
+	if len(plausible) > 1:
+		return None
+
+	# Tight-ambiguity guard: second-best within 0.05 → effectively tied
 	if len(scores) > 1 and scores[1][0] >= best_ratio - 0.05:
 		return None
 
@@ -530,6 +542,28 @@ def route_to_invoice_pipeline(ocr_fleet_name: str):
 			message=f"Failed to enqueue re-routed extraction for {ocr_fleet_name} → {ocr_import.name}\n{frappe.get_traceback()}",
 		)
 		frappe.throw(_("Failed to start invoice extraction. The OCR Import was created but processing did not start."))
+
+	# Race guard: reload before the No Action save and re-check terminal statuses.
+	# A concurrent doc_event (e.g. PI submit / cancel from a previously linked PI)
+	# could have flipped the slip's status to Completed / Matched while we were
+	# inserting the new OCR Import + enqueueing extraction. Overwriting Completed
+	# with No Action would silently undo a valid downstream document.
+	ocr_fleet.reload()
+	if ocr_fleet.status in ("Completed", "Draft Created", "No Action"):
+		frappe.log_error(
+			title="Fleet Re-route Race Detected",
+			message=(
+				f"Fleet slip {ocr_fleet_name} status changed to '{ocr_fleet.status}' "
+				f"during re-routing. New OCR Import {ocr_import.name} was created and "
+				"left in its normal pipeline; source slip was NOT updated."
+			),
+		)
+		frappe.throw(
+			_(
+				"Fleet slip status changed to '{0}' during re-routing. The new OCR Import "
+				"{1} was created but the fleet slip was NOT updated. Please verify both records."
+			).format(ocr_fleet.status, ocr_import.name)
+		)
 
 	# Mark the original fleet slip as No Action with a reason that points to the new record
 	ocr_fleet.status = "No Action"

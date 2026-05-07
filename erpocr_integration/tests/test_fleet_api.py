@@ -442,6 +442,39 @@ class TestMatchVehicle:
 		assert doc.fleet_vehicle == "VEH-001"
 		assert doc.vehicle_match_status == "Suggested"
 
+	def test_similarity_fuzzy_blocks_sequential_plates(self, mock_frappe):
+		"""Two vehicles with sequential plates → input ambiguous → no match.
+
+		Real risk caught by Codex review: if both CXX578L and CXX579L are
+		active vehicles and Gemini reads CXX5781 (digit transposition of
+		CXX579L → 1 typed in place of L), naive fuzzy match would pick
+		CXX578L (0.857) over CXX579L (0.714) — wrong vehicle, wrong cost
+		center. Plausibility-band guard (0.15) refuses the match here.
+		"""
+		mock_frappe.db.exists.return_value = True
+		mock_frappe.db.get_value.return_value = None
+		mock_frappe.get_all.return_value = [
+			_NS(
+				name="VEH-578",
+				registration="CXX 578 L",
+				custom_fleet_card_provider="",
+				custom_fleet_control_account="",
+				custom_cost_center="",
+			),
+			_NS(
+				name="VEH-579",
+				registration="CXX 579 L",
+				custom_fleet_card_provider="",
+				custom_fleet_control_account="",
+				custom_cost_center="",
+			),
+		]
+		settings = _make_settings()
+		doc = MockFleetSlip(vehicle_registration="CXX5781")
+		_match_vehicle(doc, settings)
+		assert doc.fleet_vehicle == ""
+		assert doc.vehicle_match_status == "Unmatched"
+
 	def test_similarity_fuzzy_blocks_ambiguous_match(self, mock_frappe):
 		"""Two vehicles within 0.05 similarity → no match (ambiguity guard)."""
 		mock_frappe.db.exists.return_value = True
@@ -753,6 +786,10 @@ class TestRouteToInvoicePipeline:
 		]
 		mock_frappe.has_permission = MagicMock(return_value=True)
 		mock_frappe.session.user = "danell@starpops.co.za"
+		# Replace enqueue with a fresh mock — conftest's reset_mock() clears
+		# call history but not side_effects, and prior tests in the same
+		# class may have set side_effect=Exception which would otherwise leak.
+		mock_frappe.enqueue = MagicMock()
 
 		return mock_fleet, mock_new_import, mock_new_file
 
@@ -836,6 +873,39 @@ class TestRouteToInvoicePipeline:
 		assert any(
 			args[0] == "OCR Import" and args[1] == "OCR-IMP-NEW" and args[2] == "status" and args[3] == "Error"
 			for args in set_value_calls
+		)
+
+	def test_blocks_concurrent_status_change_to_completed(self, mock_frappe):
+		"""Race guard: if a doc_event flips slip status to Completed during
+		routing (e.g. PI submit on a previously linked PI), the final save
+		MUST NOT overwrite Completed with No Action.
+
+		Reproduces Codex's review concern: status checked once at entry, then
+		OCR Import + File created and committed, then enqueue, then save —
+		but the slip's status could have changed in that window.
+		"""
+		mock_fleet, _, _ = self._setup_happy_path(mock_frappe)
+
+		# Simulate: when ocr_fleet.reload() is called before the final save,
+		# the in-memory status is now Completed (a concurrent doc_event fired).
+		original_save = mock_fleet.save
+
+		def reload_side_effect():
+			mock_fleet.status = "Completed"
+
+		mock_fleet.reload = MagicMock(side_effect=reload_side_effect)
+
+		with pytest.raises(Exception):
+			route_to_invoice_pipeline("OCR-FS-00001")
+
+		# Final save MUST NOT have been called — Completed status preserved
+		original_save.assert_not_called()
+		# Slip status was NOT overwritten to No Action
+		assert mock_fleet.status == "Completed"
+		# An error log entry was written explaining the race
+		assert any(
+			"Race" in str(c.kwargs.get("title", "")) or "race" in str(c.kwargs.get("title", "")).lower()
+			for c in mock_frappe.log_error.call_args_list
 		)
 
 
