@@ -2,6 +2,17 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] — 2026-05-12
+
+Bulk-review ergonomics: a doc-level Cost Center selector on OCR Import so the accounts reviewer sets the cost centre once per record instead of filling it in on every line.
+
+### Doc-level `cost_center` on OCR Import
+- New optional Link field on [OCR Import](erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.json) (between `tax_template` and the items section), filtered client-side to the parent's company with `is_group=0, disabled=0`.
+- New precedence at every PI / PR / JE creation site in [ocr_import.py](erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py): **line override → doc-level parent → `OCR Settings.default_cost_center`**. Applied to PI per-line, PR per-line, JE per-item debit, JE tax line, and JE credit line.
+- Service-mapping rows still populate line-level `cost_center` and that line override still wins — per-supplier cost-centre splits keep working; the new field is the bulk-review shortcut for everything else.
+- Five new unit tests in `TestCostCenterPrecedence` cover line-wins, doc-fallback, and settings-fallback on PI; doc-fallback on PR; and doc-applied-to-every-line on JE.
+- Codex external review pass: 6/6 PASS. 638 tests pass; ruff and ruff-format clean.
+
 ## [1.1.2] — 2026-05-12
 
 Reliability fix for the Gemini ingestion path: a Drive batch on a fresh Empire Vending site surfaced `rq.timeouts.JobTimeoutException` on a large PDF because rate-limit stagger was being double-counted (caller-side `time.sleep(5)` between enqueues **and** in-job `time.sleep(queue_position * 5)` inside each worker), and the 300s job timeout left no headroom for the 5-attempt × ≤60s + ≤225s retry shape in `_call_gemini_api`. Documentation also gained a prepay-credit-depletion warning — the same incident's first failure mode was a 429 that read as a rate-limit error but was actually a depleted Tier 1 prepay balance.

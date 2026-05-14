@@ -149,6 +149,7 @@ def process(raw_payload: str):
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
 - `default_item` in OCR Settings: when set, acts as the matching pipeline's tier 6 fallback (returns "Suggested") AND as the unmatched-line filler at PI creation time. Lets bulk-expense-invoice users skip per-row clicks. Alias / service-mapping / Item Supplier learning are skipped for rows matched to the default_item to avoid polluting those tables with one-shot mappings.
 - **Tax template**: `_build_taxes_from_template()` shared helper handles template validation, company check, tax-inclusive detection, and taxes list building for both PI and PR creation
+- **Cost Center precedence** (v1.1.3+): every PI line, PR line, JE debit line, JE tax line, and JE credit line resolves cost_center via **line override → doc-level parent (`OCR Import.cost_center`) → `OCR Settings.default_cost_center`**. The doc-level field is filtered by company on the client side. Service-mapping rows still populate line-level cost_center (which wins), so per-supplier cost centre splits keep working; the doc-level field is the bulk-review shortcut for everything else.
 
 ### Purchase Order / Purchase Receipt Linking
 - Optional: user can link OCR Import to an existing PO via "Find Open POs" button
