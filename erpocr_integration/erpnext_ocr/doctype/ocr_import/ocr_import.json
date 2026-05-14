@@ -39,6 +39,7 @@
 		"tax_amount",
 		"total_amount",
 		"tax_template",
+		"cost_center",
 		"section_break_items",
 		"items",
 		"section_break_po",
@@ -270,6 +271,13 @@
 			"label": "Tax Template",
 			"options": "Purchase Taxes and Charges Template",
 			"description": "Auto-set based on tax detection. Change before creating PI if needed."
+		},
+		{
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"label": "Cost Center",
+			"options": "Cost Center",
+			"description": "Applied to every line that doesn't have its own Cost Center. Falls back to OCR Settings default if blank."
 		},
 		{
 			"fieldname": "section_break_items",

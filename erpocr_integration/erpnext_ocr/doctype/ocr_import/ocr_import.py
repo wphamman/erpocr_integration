@@ -520,8 +520,11 @@ class OCRImport(Document):
 				# Only use default expense account if no item_code (items have their own defaults)
 				pi_item["expense_account"] = settings.default_expense_account
 
+			# Cost Center precedence: line override → doc-level parent → OCR Settings default
 			if item.cost_center:
 				pi_item["cost_center"] = item.cost_center
+			elif self.cost_center:
+				pi_item["cost_center"] = self.cost_center
 			elif settings.default_cost_center:
 				pi_item["cost_center"] = settings.default_cost_center
 
@@ -704,8 +707,11 @@ class OCRImport(Document):
 			if not is_stock:
 				non_stock_warnings.append(item.item_code)
 
+			# Cost Center precedence: line override → doc-level parent → OCR Settings default
 			if item.cost_center:
 				pr_item["cost_center"] = item.cost_center
+			elif self.cost_center:
+				pr_item["cost_center"] = self.cost_center
 			elif settings.default_cost_center:
 				pr_item["cost_center"] = settings.default_cost_center
 
@@ -888,11 +894,12 @@ class OCRImport(Document):
 				amount = flt(amount - item_tax_share, 2)
 			total_debit += amount
 
+			# Cost Center precedence: line override → doc-level parent → OCR Settings default
 			debit_line = {
 				"account": expense_account,
 				"debit_in_account_currency": amount,
 				"credit_in_account_currency": 0,
-				"cost_center": item.cost_center or settings.get("default_cost_center"),
+				"cost_center": item.cost_center or self.cost_center or settings.get("default_cost_center"),
 			}
 
 			# Add party info if account is payable/receivable type
@@ -924,7 +931,7 @@ class OCRImport(Document):
 						"account": tax_account,
 						"debit_in_account_currency": tax_amt,
 						"credit_in_account_currency": 0,
-						"cost_center": settings.get("default_cost_center"),
+						"cost_center": self.cost_center or settings.get("default_cost_center"),
 					}
 				)
 
@@ -941,7 +948,9 @@ class OCRImport(Document):
 			credit_line["party_type"] = "Supplier"
 			credit_line["party"] = self.supplier
 
-		if settings.get("default_cost_center"):
+		if self.cost_center:
+			credit_line["cost_center"] = self.cost_center
+		elif settings.get("default_cost_center"):
 			credit_line["cost_center"] = settings.default_cost_center
 
 		accounts.append(credit_line)

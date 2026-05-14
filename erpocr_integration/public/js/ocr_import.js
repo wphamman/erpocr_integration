@@ -22,6 +22,17 @@ frappe.ui.form.on('OCR Import', {
 			};
 		});
 
+		// Filter doc-level Cost Center by company; applied to lines without their own
+		frm.set_query('cost_center', function() {
+			return {
+				filters: {
+					company: frm.doc.company,
+					is_group: 0,
+					disabled: 0
+				}
+			};
+		});
+
 		// Filter purchase_order by supplier, company, open statuses
 		frm.set_query('purchase_order', function() {
 			return {

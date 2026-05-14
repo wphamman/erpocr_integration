@@ -40,6 +40,7 @@ def _make_ocr_import(**overrides):
 	doc.tax_amount = 0
 	doc.total_amount = 1000.00
 	doc.tax_template = None
+	doc.cost_center = ""
 	doc.credit_account = ""
 	doc.purchase_invoice = None
 	doc.purchase_receipt = None

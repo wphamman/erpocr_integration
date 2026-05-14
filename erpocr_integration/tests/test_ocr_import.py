@@ -68,6 +68,7 @@ def _make_ocr_import(**overrides):
 	doc.tax_amount = 0
 	doc.total_amount = 1000.00
 	doc.tax_template = None
+	doc.cost_center = ""
 	doc.credit_account = ""
 	doc.purchase_invoice = None
 	doc.purchase_receipt = None
@@ -679,6 +680,88 @@ class TestCreatePurchaseReceiptWithPORefs:
 		pr_item = pr_dict["items"][0]
 		assert pr_item["purchase_order"] == "PO-00001"
 		assert pr_item["purchase_order_item"] == "po-item-auto-1"
+
+
+# ---------------------------------------------------------------------------
+# Doc-level cost_center precedence (line → parent → settings default)
+# ---------------------------------------------------------------------------
+
+
+class TestCostCenterPrecedence:
+	"""The doc-level cost_center on OCR Import applies to every line that doesn't
+	have its own cost_center, falling back to settings.default_cost_center only
+	when both the line and the doc are blank.
+	"""
+
+	def test_pi_line_cost_center_wins(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			cost_center="Doc CC - TC",
+			items=[_make_item(cost_center="Line CC - TC")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-CC-001")
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["items"][0]["cost_center"] == "Line CC - TC"
+
+	def test_pi_doc_cost_center_used_when_line_blank(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			cost_center="Doc CC - TC",
+			items=[_make_item(cost_center="")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-CC-002")
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["items"][0]["cost_center"] == "Doc CC - TC"
+
+	def test_pi_settings_default_used_when_both_blank(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			cost_center="",
+			items=[_make_item(cost_center="")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-CC-003")
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		# sample_settings.default_cost_center = "Main - TC"
+		assert pi_dict["items"][0]["cost_center"] == "Main - TC"
+
+	def test_pr_doc_cost_center_used_when_line_blank(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Receipt",
+			status="Matched",
+			cost_center="Doc CC - TC",
+			items=[_make_item(cost_center="", purchase_order_item=None)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PR-CC-001")
+
+		doc.create_purchase_receipt()
+
+		pr_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pr_dict["items"][0]["cost_center"] == "Doc CC - TC"
+
+	def test_je_doc_cost_center_used_on_debit_tax_and_credit(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Journal Entry",
+			cost_center="Doc CC - TC",
+			credit_account="2100 - Accounts Payable - TC",
+			items=[_make_item(cost_center="", expense_account="5000 - Cost of Goods Sold - TC")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "JE-CC-001")
+
+		doc.create_journal_entry()
+
+		je_dict = mock_frappe.get_doc.call_args[0][0]
+		# Every line (debit + credit) should land on the doc-level cost_center
+		for line in je_dict["accounts"]:
+			assert line["cost_center"] == "Doc CC - TC"
 
 
 # ---------------------------------------------------------------------------
