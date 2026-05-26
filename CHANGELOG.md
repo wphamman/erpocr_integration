@@ -2,6 +2,33 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] — 2026-05-26
+
+Drive-scan hardening + OCR-aware plate canonicalization, surfaced by inspecting live prod (`erp.starpops.co.za`). Three independent fixes plus a fleet-workflow docs correction.
+
+### Drive scan: persist Error placeholder on pre-extraction failures
+- Prod was logging the same `Empty content for Scanned_20260320-0831.pdf` Error Log entry every 15-minute fleet poll (~28×/day for >2 months, 200 entries in the last 7 days alone). Root cause: in [drive_integration.py](erpocr_integration/tasks/drive_integration.py), when `_download_file` returned empty / the file was oversize / magic bytes mismatched, the scan handler logged an error and returned `False` **without** creating a placeholder OCR Import (or OCR Delivery Note / OCR Fleet Slip). The existing `MAX_DRIVE_RETRIES=3` dedup branch counts rows by `drive_file_id` — with no row, every poll re-discovered and re-failed the same bad file forever.
+- New `_record_drive_scan_failure()` helper inserts a `status=Error` placeholder with `drive_file_id`, `drive_retry_count`, and `error_log` set so the dedup branch on the next poll counts it and eventually skips the file after `MAX_DRIVE_RETRIES`. Wired into all three scan paths (invoice `_process_scan_file`, DN `_process_dn_scan_file`, fleet `_process_fleet_scan_file`) at all three failure branches (empty / oversize / bad magic bytes).
+- Tolerates the per-doctype field shape diff: OCR Fleet Slip lacks `source_filename`; its `error_log` is Small Text rather than a Link to Error Log.
+- Total downloads on a permanently-bad file are now bounded at `MAX_DRIVE_RETRIES + 1 = 4`, then silently skipped until the file is manually removed from the scan folder.
+
+### `_fuzzy_match_vehicle` adds OCR-canonical scoring tier
+- The existing fuzzy matcher (from 1.1.1) caught single-character Gemini misreads but not double-confusable plates. Prod had 9 OCR Fleet Slip records stuck in Needs Review from plates like `CXXS79C` (S↔5 AND L↔C — raw SequenceMatcher score 0.71, below the 0.78 threshold) — all real `CXX579L` slips that the dedup couldn't recognize.
+- `_fuzzy_match_vehicle` in [fleet_api.py](erpocr_integration/fleet_api.py) now scores each candidate **twice** — raw normalized form, and an OCR-canonicalized form folding `S↔5 / L↔1 / B↔8 / O↔0 / Z↔2 / G↔6 / I↔1 / Q↔0` via a new `_canonicalize_plate()` helper — and takes the higher ratio. `CXXS79C` → canonical `CXX579C` vs canonical `CXX5791` = 0.857, passes the threshold.
+- Same 0.78 threshold and same three Codex-review ambiguity guards (length / plausibility-band 0.15 / tight-ambiguity 0.05) still apply on top. Genuinely different plates like `CKK879L` stay below threshold (canonical 0.571). Two real plates that canonicalize to the same form (e.g. `CXX579L` + `CXX579C` both active when OCR yields `CXXS79C`) are correctly refused by the plausibility-band guard rather than silently mis-matched.
+
+### `move_file_to_archive` tolerates Drive 404
+- A `Drive Move Error` was firing on prod when a service-account-owned file got moved/deleted out-of-band — `HttpError 404` from `files().get` was caught by the generic `except Exception` and logged as a move failure. Now the 404 path is logged at `info` level and returned as already-archived; other `HttpError` statuses and non-HttpError exceptions still escalate to Error Log.
+- Return shape (`{file_id, shareable_link, folder_path}`) unchanged across all exit paths.
+
+### Fleet workflow docs corrected
+- `CLAUDE.md` and `OCR_Fleet_Slip_Guide.md` previously claimed fleet slips "always create Purchase Invoice — both fleet card and direct expense vehicles create PIs". In practice the accounts team reconciles fleet-card slips against the monthly Wesbank invoice rather than creating individual PIs — matching the 32-slip / 0-PI ratio observed in prod.
+- Updated to reflect that `Matched` is the primary terminal state for fleet-card slips, and `create_purchase_invoice()` is the exception path for unauthorized / off-card spend (slip_type=Other / unauthorized_flag=1). Driver-facing guide aligned similarly.
+
+### Tests
+- 644 pass (+9 new — 4 canonical-fuzzy-match incl. genuinely-different-plate rejection, 1 empty-download placeholder, 1 404-as-already-archived; +3 from parametrize expansion). `conftest.py` gains a real `_FakeHttpError(Exception)` subclass so `except HttpError` works in mocked tests.
+- Codex external review pass: 7/7 PASS with zero additional findings; targeted retry-cap walk and plausibility-band-under-canonicalization scenario verified against source.
+
 ## [1.1.3] — 2026-05-12
 
 Bulk-review ergonomics: a doc-level Cost Center selector on OCR Import so the accounts reviewer sets the cost centre once per record instead of filling it in on every line.
