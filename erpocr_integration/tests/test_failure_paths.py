@@ -285,6 +285,38 @@ class TestDriveScanDedup:
 			"OCR Import", "OCR-IMP-FAIL", force=True, ignore_permissions=True
 		)
 
+	def test_empty_download_creates_error_placeholder(self, mock_frappe, sample_settings):
+		"""Empty Drive download persists an Error placeholder so MAX_DRIVE_RETRIES eventually engages.
+
+		Without this, a single 0-byte PDF in the scan folder would log one error
+		per 15-minute poll forever — there's no record to count attempts against.
+		"""
+		service = MagicMock()
+		file_info = {"id": "drive-bad-pdf", "name": "Scanned_empty.pdf"}
+
+		mock_frappe.get_all = MagicMock(return_value=[])
+
+		with patch.object(
+			erpocr_integration.tasks.drive_integration,
+			"_download_file",
+			return_value=b"",  # 0-byte content
+		):
+			placeholder = MagicMock()
+			placeholder.name = "OCR-IMP-FAILPL"
+			mock_frappe.get_doc = MagicMock(return_value=placeholder)
+
+			result = erpocr_integration.tasks.drive_integration._process_scan_file(
+				service, file_info, sample_settings
+			)
+
+		assert result is False
+		mock_frappe.log_error.assert_called_once()
+		placeholder_kwargs = mock_frappe.get_doc.call_args[0][0]
+		assert placeholder_kwargs["status"] == "Error"
+		assert placeholder_kwargs["drive_file_id"] == "drive-bad-pdf"
+		assert placeholder_kwargs["doctype"] == "OCR Import"
+		placeholder.insert.assert_called_once_with(ignore_permissions=True)
+
 
 # ---------------------------------------------------------------------------
 # 4. Archive move failure path (api.py / drive_integration.py)
@@ -372,6 +404,33 @@ class TestArchiveMoveFailure:
 		assert result["file_id"] == "file-id-abc"
 		assert result["shareable_link"] is None
 		assert result["folder_path"] is None
+
+	def test_move_treats_404_as_already_archived(self, mock_frappe):
+		"""Drive 404 on archive move should NOT log an error — file is already gone."""
+		from googleapiclient.errors import HttpError
+
+		mock_frappe.get_single = MagicMock(
+			return_value=SimpleNamespace(
+				drive_integration_enabled=True,
+				drive_archive_folder_id="folder-123",
+				get_password=MagicMock(return_value='{"type": "service_account"}'),
+			)
+		)
+		resp = SimpleNamespace(status=404)
+
+		with patch.object(
+			erpocr_integration.tasks.drive_integration,
+			"_get_drive_service",
+			side_effect=HttpError(resp=resp, content=b"file not found"),
+		):
+			result = erpocr_integration.tasks.drive_integration.move_file_to_archive(
+				"file-id-gone", supplier_name="Test", invoice_date="2024-01-01"
+			)
+
+		assert result["file_id"] == "file-id-gone"
+		assert result["shareable_link"] is None
+		assert result["folder_path"] is None
+		mock_frappe.log_error.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

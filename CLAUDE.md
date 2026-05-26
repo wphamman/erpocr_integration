@@ -32,8 +32,8 @@ DN Pipeline:   Drop DN scan in Drive folder → 15-min poll → Gemini API → C
                └─ No PO → Create Purchase Order (draft, rates filled by accounts team)
 
 Fleet Pipeline: Drop fleet slip scan in Drive folder → 15-min poll → Gemini API → Create OCR Fleet Slip → Vehicle Match → Review
-                ├─ Fleet Card vehicle → Create Purchase Invoice (supplier = fleet card provider)
-                └─ Direct Expense vehicle → Create Purchase Invoice (supplier = default from OCR Settings)
+                ├─ Fleet card supplier (Wesbank etc.) → captured for reconciliation against monthly fleet card invoice (Matched is the terminal state — no PI from this app)
+                └─ Unauthorized / non-card purchase → optional Create Purchase Invoice (rare; supplier = default from OCR Settings)
 ```
 
 ### Design Philosophy
@@ -72,7 +72,7 @@ Fleet Pipeline: Drop fleet slip scan in Drive folder → 15-min poll → Gemini 
 | **OCR Service Mapping** | Regular | Pattern → item + GL account + cost center (supplier-specific or generic) |
 | **OCR Delivery Note** | Regular | DN staging record — extracted qty/item data, PO matching, creates PO or PR |
 | **OCR Delivery Note Item** | Child Table | DN line items — description, qty, uom, matched item_code, PO item ref |
-| **OCR Fleet Slip** | Regular | Fleet slip staging — fuel/toll/other classification, vehicle matching, always creates Purchase Invoice |
+| **OCR Fleet Slip** | Regular | Fleet slip staging — fuel/toll/other classification, vehicle matching; primary path is capture for fleet-card reconciliation, PI creation is the exception |
 
 ### OCR Import Status Workflow
 Pending → Needs Review → Matched → Draft Created → Completed / Error
@@ -96,21 +96,23 @@ Pending → Needs Review → Matched → Draft Created → Completed / No Action
 - **doc_events**: PO/PR submit → Completed; PO/PR cancel → reset to Matched (same pattern as OCR Import)
 
 ### OCR Fleet Slip Workflow
-Pending → Needs Review → Matched → Draft Created → Completed / No Action / Error
+Pending → Needs Review → Matched → (terminal for fleet-card slips) / Draft Created → Completed / No Action / Error
 
+- **Primary path is reconciliation, not PI creation.** Fleet card providers (Wesbank, FNB Fleet, etc.) issue a single monthly invoice that aggregates every slip. Individual OCR Fleet Slip records exist to capture each transaction for audit/matching against that monthly invoice — they do **not** become standalone Purchase Invoices in the normal case. Expect most fleet-card slips to stop at **Matched** and stay there until the monthly invoice arrives.
+- **PI creation is the exception, not the rule.** `create_purchase_invoice()` exists for unauthorized purchases, non-card cash spends, or fuel bought outside the fleet card programme. Slips where `slip_type = Other` / `unauthorized_flag = 1` are the typical candidates.
 - **Single transaction per slip** — no child table; fuel fill-up or toll charge lives directly on the main doc
-- **Always creates Purchase Invoice** — no Journal Entry path; both fleet card and direct expense vehicles create PIs
 - **Slip classification**: `slip_type` (Fuel / Toll / Other) determines item and form sections
-- **Unauthorized flag**: `slip_type = Other` auto-sets `unauthorized_flag` — orange warning on form, review and mark No Action
+- **Unauthorized flag**: `slip_type = Other` auto-sets `unauthorized_flag` — orange warning on form; review then either create PI (if a real off-card spend) or mark No Action (if it was actually a card slip Gemini misread)
 - **Drive-only input** — drivers drop scans in a shared Drive folder; no manual upload or email
 - **Per-vehicle posting mode** via Fleet Vehicle custom fields (`custom_fleet_card_provider`, `custom_fleet_control_account`, `custom_cost_center`):
-  - Fleet card provider set → **Fleet Card** mode → PI supplier = fleet card provider, expense = control account
+  - Fleet card provider set → **Fleet Card** mode → PI (if ever created) would use fleet card provider as supplier; in practice the slip is left at Matched for monthly reconciliation
   - Fleet card provider blank → **Direct Expense** mode → PI supplier = `fleet_default_supplier` from OCR Settings, expense = `fleet_expense_account`
 - **Supplier resolution**: fleet card provider (from vehicle) → `fleet_default_supplier` (from OCR Settings) → user fills manually
 - **Status readiness**: Matched requires data + `fleet_vehicle` link (not just registration string) + supplier (`fleet_card_supplier` must be set)
 - **PI creation guard**: `create_purchase_invoice()` requires `fleet_vehicle` to be set (prevents unverified vehicle traceability)
-- **Merchant ≠ Supplier**: merchant name (Shell, Engen) is informational; PI supplier comes from vehicle config or default
+- **Merchant ≠ Supplier**: merchant name (Shell, Engen) is informational; PI supplier (if a PI is ever created) comes from vehicle config or default
 - **Item from slip_type**: Fuel → `fleet_fuel_item`, Toll → `fleet_toll_item` from OCR Settings (no item matching needed)
+- **Vehicle matching tiers**: exact registration → punctuation-stripped exact (Suggested) → OCR-aware fuzzy via `_fuzzy_match_vehicle` with both raw and canonicalized (`S↔5`, `L↔1`, `B↔8`, `O↔0`, `Z↔2`, `G↔6`, `I↔1`, `Q↔0`) scoring + length/plausibility-band/tight-ambiguity guards (Suggested). See `_canonicalize_plate` in [fleet_api.py](erpocr_integration/fleet_api.py).
 - **Optional `fleet_management` integration**: OCR runs **standalone or alongside `fleet_management`** — neither app imports nor depends on the other. Integration is bidirectional via ERPNext custom fields each app plants on the other's territory; both directions are runtime feature-detected so install order doesn't matter.
   - **OCR → Fleet Vehicle** (we plant): `custom_fleet_card_provider`, `custom_fleet_control_account`, `custom_cost_center` via fixtures (`custom_field.json`). Read when matching a vehicle. Soft-dep guarded by `frappe.db.exists("DocType", "Fleet Vehicle")`.
   - **fleet_management → Purchase Invoice** (they plant `custom_fleet_vehicle`): we populate it on OCR-built fuel/toll PIs via `frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle")` runtime check, so OCR-generated fleet PIs land in `fleet_management`'s vehicle-level cost reports automatically. When `fleet_management` is not installed the field doesn't exist, the conditional skips, PI insert is unchanged.
@@ -176,7 +178,8 @@ def process(raw_payload: str):
 - **XSS prevention**: all dynamic values in PO/PR/match dialogs escaped via `frappe.utils.escape_html()` and `encodeURIComponent()`
 - **Tax ambiguity threshold**: `_detect_tax_inclusive_rates()` returns False (default exclusive) when inclusive vs exclusive difference is < 5% of tax amount
 - **Account validation (JE)**: credit/expense/tax accounts checked for company, is_group=0, disabled=0
-- **Drive retry cap**: `MAX_DRIVE_RETRIES=3` prevents infinite Gemini calls on permanently bad Drive files
+- **Drive retry cap**: `MAX_DRIVE_RETRIES=3` prevents infinite Gemini calls on permanently bad Drive files. The cap covers BOTH Gemini-call failures (post-download) and pre-download failures (empty content, oversize, magic-byte mismatch) — `_record_drive_scan_failure` in [drive_integration.py](erpocr_integration/tasks/drive_integration.py) inserts a status=Error placeholder for every failure path so the dedup branch on the next poll can count it.
+- **Drive archive-move 404 tolerance**: a 404 from Drive on `move_file_to_archive` is treated as already-archived (file was manually moved or archived by a prior run) — logged at info, not error. Other `HttpError` and exception types still escalate to Error Log.
 
 ### Upload Security
 - Permission check: User must have "create" permission on OCR Import

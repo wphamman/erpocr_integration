@@ -26,6 +26,57 @@ MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 MAX_DRIVE_RETRIES = 3  # Stop retrying Drive files after this many extraction failures
 
 
+def _record_drive_scan_failure(
+	*,
+	doctype: str,
+	drive_file_id: str,
+	filename: str,
+	retry_count: int,
+	settings,
+	error_title: str,
+	error_message: str,
+) -> None:
+	"""Log the failure AND persist an Error placeholder so the retry cap engages.
+
+	Without a placeholder, every Drive poll re-discovers the same bad file
+	(e.g. a 0-byte upload) and re-fails it with no memory — generating one
+	Error Log entry per 15-minute scan forever. The placeholder lets the
+	dedup branch at the top of each scan handler see prior failures, count
+	them against MAX_DRIVE_RETRIES, and eventually skip the file.
+	"""
+	err = frappe.log_error(title=error_title, message=error_message)
+	err_log_name = getattr(err, "name", None)
+
+	doc_data = {
+		"doctype": doctype,
+		"status": "Error",
+		"source_type": "Gemini Drive Scan",
+		"uploaded_by": "Administrator",
+		"company": settings.default_company,
+		"drive_file_id": drive_file_id,
+		"drive_retry_count": retry_count,
+	}
+	# OCR Fleet Slip has no source_filename field (other doctypes do).
+	if doctype != "OCR Fleet Slip":
+		doc_data["source_filename"] = filename
+	# OCR Import / OCR Delivery Note's error_log is a Link; Fleet Slip's is Small Text.
+	if doctype == "OCR Fleet Slip":
+		doc_data["error_log"] = error_message
+	elif err_log_name:
+		doc_data["error_log"] = err_log_name
+
+	try:
+		placeholder = frappe.get_doc(doc_data)
+		placeholder.insert(ignore_permissions=True)
+		frappe.db.commit()  # nosemgrep
+	except Exception as insert_exc:
+		# Don't let placeholder-creation failure mask the underlying problem.
+		frappe.logger().warning(
+			f"Drive scan: could not persist failure placeholder for {filename} "
+			f"({doctype}, drive_file_id={drive_file_id}): {insert_exc!s}"
+		)
+
+
 def _mime_type_from_filename(filename: str) -> str:
 	"""Determine MIME type from filename extension."""
 	ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
@@ -420,14 +471,27 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 	# Download file content
 	pdf_content = _download_file(service, drive_file_id)
 	if not pdf_content:
-		frappe.log_error(title="Drive Scan Error", message=f"Empty content for {filename}")
+		_record_drive_scan_failure(
+			doctype="OCR Import",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Drive Scan Error",
+			error_message=f"Empty content for {filename}",
+		)
 		return False
 
 	# Enforce same size limit as manual upload
 	if len(pdf_content) > MAX_PDF_SIZE_BYTES:
-		frappe.log_error(
-			title="Drive Scan Error",
-			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+		_record_drive_scan_failure(
+			doctype="OCR Import",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Drive Scan Error",
+			error_message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
 		)
 		return False
 
@@ -435,9 +499,14 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 	from erpocr_integration.api import validate_file_magic_bytes
 
 	if not validate_file_magic_bytes(pdf_content, file_mime_type):
-		frappe.log_error(
-			title="Drive Scan Error",
-			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		_record_drive_scan_failure(
+			doctype="OCR Import",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Drive Scan Error",
+			error_message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
 		)
 		return False
 
@@ -710,6 +779,16 @@ def move_file_to_archive(
 
 		return {"file_id": file_id, "shareable_link": web_view_link, "folder_path": folder_path}
 
+	except HttpError as e:
+		# File already gone (manually moved/deleted, or archived by a prior run).
+		# Not worth alerting on — just return that we have no link.
+		if getattr(e, "resp", None) is not None and e.resp.status == 404:
+			frappe.logger().info(
+				f"Drive: file {file_id} already gone (404 on archive move) — treating as already-archived"
+			)
+			return {"file_id": file_id, "shareable_link": None, "folder_path": None}
+		frappe.log_error(title="Drive Move Error", message=f"Failed to move {file_id} to archive: {e!s}")
+		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
 	except Exception as e:
 		frappe.log_error(title="Drive Move Error", message=f"Failed to move {file_id} to archive: {e!s}")
 		return {"file_id": file_id, "shareable_link": None, "folder_path": None}
@@ -851,13 +930,26 @@ def _process_dn_scan_file(service, file_info: dict, settings) -> bool:
 	# Download file content
 	file_content = _download_file(service, drive_file_id)
 	if not file_content:
-		frappe.log_error(title="DN Drive Scan Error", message=f"Empty content for {filename}")
+		_record_drive_scan_failure(
+			doctype="OCR Delivery Note",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="DN Drive Scan Error",
+			error_message=f"Empty content for {filename}",
+		)
 		return False
 
 	if len(file_content) > MAX_PDF_SIZE_BYTES:
-		frappe.log_error(
-			title="DN Drive Scan Error",
-			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+		_record_drive_scan_failure(
+			doctype="OCR Delivery Note",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="DN Drive Scan Error",
+			error_message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
 		)
 		return False
 
@@ -865,9 +957,14 @@ def _process_dn_scan_file(service, file_info: dict, settings) -> bool:
 	from erpocr_integration.api import validate_file_magic_bytes
 
 	if not validate_file_magic_bytes(file_content, file_mime_type):
-		frappe.log_error(
-			title="DN Drive Scan Error",
-			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		_record_drive_scan_failure(
+			doctype="OCR Delivery Note",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="DN Drive Scan Error",
+			error_message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
 		)
 		return False
 
@@ -1026,13 +1123,26 @@ def _process_fleet_scan_file(service, file_info: dict, settings) -> bool:
 	# Download file content
 	file_content = _download_file(service, drive_file_id)
 	if not file_content:
-		frappe.log_error(title="Fleet Drive Scan Error", message=f"Empty content for {filename}")
+		_record_drive_scan_failure(
+			doctype="OCR Fleet Slip",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Fleet Drive Scan Error",
+			error_message=f"Empty content for {filename}",
+		)
 		return False
 
 	if len(file_content) > MAX_PDF_SIZE_BYTES:
-		frappe.log_error(
-			title="Fleet Drive Scan Error",
-			message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
+		_record_drive_scan_failure(
+			doctype="OCR Fleet Slip",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Fleet Drive Scan Error",
+			error_message=f"File too large (>{MAX_PDF_SIZE_BYTES // (1024 * 1024)}MB): {filename}",
 		)
 		return False
 
@@ -1040,9 +1150,14 @@ def _process_fleet_scan_file(service, file_info: dict, settings) -> bool:
 	from erpocr_integration.api import validate_file_magic_bytes
 
 	if not validate_file_magic_bytes(file_content, file_mime_type):
-		frappe.log_error(
-			title="Fleet Drive Scan Error",
-			message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		_record_drive_scan_failure(
+			doctype="OCR Fleet Slip",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Fleet Drive Scan Error",
+			error_message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
 		)
 		return False
 

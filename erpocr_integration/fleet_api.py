@@ -224,10 +224,42 @@ def _match_vehicle(ocr_fleet, settings):
 	_clear_vehicle_links(ocr_fleet)
 
 
+# OCR misreads commonly confuse these letter/digit pairs on number plates.
+# Apply the same mapping to both the OCR'd registration and each candidate
+# so confusable forms compare as equal during fuzzy matching.
+_PLATE_OCR_CANONICAL = str.maketrans(
+	{
+		"O": "0",
+		"Q": "0",
+		"I": "1",
+		"L": "1",
+		"Z": "2",
+		"S": "5",
+		"G": "6",
+		"B": "8",
+	}
+)
+
+
+def _canonicalize_plate(s: str) -> str:
+	"""Fold OCR-confusable letter↔digit pairs (S↔5, L↔1, B↔8, …) into a
+	canonical form so that ``CXXS79C`` (Gemini misread of ``CXX579L``)
+	compares as ``CXX579C`` against the canonical ``CXX5791``. The mapping
+	is applied to both sides so the comparison stays symmetric."""
+	return s.translate(_PLATE_OCR_CANONICAL)
+
+
 def _fuzzy_match_vehicle(normalized_reg: str, all_vehicles: list, threshold: float = 0.78):
 	"""
 	Score each Fleet Vehicle's normalized registration against the OCR'd one
 	using difflib.SequenceMatcher. Return the unambiguous best match.
+
+	Each candidate is scored twice — once on the raw normalized form, and
+	once on an OCR-canonicalized form that collapses common digit/letter
+	confusables (S↔5, L↔1, B↔8, O↔0, Z↔2, G↔6, I↔1, Q↔0). The higher of
+	the two ratios is used. This catches photographed plates where Gemini
+	reads ``CXXS79C`` (S↔5 + L↔C) for the real ``CXX579L`` — the raw ratio
+	is 0.71 but canonicalization brings it to 0.86.
 
 	Args:
 		normalized_reg: OCR registration, already stripped + uppercased
@@ -253,13 +285,15 @@ def _fuzzy_match_vehicle(normalized_reg: str, all_vehicles: list, threshold: flo
 	if not normalized_reg or len(normalized_reg) < 4:
 		return None
 
+	canonical_reg = _canonicalize_plate(normalized_reg)
 	scores = []
 	for v in all_vehicles:
 		v_normalized = (v.registration or "").replace(" ", "").replace("-", "").replace("_", "").upper()
 		if not v_normalized or abs(len(v_normalized) - len(normalized_reg)) > 2:
 			continue
-		ratio = SequenceMatcher(None, normalized_reg, v_normalized).ratio()
-		scores.append((ratio, v))
+		raw_ratio = SequenceMatcher(None, normalized_reg, v_normalized).ratio()
+		canon_ratio = SequenceMatcher(None, canonical_reg, _canonicalize_plate(v_normalized)).ratio()
+		scores.append((max(raw_ratio, canon_ratio), v))
 
 	if not scores:
 		return None

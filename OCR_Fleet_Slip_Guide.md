@@ -99,7 +99,7 @@ The system:
 4. **Sets up the posting** — determines the supplier and expense account based on the vehicle's configuration
 5. **Creates an OCR Fleet Slip record** in ERPNext for the accounting team
 
-The accounting team then reviews the data and creates a Purchase Invoice from it.
+The accounting team then reviews the data. For card-paid slips (the usual case for Wesbank or another fleet card), the slip is held against the monthly fleet card invoice for reconciliation — no individual Purchase Invoice is created. The accounts team only creates a Purchase Invoice for the exceptions: cash purchases or anything bought without the fleet card.
 
 ---
 
