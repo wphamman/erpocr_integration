@@ -110,6 +110,19 @@ for _mod_name in [
 		sys.modules[_mod_name] = MagicMock()
 
 
+# HttpError needs to be a real Exception subclass so `except HttpError` works
+# in the code under test. A bare MagicMock attribute is not a class and
+# triggers "catching classes that do not inherit from BaseException".
+class _FakeHttpError(Exception):
+	def __init__(self, resp=None, content=b"", **kwargs):
+		super().__init__(str(content))
+		self.resp = resp
+		self.content = content
+
+
+sys.modules["googleapiclient.errors"].HttpError = _FakeHttpError
+
+
 @pytest.fixture(autouse=True)
 def reset_frappe_mock():
 	"""Reset frappe mock state between tests so tests don't leak into each other."""

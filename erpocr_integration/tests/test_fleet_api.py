@@ -559,6 +559,62 @@ class TestMatchVehicle:
 		# Length differs by 6 → skipped, no match
 		assert doc.fleet_vehicle == ""
 
+	@pytest.mark.parametrize(
+		"ocr_reg",
+		[
+			"CXXS79C",  # S↔5 AND L↔C (two confusables — raw ratio 0.71, canonical 0.86)
+			"CX X S 79 C",  # same as above with stray whitespace
+			"CXXS79L",  # S↔5 only — already covered by raw match, but canonical also passes
+		],
+	)
+	def test_canonical_fuzzy_match_handles_double_ocr_confusion(self, mock_frappe, ocr_reg):
+		"""Plates with two OCR-confusable misreads should match via canonical scoring.
+
+		Raw SequenceMatcher gives 0.71 for ``CXXS79C`` vs ``CXX579L`` (below the
+		0.78 threshold), but the canonical form folds S↔5 (and the L↔1 mapping
+		applies on the real plate side), lifting the score to 0.86. The Codex
+		ambiguity guards still apply.
+		"""
+		mock_frappe.db.exists.return_value = True
+		mock_frappe.db.get_value.return_value = None
+		mock_frappe.get_all.return_value = [
+			_NS(
+				name="VEH-CXX579L",
+				registration="CXX 579 L",
+				custom_fleet_card_provider="FNBF001",
+				custom_fleet_control_account="",
+				custom_cost_center="",
+			),
+		]
+		settings = _make_settings()
+		doc = MockFleetSlip(vehicle_registration=ocr_reg)
+		_match_vehicle(doc, settings)
+		assert doc.fleet_vehicle == "VEH-CXX579L"
+		assert doc.vehicle_match_status == "Suggested"
+
+	def test_canonical_fuzzy_still_rejects_genuinely_different_plates(self, mock_frappe):
+		"""Canonicalization doesn't lower the bar for plates that are actually different.
+
+		``CKK879L`` shares only 3 chars with ``CXX579L`` even after canonical
+		folding (CKK8791 vs CXX5791) — score stays below the 0.78 threshold.
+		"""
+		mock_frappe.db.exists.return_value = True
+		mock_frappe.db.get_value.return_value = None
+		mock_frappe.get_all.return_value = [
+			_NS(
+				name="VEH-CXX579L",
+				registration="CXX 579 L",
+				custom_fleet_card_provider="",
+				custom_fleet_control_account="",
+				custom_cost_center="",
+			),
+		]
+		settings = _make_settings()
+		doc = MockFleetSlip(vehicle_registration="CKK879L")
+		_match_vehicle(doc, settings)
+		assert doc.fleet_vehicle == ""
+		assert doc.vehicle_match_status == "Unmatched"
+
 
 # ---------------------------------------------------------------------------
 # TestApplyVehicleConfig
