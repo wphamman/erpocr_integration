@@ -2,6 +2,17 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] — 2026-05-27
+
+Fleet Vehicle tagging at OCR review time. Pairs with `fleet_management` v0.11.2 (`allow_on_submit` on `Purchase Invoice.custom_fleet_vehicle`, for retagging already-submitted PIs).
+
+### Tag a Fleet Vehicle on the OCR Import → flows to the created Purchase Invoice
+- New optional `fleet_vehicle` Link field (→ Fleet Vehicle) on [OCR Import](erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.json), in the supplier section so the operator sets it during supplier-match review. Not `reqd` — most scans aren't vehicle-related.
+- [ocr_import.py](erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py) `create_purchase_invoice()` carries the tag onto the PI as `custom_fleet_vehicle` so vehicle-specific spend (repairs, tyres, service) lands in `fleet_management`'s per-vehicle cost reports without the operator having to open the draft PI and fill it in. Set only when a tag is present **and** Purchase Invoice has the field (runtime `has_field` guard — same pattern as `ocr_fleet_slip`). Whitespace-only values are `.strip()`-treated as untagged; left NULL (never `""`) when blank.
+- Graceful when `fleet_management` isn't installed: the field is hidden via an async `frappe.db.exists` → `toggle_display` in [ocr_import.js](erpocr_integration/public/js/ocr_import.js) `refresh` (not `depends_on`, which can't synchronously evaluate the Promise that `frappe.db.exists` returns), and the server-side `has_field` guard skips the write. No import/dependency on `fleet_management`.
+- Scope (deliberate): no auto-population from supplier/line text (operator is source of truth), Purchase Invoice path only (no PR/JE), no backfill of historical OCR Import records.
+- Codex external review pass: 8/10 PASS + 2 CONCERN, both addressed (whitespace guard, reliable hide). 648 tests pass (+4); ruff + ruff-format clean.
+
 ## [1.1.4] — 2026-05-26
 
 Drive-scan hardening + OCR-aware plate canonicalization, surfaced by inspecting live prod (`erp.starpops.co.za`). Three independent fixes plus a fleet-workflow docs correction.

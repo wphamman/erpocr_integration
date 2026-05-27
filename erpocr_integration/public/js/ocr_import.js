@@ -58,6 +58,16 @@ frappe.ui.form.on('OCR Import', {
 		// Contextual intro message based on status (standard ERPNext pattern)
 		set_status_intro(frm);
 
+		// The optional Fleet Vehicle tag links to a doctype owned by the
+		// fleet_management app. Hide it when that app isn't installed. Done here
+		// (async) rather than via depends_on because frappe.db.exists returns a
+		// Promise — always truthy in a synchronous depends_on eval, so it would
+		// never actually hide. The server-side create_purchase_invoice has the
+		// authoritative has_field guard; this is purely cosmetic.
+		frappe.db.exists('DocType', 'Fleet Vehicle').then(function(exists) {
+			frm.toggle_display('fleet_vehicle', !!exists);
+		});
+
 		// Check for potential duplicates (skip for new, Pending, Error records)
 		check_and_show_duplicates(frm);
 

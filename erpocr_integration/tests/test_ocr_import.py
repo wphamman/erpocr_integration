@@ -59,6 +59,7 @@ def _make_ocr_import(**overrides):
 	doc.document_type = ""
 	doc.supplier = "Test Supplier"
 	doc.supplier_name_ocr = "Test Supplier OCR"
+	doc.fleet_vehicle = ""
 	doc.company = "Test Company"
 	doc.currency = "ZAR"
 	doc.invoice_number = "INV-001"
@@ -762,6 +763,84 @@ class TestCostCenterPrecedence:
 		# Every line (debit + credit) should land on the doc-level cost_center
 		for line in je_dict["accounts"]:
 			assert line["cost_center"] == "Doc CC - TC"
+
+
+# ---------------------------------------------------------------------------
+# Fleet vehicle tag flows through to the created Purchase Invoice
+# ---------------------------------------------------------------------------
+
+
+class TestFleetVehicleTag:
+	"""The optional fleet_vehicle tag on OCR Import carries through to the
+	created PI's custom_fleet_vehicle (a fleet_management-owned field), guarded
+	by a runtime has_field check so it's a no-op when that app isn't installed.
+	Mirrors ocr_fleet_slip.create_purchase_invoice (see TestCreatePurchaseInvoice
+	in test_fleet_controller.py).
+	"""
+
+	def test_pi_tags_custom_fleet_vehicle_when_set(self, mock_frappe, sample_settings):
+		"""fleet_vehicle set on OCR Import + field present on PI → tag flows through."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			fleet_vehicle="VEH-001",
+			items=[_make_item()],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-FV-001")
+		mock_frappe.get_meta.return_value.has_field.return_value = True
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["custom_fleet_vehicle"] == "VEH-001"
+		mock_frappe.get_meta.return_value.has_field.assert_called_with("custom_fleet_vehicle")
+
+	def test_pi_omits_custom_fleet_vehicle_when_blank(self, mock_frappe, sample_settings):
+		"""fleet_vehicle blank → key absent on pi_dict (stays NULL, not empty string)."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			fleet_vehicle="",
+			items=[_make_item()],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-FV-002")
+		mock_frappe.get_meta.return_value.has_field.return_value = True
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert "custom_fleet_vehicle" not in pi_dict
+
+	def test_pi_omits_custom_fleet_vehicle_when_field_missing(self, mock_frappe, sample_settings):
+		"""fleet_management not installed (no custom_fleet_vehicle field on PI) →
+		key absent on pi_dict even with a tag set, so PI insert doesn't fail on an
+		unknown field."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			fleet_vehicle="VEH-001",
+			items=[_make_item()],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-FV-003")
+		mock_frappe.get_meta.return_value.has_field.return_value = False
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert "custom_fleet_vehicle" not in pi_dict
+
+	def test_pi_omits_custom_fleet_vehicle_when_whitespace_only(self, mock_frappe, sample_settings):
+		"""A whitespace-only tag (possible via API on the Link field) is treated as
+		untagged — never written as a malformed link value."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			fleet_vehicle="   ",
+			items=[_make_item()],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-FV-004")
+		mock_frappe.get_meta.return_value.has_field.return_value = True
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert "custom_fleet_vehicle" not in pi_dict
 
 
 # ---------------------------------------------------------------------------

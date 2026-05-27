@@ -28,6 +28,7 @@
 		"supplier_name_ocr",
 		"supplier_tax_id",
 		"supplier",
+		"fleet_vehicle",
 		"column_break_supplier",
 		"supplier_match_status",
 		"section_break_invoice",
@@ -210,6 +211,13 @@
 			"in_list_view": 1,
 			"label": "Supplier",
 			"options": "Supplier"
+		},
+		{
+			"description": "Tag if this invoice is a vehicle-specific expense (repairs, tyres, service, etc.). Flows through to the Purchase Invoice on creation so it appears in per-vehicle cost reports.",
+			"fieldname": "fleet_vehicle",
+			"fieldtype": "Link",
+			"label": "Fleet Vehicle (optional)",
+			"options": "Fleet Vehicle"
 		},
 		{
 			"fieldname": "column_break_supplier",
