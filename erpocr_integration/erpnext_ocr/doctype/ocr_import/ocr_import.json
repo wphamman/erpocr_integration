@@ -213,7 +213,6 @@
 			"options": "Supplier"
 		},
 		{
-			"depends_on": "eval:frappe.db.exists('DocType', 'Fleet Vehicle')",
 			"description": "Tag if this invoice is a vehicle-specific expense (repairs, tyres, service, etc.). Flows through to the Purchase Invoice on creation so it appears in per-vehicle cost reports.",
 			"fieldname": "fleet_vehicle",
 			"fieldtype": "Link",

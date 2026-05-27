@@ -826,6 +826,22 @@ class TestFleetVehicleTag:
 		pi_dict = mock_frappe.get_doc.call_args[0][0]
 		assert "custom_fleet_vehicle" not in pi_dict
 
+	def test_pi_omits_custom_fleet_vehicle_when_whitespace_only(self, mock_frappe, sample_settings):
+		"""A whitespace-only tag (possible via API on the Link field) is treated as
+		untagged — never written as a malformed link value."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			fleet_vehicle="   ",
+			items=[_make_item()],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-FV-004")
+		mock_frappe.get_meta.return_value.has_field.return_value = True
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert "custom_fleet_vehicle" not in pi_dict
+
 
 # ---------------------------------------------------------------------------
 # Tax template application via _build_taxes_from_template
