@@ -587,6 +587,15 @@ class OCRImport(Document):
 			"items": pi_items,
 		}
 
+		# Optional fleet_management integration: when that app is installed it
+		# plants `custom_fleet_vehicle` on Purchase Invoice for vehicle-level cost
+		# reports. Carry the operator's review-time tag through so vehicle-specific
+		# expenses (repairs, tyres, service) land in those reports. Runtime
+		# feature-detect only — no import/dependency on fleet_management. Left unset
+		# (NULL) when no vehicle was tagged. Mirrors ocr_fleet_slip.create_purchase_invoice.
+		if self.fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle"):
+			pi_dict["custom_fleet_vehicle"] = self.fleet_vehicle
+
 		# Only set due_date if it's on or after the posting_date
 		posting_date = pi_dict["posting_date"]
 		if self.due_date and str(self.due_date) >= str(posting_date):

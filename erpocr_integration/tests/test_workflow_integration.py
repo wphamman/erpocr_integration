@@ -31,6 +31,7 @@ def _make_ocr_import(**overrides):
 	doc.document_type = ""
 	doc.supplier = "Test Supplier"
 	doc.supplier_name_ocr = "Test Supplier OCR"
+	doc.fleet_vehicle = ""
 	doc.company = "Test Company"
 	doc.currency = "ZAR"
 	doc.invoice_number = "INV-001"
