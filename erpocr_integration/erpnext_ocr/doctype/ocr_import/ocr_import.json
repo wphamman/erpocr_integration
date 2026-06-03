@@ -28,7 +28,6 @@
 		"supplier_name_ocr",
 		"supplier_tax_id",
 		"supplier",
-		"fleet_vehicle",
 		"column_break_supplier",
 		"supplier_match_status",
 		"section_break_invoice",
@@ -211,13 +210,6 @@
 			"in_list_view": 1,
 			"label": "Supplier",
 			"options": "Supplier"
-		},
-		{
-			"description": "Tag if this invoice is a vehicle-specific expense (repairs, tyres, service, etc.). Flows through to the Purchase Invoice on creation so it appears in per-vehicle cost reports.",
-			"fieldname": "fleet_vehicle",
-			"fieldtype": "Link",
-			"label": "Fleet Vehicle (optional)",
-			"options": "Fleet Vehicle"
 		},
 		{
 			"fieldname": "column_break_supplier",
@@ -417,7 +409,7 @@
 	],
 	"index_web_pages_for_search": 1,
 	"links": [],
-	"modified": "2025-01-01 00:00:00.000000",
+	"modified": "2026-05-28 13:00:00.000000",
 	"modified_by": "Administrator",
 	"module": "ERPNext OCR",
 	"name": "OCR Import",

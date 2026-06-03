@@ -595,7 +595,11 @@ class OCRImport(Document):
 		# (NULL) when no vehicle was tagged. .strip() guards against a whitespace-only
 		# value arriving via API (the field is operator/API-set, unlike the fleet-slip
 		# path where it comes from vehicle matching).
-		fleet_vehicle = (self.fleet_vehicle or "").strip()
+		# As of v1.1.6 the OCR Import-side `fleet_vehicle` field is a conditionally
+		# installed Custom Field (only present when the Fleet Vehicle doctype exists).
+		# Use .get() rather than attribute access so this is safe on sites where the
+		# field isn't installed.
+		fleet_vehicle = (self.get("fleet_vehicle") or "").strip()
 		if fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle"):
 			pi_dict["custom_fleet_vehicle"] = fleet_vehicle
 

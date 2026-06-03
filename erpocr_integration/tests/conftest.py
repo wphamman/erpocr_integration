@@ -96,6 +96,19 @@ _frappe_utils_mock.escape_html = MagicMock(side_effect=lambda x: x)
 _frappe_utils_mock.get_link_to_form = MagicMock(side_effect=lambda dt, name: f"{dt}/{name}")
 sys.modules["frappe.utils"] = _frappe_utils_mock
 
+# Mock frappe.custom.doctype.custom_field.custom_field so install.py can import
+# create_custom_fields without the real Frappe package available. Tests that
+# exercise the install path patch this name on erpocr_integration.install,
+# so the underlying MagicMock is never actually called.
+for _mod_name in [
+	"frappe.custom",
+	"frappe.custom.doctype",
+	"frappe.custom.doctype.custom_field",
+	"frappe.custom.doctype.custom_field.custom_field",
+]:
+	if _mod_name not in sys.modules:
+		sys.modules[_mod_name] = MagicMock()
+
 # Mock Google libraries so drive_integration can be imported without them installed
 for _mod_name in [
 	"google",

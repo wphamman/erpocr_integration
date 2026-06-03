@@ -2,6 +2,32 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] — 2026-05-28
+
+Hotfix for the v1.1.5 graceful-degradation regression. Surfaced on the Cactus site, where `fleet_management` isn't installed — the OCR workspace crashed with "Field fleet_vehicle is referring to non-existing doctype Fleet Vehicle" the moment the workspace number cards loaded.
+
+### Conditional Custom Field install for `OCR Import.fleet_vehicle`
+- v1.1.5 declared `fleet_vehicle` as a hard `Link → Fleet Vehicle` in [ocr_import.json](erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.json). That ate meta resolution on any site without the Fleet Vehicle doctype, regardless of the v1.1.5 JS toggle — meta loads before JS runs, and the workspace eagerly resolves OCR Import meta to render its number cards.
+- Removed the field from the doctype JSON. The field is now provisioned at runtime as a Custom Field on OCR Import — but only when `frappe.db.exists("DocType", "Fleet Vehicle")` is true.
+- New [install.py](erpocr_integration/install.py) exposes `setup_optional_custom_fields()` and is wired to both `after_install` and `after_migrate` in [hooks.py](erpocr_integration/hooks.py). Idempotent; safe to re-run.
+- Sites that install `fleet_management` AFTER `erpocr_integration` get the field picked up on the next `bench migrate`.
+- [ocr_import.py](erpocr_integration/erpnext_ocr/doctype/ocr_import/ocr_import.py) `create_purchase_invoice()` now reads via `self.get("fleet_vehicle")` instead of attribute access — safe when the Custom Field isn't installed (`.get` returns `None`, the existing `has_field` guard on the PI side still applies).
+- Cleaned up the now-redundant async `frappe.db.exists` + `toggle_display` in [ocr_import.js](erpocr_integration/public/js/ocr_import.js). When the field isn't installed, Frappe omits it from the form entirely — nothing for the JS to hide.
+
+### Migration patch: `v1_1_6.migrate_fleet_vehicle_to_custom_field`
+- Wired into [patches.txt](erpocr_integration/patches.txt) — runs automatically on every `bench migrate`.
+- Removes any Property Setter row that was added as a stopgap workaround for the v1.1.5 bug (operator-applied `(doc_type, fleet_vehicle, options) → User` overrides on OCR Import or OCR Fleet Slip). These become orphans once the underlying field is gone; the patch sweeps them on the upgrade.
+- Re-runs `setup_optional_custom_fields()` so sites that already have `fleet_management` come out with the Custom Field provisioned in one upgrade step. Frappe's standard JSON sync handles removal of the lingering DocField record from the old install.
+
+### Scope (deliberate)
+- **OCR Fleet Slip's `fleet_vehicle` is unchanged.** Same Link-options shape, same theoretical vulnerability — but it's load-bearing for the fleet pipeline (vehicle matching, posting mode, supplier resolution) and there's no expectation that doctype works on a site without `fleet_management`. Cactus doesn't reference OCR Fleet Slip from any workspace card, so it doesn't trip the same crash. Out-of-scope for this hotfix.
+- No data migration. The DB column `fleet_vehicle` on `tabOCR Import` survives across the field-type change (DocField → Custom Field, same fieldname). Existing values are preserved on sites with `fleet_management`.
+
+### Tests
+- New [test_install.py](erpocr_integration/tests/test_install.py) — 6 unit tests covering: install no-op when Fleet Vehicle absent, install runs when present, after_install / after_migrate delegate correctly, patch clears stopgap Property Setters, patch runs install on fleet-bearing sites.
+- New `test_pi_handles_missing_fleet_vehicle_attr` in [test_ocr_import.py](erpocr_integration/tests/test_ocr_import.py) — verifies the PI creation path no longer raises AttributeError when the Custom Field isn't installed.
+- conftest gains a mock for the `frappe.custom.doctype.custom_field.custom_field` import chain so the install module is importable in the test env.
+
 ## [1.1.5] — 2026-05-27
 
 Fleet Vehicle tagging at OCR review time. Pairs with `fleet_management` v0.11.2 (`allow_on_submit` on `Purchase Invoice.custom_fleet_vehicle`, for retagging already-submitted PIs).
