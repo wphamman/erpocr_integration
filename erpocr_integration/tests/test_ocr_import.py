@@ -842,6 +842,26 @@ class TestFleetVehicleTag:
 		pi_dict = mock_frappe.get_doc.call_args[0][0]
 		assert "custom_fleet_vehicle" not in pi_dict
 
+	def test_pi_handles_missing_fleet_vehicle_attr(self, mock_frappe, sample_settings):
+		"""v1.1.6: when fleet_management isn't installed, the `fleet_vehicle` Custom
+		Field isn't created on OCR Import, so the attribute simply isn't there on a
+		freshly-loaded doc. The .get() path must return None gracefully and skip the
+		write — never raise AttributeError."""
+		doc = _make_ocr_import(document_type="Purchase Invoice", items=[_make_item()])
+		# Simulate field-not-installed: remove the attr the factory pre-sets to "".
+		del doc.fleet_vehicle
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-FV-005")
+		# has_field on PI may still return True if fleet_management is installed but
+		# OCR Import's field isn't — that's a weird intermediate state but we still
+		# need to behave: no fleet_vehicle to write means custom_fleet_vehicle stays
+		# off the pi_dict.
+		mock_frappe.get_meta.return_value.has_field.return_value = True
+
+		doc.create_purchase_invoice()  # must not raise AttributeError
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert "custom_fleet_vehicle" not in pi_dict
+
 
 # ---------------------------------------------------------------------------
 # Tax template application via _build_taxes_from_template

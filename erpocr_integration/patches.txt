@@ -1,1 +1,2 @@
 erpocr_integration.patches.v0_4.normalize_document_type
+erpocr_integration.patches.v1_1_6.migrate_fleet_vehicle_to_custom_field

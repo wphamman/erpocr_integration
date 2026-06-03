@@ -52,7 +52,13 @@ doctype_js = {
 # ------------
 
 # before_install = "erpocr_integration.install.before_install"
-# after_install = "erpocr_integration.install.after_install"
+after_install = "erpocr_integration.install.after_install"
+
+# after_migrate: re-runs the optional Custom Field setup on every migrate so that
+# installing fleet_management *after* erpocr_integration (or upgrading either
+# direction) leaves the fleet_vehicle Custom Field on OCR Import in the right
+# state. The setup function is idempotent.
+after_migrate = "erpocr_integration.install.after_migrate"
 
 # Uninstallation
 # ------------
