@@ -96,17 +96,23 @@ Pending → Needs Review → Matched → Draft Created → Completed / No Action
 - **doc_events**: PO/PR submit → Completed; PO/PR cancel → reset to Matched (same pattern as OCR Import)
 
 ### OCR Fleet Slip Workflow
-Pending → Needs Review → Matched → (terminal for fleet-card slips) / Draft Created → Completed / No Action / Error
+Pending → Needs Review → Matched → Draft Created (Direct Expense) / Completed (Fleet Card) → Completed / No Action / Error
 
-- **Primary path is reconciliation, not PI creation.** Fleet card providers (Wesbank, FNB Fleet, etc.) issue a single monthly invoice that aggregates every slip. Individual OCR Fleet Slip records exist to capture each transaction for audit/matching against that monthly invoice — they do **not** become standalone Purchase Invoices in the normal case. Expect most fleet-card slips to stop at **Matched** and stay there until the monthly invoice arrives.
-- **PI creation is the exception, not the rule.** `create_purchase_invoice()` exists for unauthorized purchases, non-card cash spends, or fuel bought outside the fleet card programme. Slips where `slip_type = Other` / `unauthorized_flag = 1` are the typical candidates.
+- **Two disposition paths, branched by `posting_mode`** (v1.2.0+):
+  - **`posting_mode = "Fleet Card"`** → slip closes as a **control record**, no Purchase Invoice. The fleet card provider's monthly invoice (handled in `fleet_management`) books the cost; this slip captures litres / odometer / vehicle / date for cross-check. Reaches `Completed` via `mark_recorded()` (whitelisted, user-clicked **Mark Recorded** button). `purchase_invoice` stays NULL.
+  - **`posting_mode = "Direct Expense"`** → slip becomes the source document for an AP entry via `create_purchase_invoice()`. Standard PI draft → submit → Completed flow.
+- **`Completed` no longer implies `purchase_invoice IS NOT NULL`** (v1.2.0). A Fleet Card slip in `Completed` has the link NULL by design — the cost lives in the provider's invoice. Code that queries Fleet Slips for downstream document linkage must check both `posting_mode` and `purchase_invoice`, not just status.
+- **PI guard: `posting_mode != "Direct Expense"` raises.** Server-side enforcement in `create_purchase_invoice()` (defence in depth — UI also hides the button for Fleet Card mode). Prevents the v1.2.0 invariant from being bypassed by API call or stale client.
+- **`posting_mode` is operator-editable.** Auto-set from `Fleet Vehicle.custom_fleet_card_provider` on vehicle match, but no longer `read_only`. Accounting can flip per-slip during review for the edge case where a fleet-card vehicle was filled on a business card (or vice-versa).
 - **Single transaction per slip** — no child table; fuel fill-up or toll charge lives directly on the main doc
 - **Slip classification**: `slip_type` (Fuel / Toll / Other) determines item and form sections
-- **Unauthorized flag**: `slip_type = Other` auto-sets `unauthorized_flag` — orange warning on form; review then either create PI (if a real off-card spend) or mark No Action (if it was actually a card slip Gemini misread)
+- **Unauthorized flag**: `slip_type = Other` auto-sets `unauthorized_flag` — orange warning on form; review then either Mark Recorded (Fleet Card) / Create PI (Direct Expense) / Mark No Action (genuinely unauthorized)
 - **Drive-only input** — drivers drop scans in a shared Drive folder; no manual upload or email
-- **Per-vehicle posting mode** via Fleet Vehicle custom fields (`custom_fleet_card_provider`, `custom_fleet_control_account`, `custom_cost_center`):
-  - Fleet card provider set → **Fleet Card** mode → PI (if ever created) would use fleet card provider as supplier; in practice the slip is left at Matched for monthly reconciliation
+- **Per-vehicle posting mode** auto-set from Fleet Vehicle custom fields (`custom_fleet_card_provider`, `custom_fleet_control_account`, `custom_cost_center`):
+  - Fleet card provider set → **Fleet Card** mode (operator runs Mark Recorded once verified)
   - Fleet card provider blank → **Direct Expense** mode → PI supplier = `fleet_default_supplier` from OCR Settings, expense = `fleet_expense_account`
+- **Vestigial on Fleet Card path** (v1.2.0): `custom_fleet_control_account` is still captured on each slip (via `_apply_vehicle_config`) but no longer flows into a PI on Fleet Card slips since no PI is created. The expense_account field on the slip is informational only on this path; cleanup TBD in a future release.
+- **`fleet_management` reads OCR Fleet Slips** (`monthly_summary.py`) for `status in [Completed, Draft Created, Matched, Needs Review]` regardless of `posting_mode` — Fleet Card slips in `Completed` continue to feed LITRES_MISMATCH and the Fuel Efficiency Tracker.
 - **Supplier resolution**: fleet card provider (from vehicle) → `fleet_default_supplier` (from OCR Settings) → user fills manually
 - **Status readiness**: Matched requires data + `fleet_vehicle` link (not just registration string) + supplier (`fleet_card_supplier` must be set)
 - **PI creation guard**: `create_purchase_invoice()` requires `fleet_vehicle` to be set (prevents unverified vehicle traceability)

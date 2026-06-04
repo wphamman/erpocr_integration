@@ -51,7 +51,10 @@ def _make_fleet_slip(**overrides):
 	doc.vehicle_registration = "ABC 123 GP"
 	doc.fleet_vehicle = "VEH-001"
 	doc.vehicle_match_status = "Auto Matched"
-	doc.posting_mode = "Fleet Card"
+	# v1.2.0: Direct Expense is the default for the test factory because most
+	# active controller tests exercise the create_purchase_invoice path, which
+	# is gated on Direct Expense. Fleet Card tests override per-case.
+	doc.posting_mode = "Direct Expense"
 	doc.fleet_card_supplier = "WesBank"
 	doc.expense_account = "3100 - Fleet Control - TC"
 	doc.cost_center = "Transport - TC"
@@ -185,7 +188,8 @@ class TestUpdateStatus:
 
 class TestCreatePurchaseInvoice:
 	def test_creates_pi_draft(self, mock_frappe):
-		"""Successfully creates PI draft in fleet card mode."""
+		"""Successfully creates PI draft for a Direct Expense slip (paid on a
+		business debit/credit card — slip IS the source document for the AP entry)."""
 		mock_pi = MagicMock()
 		mock_pi.name = "PI-00001"
 		mock_pi.items = [MagicMock()]
@@ -198,14 +202,42 @@ class TestCreatePurchaseInvoice:
 		doc = _make_fleet_slip(
 			status="Matched",
 			document_type="Purchase Invoice",
-			posting_mode="Fleet Card",
-			fleet_card_supplier="WesBank",
+			posting_mode="Direct Expense",
+			fleet_card_supplier="Local Garage",
 		)
 		doc.create_purchase_invoice()
 
 		assert doc.purchase_invoice == "PI-00001"
 		assert doc.status == "Draft Created"
 		mock_pi.insert.assert_called_once()
+
+	def test_blocks_fleet_card_mode(self, mock_frappe):
+		"""v1.2.0 invariant: Fleet Card slips MUST NOT spawn a Purchase Invoice.
+		The provider's monthly invoice books the cost; a PI here would double-count."""
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="Fleet Card",
+			fleet_card_supplier="Wesbank",
+		)
+		with pytest.raises(Exception):
+			doc.create_purchase_invoice()
+		# Assertion: nothing got created and the slip status is unchanged
+		assert doc.purchase_invoice is None
+		assert doc.status == "Matched"
+
+	def test_blocks_unset_posting_mode(self, mock_frappe):
+		"""Slip with posting_mode='' (vehicle never matched) should not be able
+		to create a PI — guard catches the unset case via the Direct-Expense check."""
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="",
+		)
+		with pytest.raises(Exception):
+			doc.create_purchase_invoice()
 
 	def test_blocks_wrong_status(self, mock_frappe):
 		doc = _make_fleet_slip(status="Completed", document_type="Purchase Invoice")
@@ -360,6 +392,38 @@ class TestCreatePurchaseInvoice:
 		doc = _make_fleet_slip(status="Matched", document_type="Purchase Invoice")
 		with pytest.raises(Exception):
 			doc.create_purchase_invoice()
+
+	def test_blocks_no_purchase_invoice_create_perm(self, mock_frappe):
+		"""User has OCR Fleet Slip write but not Purchase Invoice create →
+		guard fires independently of the OCR Fleet Slip write check."""
+
+		# Return True for OCR Fleet Slip checks, False for Purchase Invoice checks.
+		def has_perm(doctype, ptype=None, *args, **kwargs):
+			return doctype != "Purchase Invoice"
+
+		mock_frappe.has_permission.side_effect = has_perm
+		doc = _make_fleet_slip(status="Matched", document_type="Purchase Invoice")
+		with pytest.raises(Exception):
+			doc.create_purchase_invoice()
+		# Should never reach the doc-insert path
+		mock_frappe.get_doc.assert_not_called()
+
+	def test_blocks_no_fleet_vehicle(self, mock_frappe):
+		"""Direct Expense slip with everything else set, but no linked Fleet Vehicle.
+		The traceability guard must refuse — every PI must trace to a verified vehicle."""
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_cached_doc.return_value = _make_settings()
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="Direct Expense",
+			fleet_card_supplier="Local Garage",
+			fleet_vehicle="",  # not linked
+		)
+		with pytest.raises(Exception):
+			doc.create_purchase_invoice()
+		# Vehicle guard fires AFTER the duplicate-creation row-lock check but BEFORE supplier/item
+		mock_frappe.get_doc.assert_not_called()
 
 	def test_needs_review_status_allowed(self, mock_frappe):
 		"""PI creation allowed from Needs Review status."""
@@ -568,6 +632,104 @@ class TestMarkNoAction:
 		doc = _make_fleet_slip(status="Needs Review")
 		with pytest.raises(Exception):
 			doc.mark_no_action("reason")
+
+
+# ---------------------------------------------------------------------------
+# TestMarkRecorded — v1.2.0 Fleet Card terminal disposition (no PI)
+# ---------------------------------------------------------------------------
+
+
+class TestMarkRecorded:
+	def test_recorded_from_matched(self, mock_frappe):
+		"""Fleet Card slip at Matched + verified data → status=Completed, no PI."""
+		doc = _make_fleet_slip(
+			status="Matched",
+			posting_mode="Fleet Card",
+			fleet_vehicle="VEH-001",
+		)
+		doc.mark_recorded()
+
+		assert doc.status == "Completed"
+		assert doc.purchase_invoice is None  # no document created
+		doc.save.assert_called_once()
+
+	def test_recorded_from_needs_review(self, mock_frappe):
+		"""Allowed from Needs Review too — accounting may close after reviewing
+		without going through a Matched intermediate state."""
+		doc = _make_fleet_slip(
+			status="Needs Review",
+			posting_mode="Fleet Card",
+			fleet_vehicle="VEH-001",
+		)
+		doc.mark_recorded()
+
+		assert doc.status == "Completed"
+		assert doc.purchase_invoice is None
+
+	def test_blocks_direct_expense_mode(self, mock_frappe):
+		"""Direct Expense slips need a PI, not a record disposition."""
+		doc = _make_fleet_slip(
+			status="Matched",
+			posting_mode="Direct Expense",
+			fleet_vehicle="VEH-001",
+		)
+		with pytest.raises(Exception):
+			doc.mark_recorded()
+		assert doc.status == "Matched"
+
+	def test_blocks_unset_posting_mode(self, mock_frappe):
+		"""Unmatched slip (posting_mode='') can't be recorded — needs a vehicle first."""
+		doc = _make_fleet_slip(
+			status="Needs Review",
+			posting_mode="",
+			fleet_vehicle="",
+		)
+		with pytest.raises(Exception):
+			doc.mark_recorded()
+
+	def test_blocks_no_vehicle(self, mock_frappe):
+		"""Fleet Card slip without a linked vehicle can't be recorded — the slip
+		is meaningless as a control record without the vehicle it belongs to."""
+		doc = _make_fleet_slip(
+			status="Matched",
+			posting_mode="Fleet Card",
+			fleet_vehicle="",
+		)
+		with pytest.raises(Exception):
+			doc.mark_recorded()
+
+	def test_blocks_wrong_status(self, mock_frappe):
+		"""Already Completed / Draft Created / No Action / Error → can't re-record."""
+		for bad_status in ("Completed", "Draft Created", "No Action", "Error"):
+			doc = _make_fleet_slip(
+				status=bad_status,
+				posting_mode="Fleet Card",
+				fleet_vehicle="VEH-001",
+			)
+			with pytest.raises(Exception):
+				doc.mark_recorded()
+
+	def test_manual_override_unlocks_pi_path(self, mock_frappe):
+		"""Edge case the brief calls out: a Fleet Card slip that turns out to
+		have been paid on a business card. Flipping posting_mode to Direct Expense
+		on the form unlocks create_purchase_invoice and blocks mark_recorded."""
+		# 1. As Fleet Card → mark_recorded works, create_purchase_invoice doesn't
+		doc = _make_fleet_slip(
+			status="Matched",
+			posting_mode="Fleet Card",
+			document_type="Purchase Invoice",
+			fleet_vehicle="VEH-001",
+		)
+		with pytest.raises(Exception):
+			doc.create_purchase_invoice()
+
+		# 2. Flip to Direct Expense → create_purchase_invoice path unblocks,
+		# mark_recorded blocks. (We don't actually run create_purchase_invoice
+		# here — that's covered by TestCreatePurchaseInvoice; just confirm the
+		# guard inverts.)
+		doc.posting_mode = "Direct Expense"
+		with pytest.raises(Exception):
+			doc.mark_recorded()
 
 
 # ---------------------------------------------------------------------------

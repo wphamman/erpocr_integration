@@ -2,6 +2,35 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-06-03
+
+OCR Fleet Slip workflow now branches by `posting_mode`. Fleet Card slips (paid via a fleet card provider like Wesbank) close as **control records** with no Purchase Invoice — the provider's monthly invoice in `fleet_management` is the source of truth for the cost, and a per-slip PI would double-count. Direct Expense slips (paid on a business debit/credit card) keep the existing PI flow.
+
+### Fleet Card terminal disposition
+- New whitelisted `mark_recorded()` method on [ocr_fleet_slip.py](erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.py) — Fleet Card-only, transitions `Matched` / `Needs Review` → `Completed` with `purchase_invoice` NULL. Guards: posting_mode must be `Fleet Card`, status must be reviewable, `fleet_vehicle` must be linked.
+- New **Mark Recorded** primary-action button on the form for Fleet Card slips, gated on the same reviewable-status condition as the existing Create > Purchase Invoice button ([ocr_fleet_slip.js](erpocr_integration/public/js/ocr_fleet_slip.js)).
+- Form intro text branches by `posting_mode` at the `Needs Review` and `Matched` states so operators see the correct next step (Mark Recorded vs Create PI), and the `Completed` intro renders a "Recorded as control record" message when `purchase_invoice` is NULL.
+
+### PI guard
+- [create_purchase_invoice()](erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.py) now raises if `posting_mode != "Direct Expense"`. Defence in depth — the UI also hides the button for Fleet Card mode, but this catches API bypasses and stale clients. Docstring corrected (the v1.0.x docstring said "for fleet card mode" — inverted from intent).
+- Server guard ordering: `status not in (Matched, Needs Review)` → `posting_mode != "Direct Expense"` → `document_type != "Purchase Invoice"` → existing duplicate/vehicle/supplier/item checks.
+
+### `posting_mode` operator-editable
+- Dropped `read_only: 1` on [ocr_fleet_slip.json](erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.json). Auto-set from `Fleet Vehicle.custom_fleet_card_provider` on vehicle match (both `fleet_api._apply_vehicle_config` and the controller's `_apply_vehicle_config_from_link`); operator can flip per-slip during review for the edge case where a fleet-card vehicle was filled on a business card (or vice-versa). The PI guard and `mark_recorded()` guard both key off the slip's current `posting_mode`, not a re-derive from the vehicle.
+
+### Status-semantic shift
+- **`Completed` no longer implies `purchase_invoice IS NOT NULL`**. A Fleet Card slip in `Completed` has the link NULL by design. Downstream consumers that query Fleet Slips for document linkage must now check both `posting_mode` and `purchase_invoice`. `fleet_management`'s `monthly_summary.py` reads OCR Fleet Slips for `status in [Completed, Draft Created, Matched, Needs Review]` regardless of `posting_mode`, so Fleet Card slips in `Completed` continue to feed LITRES_MISMATCH and the Fuel Efficiency Tracker — zero cross-app change required.
+
+### Tests
+- 9 new tests in [test_fleet_controller.py](erpocr_integration/tests/test_fleet_controller.py): PI refusal on Fleet Card + unset posting_mode; `mark_recorded` happy path from Matched + Needs Review; mark_recorded guards (wrong mode, no vehicle, wrong status across 4 states); manual-override inversion (slip flipped between modes gets the right behaviour on each side).
+- Factory `_make_fleet_slip` default flipped to `posting_mode = "Direct Expense"` since most active controller tests exercise the PI path; Fleet Card tests override per-case.
+- 664 tests pass (+9 over v1.1.6's 655). ruff + ruff-format clean.
+
+### Scope (deliberate)
+- **No backfill patch** for existing prod slips. Pre-deploy audit (read-only API probe against erp.starpops.co.za on 2026-06-03) shows: **17 Matched/Draft-Created slips with `posting_mode = "Fleet Card"`** — accounting closes 16 of them manually via the new Mark Recorded button (the 1 Draft Created completes naturally via doc_events when the PI submits). **Plus 19 Matched/Needs-Review slips with `posting_mode = ""`** (empty — never auto-set, likely from a vehicle linked without `vehicle_match_status = Confirmed`); these show neither button under v1.2.0's mode-gated UI, but `posting_mode` is now operator-editable so accounting picks the right mode per slip during review. No Direct Expense slips currently in flight on prod.
+- **`custom_fleet_control_account` left in place** but is now vestigial on the Fleet Card path (still captured on the slip, no longer flows into a PI since no PI is created on Fleet Card slips). Cleanup TBD in a future release once usage patterns are stable.
+- No changes to fleet_management. Reuse of `Completed` for the new control-record disposition means `fleet_management/monthly_summary.py`'s reader filter doesn't need updating.
+
 ## [1.1.6] — 2026-05-28
 
 Hotfix for the v1.1.5 graceful-degradation regression. Surfaced on the Cactus site, where `fleet_management` isn't installed — the OCR workspace crashed with "Field fleet_vehicle is referring to non-existing doctype Fleet Vehicle" the moment the workspace number cards loaded.

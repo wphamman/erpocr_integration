@@ -74,7 +74,16 @@ class OCRFleetSlip(Document):
 
 	@frappe.whitelist()
 	def create_purchase_invoice(self):
-		"""Create a Purchase Invoice draft for fleet card mode."""
+		"""Create a Purchase Invoice draft for a Direct Expense slip.
+
+		As of v1.2.0, this path is restricted to `posting_mode == "Direct Expense"`
+		— slips paid with a personal/business debit or credit card, where Star Pops
+		owes the merchant directly and the slip is the source document for the AP
+		entry. Fleet Card slips (paid through a fleet card provider like Wesbank)
+		MUST NOT take this path: their cost is booked from the provider's monthly
+		invoice import in fleet_management, and creating a PI here would double-
+		count. Fleet Card slips close as control records via `mark_recorded()`.
+		"""
 		# Explicit source-doc write guard — run_doc_method only checks read by default.
 		if not frappe.has_permission("OCR Fleet Slip", "write", self.name):
 			frappe.throw(_("You don't have permission to modify this OCR Fleet Slip."))
@@ -84,6 +93,16 @@ class OCRFleetSlip(Document):
 		if self.status not in ("Matched", "Needs Review"):
 			frappe.throw(
 				_("Cannot create Purchase Invoice from a record with status '{0}'.").format(self.status)
+			)
+
+		if self.posting_mode != "Direct Expense":
+			frappe.throw(
+				_(
+					"Cannot create a Purchase Invoice for a Fleet Card slip. "
+					"The provider's monthly invoice books the cost; this slip is a control record. "
+					"Use Mark Recorded to close it. "
+					"If this slip was actually paid on a business card, flip Posting Mode to Direct Expense first."
+				)
 			)
 
 		if self.document_type != "Purchase Invoice":
@@ -266,6 +285,46 @@ class OCRFleetSlip(Document):
 				_("Link cleared. {0} {1} was already deleted.").format(linked_doctype, linked_name),
 				indicator="blue",
 			)
+
+	@frappe.whitelist()
+	def mark_recorded(self):
+		"""Fleet Card terminal disposition — close the slip as a control record (no PI).
+
+		The Wesbank-style monthly provider invoice books the actual cost; this slip
+		captures the per-transaction control evidence (litres, odometer, vehicle,
+		date) that fleet_management cross-checks against the provider invoice. So a
+		fully-verified Fleet Card slip just needs to flip to Completed — there's no
+		downstream document to create.
+
+		Refuses on Direct Expense slips: those need a PI via create_purchase_invoice().
+		"""
+		if not frappe.has_permission("OCR Fleet Slip", "write", self.name):
+			frappe.throw(_("You don't have permission to modify this record."))
+
+		if self.posting_mode != "Fleet Card":
+			frappe.throw(
+				_(
+					"Mark Recorded is only for Fleet Card slips (paid via a fleet card provider). "
+					"Direct Expense slips need a Purchase Invoice — use Create > Purchase Invoice instead."
+				)
+			)
+
+		if self.status not in ("Matched", "Needs Review"):
+			frappe.throw(_("Cannot mark as Recorded from status '{0}'.").format(self.status))
+
+		if not self.fleet_vehicle:
+			frappe.throw(_("No Fleet Vehicle linked. Match a vehicle before marking as Recorded."))
+
+		self.status = "Completed"
+		self.save()
+
+		frappe.msgprint(
+			_(
+				"Marked as Recorded. The cost is booked from the fleet card provider's "
+				"monthly invoice; this slip is the control record."
+			),
+			indicator="green",
+		)
 
 	@frappe.whitelist()
 	def mark_no_action(self, reason):

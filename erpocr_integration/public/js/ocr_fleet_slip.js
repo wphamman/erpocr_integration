@@ -31,11 +31,33 @@ frappe.ui.form.on('OCR Fleet Slip', {
 	refresh: function(frm) {
 		fleet_set_status_intro(frm);
 
-		// Create Purchase Invoice — gated on reviewable status
-		if (!frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status)) {
+		// Posting Mode branches the disposition:
+		// - Direct Expense → create a Purchase Invoice (the slip is the AP source doc)
+		// - Fleet Card    → close as a control record via "Mark Recorded" (no PI;
+		//                   cost is booked from the provider's monthly invoice in fleet_management)
+		var reviewable = !frm.is_new() && ['Matched', 'Needs Review'].includes(frm.doc.status);
+
+		if (reviewable && frm.doc.posting_mode === 'Direct Expense') {
 			frm.add_custom_button(__('Purchase Invoice'), function() {
 				fleet_create_document(frm, 'Purchase Invoice', 'create_purchase_invoice');
 			}, __('Create'));
+		}
+
+		if (reviewable && frm.doc.posting_mode === 'Fleet Card') {
+			frm.add_custom_button(__('Mark Recorded'), function() {
+				frappe.confirm(
+					__('Close this slip as a control record? No Purchase Invoice will be created — the cost is booked from the fleet card provider\'s monthly invoice.'),
+					function() {
+						frappe.call({
+							method: 'mark_recorded',
+							doc: frm.doc,
+							callback: function(r) {
+								if (!r.exc) { frm.reload_doc(); }
+							}
+						});
+					}
+				);
+			}).addClass('btn-primary');
 		}
 
 		// Unlink & Reset
@@ -164,9 +186,21 @@ function fleet_set_status_intro(frm) {
 		var error_msg = frm.doc.error_log ? ': ' + frappe.utils.escape_html(frm.doc.error_log.substring(0, 200)) : '';
 		frm.set_intro(__('Extraction failed') + error_msg, 'red');
 	} else if (status === 'Needs Review') {
-		frm.set_intro(__('Review extracted data and verify vehicle match, then click Create > Purchase Invoice.'), 'orange');
+		if (frm.doc.posting_mode === 'Fleet Card') {
+			frm.set_intro(__('Review extracted data and verify the vehicle match. This is a fleet card slip — once verified, click Mark Recorded (no Purchase Invoice; the cost is booked from the fleet card provider\'s monthly invoice).'), 'orange');
+		} else if (frm.doc.posting_mode === 'Direct Expense') {
+			frm.set_intro(__('Review extracted data and verify vehicle match, then click Create > Purchase Invoice.'), 'orange');
+		} else {
+			frm.set_intro(__('Review extracted data and match a vehicle.'), 'orange');
+		}
 	} else if (status === 'Matched') {
-		frm.set_intro(__('Ready to create Purchase Invoice. Use the Create button above.'), 'blue');
+		if (frm.doc.posting_mode === 'Fleet Card') {
+			frm.set_intro(__('Ready to record. This is a fleet card slip — the cost is booked from the provider\'s monthly invoice; this slip is the control record. Click Mark Recorded to close it.'), 'blue');
+		} else if (frm.doc.posting_mode === 'Direct Expense') {
+			frm.set_intro(__('Ready to create Purchase Invoice. Use the Create button above.'), 'blue');
+		} else {
+			frm.set_intro(__('Match a vehicle to continue.'), 'blue');
+		}
 	} else if (status === 'Draft Created') {
 		var link = '';
 		if (frm.doc.purchase_invoice) {
@@ -178,12 +212,14 @@ function fleet_set_status_intro(frm) {
 		var reason = frm.doc.no_action_reason ? ': ' + frappe.utils.escape_html(frm.doc.no_action_reason) : '';
 		frm.set_intro(__('No action required') + reason, 'grey');
 	} else if (status === 'Completed') {
-		var completed_link = '';
 		if (frm.doc.purchase_invoice) {
-			completed_link = '<a href="/app/purchase-invoice/' + encodeURIComponent(frm.doc.purchase_invoice) + '">' +
+			var completed_link = '<a href="/app/purchase-invoice/' + encodeURIComponent(frm.doc.purchase_invoice) + '">' +
 				frappe.utils.escape_html(frm.doc.purchase_invoice) + '</a>';
+			frm.set_intro(__('Completed: {0}', [completed_link]), 'green');
+		} else {
+			// Fleet Card path: no PI, recorded as a control entry only.
+			frm.set_intro(__('Recorded as a control record. The cost is booked from the fleet card provider\'s monthly invoice.'), 'green');
 		}
-		frm.set_intro(__('Completed: {0}', [completed_link]), 'green');
 	}
 }
 

@@ -205,8 +205,7 @@
 			"fieldtype": "Select",
 			"label": "Posting Mode",
 			"options": "\nFleet Card\nDirect Expense",
-			"read_only": 1,
-			"description": "Auto-set from vehicle config: Fleet Card = supplier from vehicle, Direct Expense = default supplier"
+			"description": "Auto-set from vehicle config: Fleet Card = control record (no PI; cost booked from provider invoice), Direct Expense = creates a Purchase Invoice. Editable — flip during review if a slip was actually paid on a different card."
 		},
 		{
 			"fieldname": "fleet_card_supplier",
@@ -378,7 +377,7 @@
 	],
 	"index_web_pages_for_search": 1,
 	"links": [],
-	"modified": "2026-04-23 00:00:00.000000",
+	"modified": "2026-06-03 14:00:00.000000",
 	"modified_by": "Administrator",
 	"module": "ERPNext OCR",
 	"name": "OCR Fleet Slip",

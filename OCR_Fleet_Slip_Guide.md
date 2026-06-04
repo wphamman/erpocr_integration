@@ -99,7 +99,12 @@ The system:
 4. **Sets up the posting** — determines the supplier and expense account based on the vehicle's configuration
 5. **Creates an OCR Fleet Slip record** in ERPNext for the accounting team
 
-The accounting team then reviews the data. For card-paid slips (the usual case for Wesbank or another fleet card), the slip is held against the monthly fleet card invoice for reconciliation — no individual Purchase Invoice is created. The accounts team only creates a Purchase Invoice for the exceptions: cash purchases or anything bought without the fleet card.
+The accounting team then reviews the data. What happens next depends on **how the slip was paid for**:
+
+- **Paid with a fleet card** (Wesbank, FNB Fleet, etc.) → the slip is closed as a **control record** by clicking **Mark Recorded** on the form. No Purchase Invoice is created — the actual cost is already booked from the fleet card provider's monthly invoice (handled in fleet_management). This slip just supplies the per-transaction evidence (litres, odometer, vehicle, date) that the monthly invoice gets cross-checked against.
+- **Paid with a business debit/credit card or cash** → the slip IS the source document for an AP entry. The accounts team clicks **Create > Purchase Invoice** to draft a PI and submit it.
+
+The system picks the right path automatically based on the vehicle's setup (whether it has a fleet card provider configured). The accounting team can manually switch the **Posting Mode** field on an individual slip if a one-off slip turned out to be paid differently than the vehicle's usual method.
 
 ---
 
