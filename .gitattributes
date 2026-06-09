@@ -1,0 +1,11 @@
+# Normalize all text files to LF in the repository (prevents CRLF churn from
+# Windows/WSL editors). Git auto-detects binary files and leaves them untouched.
+* text=auto eol=lf
+
+# Be explicit about common binary types so they are never line-ending normalized.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
