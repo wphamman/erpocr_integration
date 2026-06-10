@@ -1,3 +1,8 @@
+> **ARCHIVED — COMPLETE.** Shipped in v0.8 and live in v1.2.0 (see [CHANGELOG.md](../../../CHANGELOG.md)).
+> This is the original point-in-time build plan; its unticked `- [ ]` checkboxes are historical
+> and were never back-filled. Do not execute as a live plan. Current state of the feature:
+> [docs/architecture.md](../../architecture.md) + [docs/implementation-patterns.md](../../implementation-patterns.md).
+
 # Phase 8: Statement Reconciliation
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
