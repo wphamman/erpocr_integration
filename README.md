@@ -19,7 +19,7 @@
 
 ---
 
-A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 2.5 Flash** API to extract structured data from PDFs and images, and create draft documents in ERPNext. Three pipelines: **invoices**, **delivery notes**, and **fleet slips**. Essentially free at small volume (~$0.0001 per document).
+A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 2.5 Flash** API to extract structured data from PDFs and images, and create draft documents in ERPNext. Four pipelines: **invoices**, **delivery notes**, **fleet slips**, and **statement reconciliation**. Essentially free at small volume (~$0.0001 per document).
 
 ## Features
 
@@ -45,14 +45,23 @@ A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 
 - **Slip Classification** — Gemini identifies Fuel, Toll, or Other (unauthorized purchases flagged)
 - **Vehicle Matching** — Registration number matched to Fleet Vehicle for auto-configured posting
 - **Per-Vehicle Posting** — Fleet card vehicles use card provider as supplier; direct expense vehicles use a default supplier
-- **Always Purchase Invoice** — All fleet slips create PIs (no JE path)
+- **Two Posting Modes** (v1.2.0) — **Fleet Card** slips close as control records with **no Purchase Invoice** (the provider's monthly fleet-card invoice books the cost; the slip captures litres/odometer/vehicle for cross-check, marked done via **Mark Recorded**); **Direct Expense** slips create a Purchase Invoice. The mode auto-sets from the vehicle but is operator-editable per slip.
 - **Optional `fleet_management` Integration** — Works standalone or alongside the [`fleet_management`](https://github.com/wphamman/fleet_management) app. When `fleet_management` is installed, OCR-generated fleet PIs are automatically tagged with `custom_fleet_vehicle` so they appear in vehicle-level cost reports. Pure runtime feature-detect — no hard dependency, no install ordering required, app works identically without `fleet_management`.
+
+### Statement Reconciliation Pipeline (OCR Statement)
+- **Drive Scanning + Auto-Classification** — A Gemini classifier routes each Drive scan to the invoice or statement pipeline automatically
+- **Supplier Statement Extraction** — Extracts transaction lines (date, reference, debit, credit, running balance) from a supplier statement
+- **Automatic Reconciliation** — Matches each statement line against submitted ERPNext Purchase Invoices for that supplier (by reference and amount, within the statement period); credit lines identified as payments
+- **Mismatch Flagging** — Lines flagged Matched / Amount Mismatch / Missing from ERPNext / Unreconciled; a reverse check surfaces submitted PIs that are *Not in Statement*
+- **Auto-Refresh** — Submitting/cancelling a Purchase Invoice re-runs reconciliation on that supplier's Reconciled statements (out-of-band, never blocks the PI)
 
 ### Shared Features
 - **Gemini AI Extraction** — Structured JSON output with confidence scoring
 - **Tax Template Mapping** — Auto-selects VAT or non-VAT template based on detected tax amounts
+- **Optional Auto-Draft** — Off by default; when enabled, high-confidence extractions (supplier + all items exact/alias matched) auto-create a draft document, skipping the manual review-and-click step. Low-confidence records still fall through to manual review.
 - **Google Drive Archiving** — Organises processed files into Year/Month/Supplier folders
 - **Confidence Scoring** — Gemini self-reports extraction confidence (displayed as colour-coded badge)
+- **Stats Dashboard** — Role-gated OCR Stats page: throughput, auto-draft ratio, fallback reasons, per-supplier counts
 - **Dashboard** — Workspace with KPI number cards, status chart, and quick links
 
 ## How It Works
@@ -60,10 +69,11 @@ A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 
 ```
 Invoice:       Upload/Email/Drive → Gemini API → OCR Import → Match → Review → PI / PR / JE
 Delivery Note: Drive scan → Gemini API → OCR Delivery Note → Match → Review → PO / PR
-Fleet Slip:    Drive scan → Gemini API → OCR Fleet Slip → Vehicle Match → Review → PI
+Fleet Slip:    Drive scan → Gemini API → OCR Fleet Slip → Vehicle Match → Review → PI / Mark Recorded
+Statement:     Drive scan → classify → Gemini API → OCR Statement → Reconcile vs Purchase Invoices → Review
 ```
 
-No documents are created automatically — every decision is made by the user.
+No documents are created automatically by default — every decision is made by the user. (An optional, off-by-default setting can auto-draft high-confidence matches.)
 
 ## Requirements
 
@@ -169,7 +179,9 @@ See the user guides in the Documentation section below for detailed instructions
 | **OCR Import Item** | Line items on OCR Import (with PO item and PR item references) |
 | **OCR Delivery Note** | DN staging — extracted supplier, items, quantities; creates PO or PR |
 | **OCR Delivery Note Item** | Line items on OCR DN (description, qty, UOM, item match) |
-| **OCR Fleet Slip** | Fleet slip staging — fuel/toll classification, vehicle matching; creates PI |
+| **OCR Fleet Slip** | Fleet slip staging — fuel/toll classification, vehicle matching; Fleet Card (control record) or Direct Expense (creates PI) |
+| **OCR Statement** | Supplier statement staging — period, balances, reconciliation status |
+| **OCR Statement Item** | Statement transaction lines (date, reference, debit, credit, balance, reconciliation status) |
 | **OCR Supplier Alias** | Learned mapping: OCR text &rarr; ERPNext Supplier |
 | **OCR Item Alias** | Learned mapping: OCR text &rarr; ERPNext Item |
 | **OCR Service Mapping** | Pattern-based mapping: description &rarr; Item + GL account |
