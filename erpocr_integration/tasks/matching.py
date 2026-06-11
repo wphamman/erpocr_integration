@@ -288,6 +288,25 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 	return None, "Unmatched", 0
 
 
+# A service mapping whose description_pattern is this sentinel is a *supplier
+# default*: it codes ANY line from that supplier. Used as the last resort (after
+# specific + generic patterns) for suppliers whose line descriptions vary too much
+# to learn per-pattern — e.g. a transport subcontractor where every line embeds the
+# route/driver/vehicle. description_pattern is mandatory on the doctype, so the
+# sentinel is a literal "*" rather than a blank.
+SUPPLIER_DEFAULT_PATTERN = "*"
+
+
+def _service_mapping_result(mapping) -> dict:
+	return {
+		"item_code": mapping.item_code,
+		"item_name": mapping.item_name,
+		"expense_account": mapping.expense_account,
+		"cost_center": mapping.cost_center,
+		"match_status": "Auto Matched",
+	}
+
+
 def match_service_item(
 	description_ocr: str, company: str | None = None, supplier: str | None = None
 ) -> dict | None:
@@ -300,10 +319,16 @@ def match_service_item(
 	- Cost center (optional)
 	- Supplier (optional) for supplier-specific mappings
 
-	Matching logic:
-	- Priority: supplier-specific mappings first, then generic mappings
-	- Within each priority level: longest pattern match wins
-	- Searches OCR Service Mapping for description patterns (case-insensitive, partial match)
+	Matching priority (highest first):
+	  1. Supplier-specific pattern mappings (longest pattern wins)
+	  2. Generic pattern mappings (no supplier; longest pattern wins)
+	  3. Supplier default — a supplier-scoped mapping whose pattern is the literal
+	     "*" sentinel (SUPPLIER_DEFAULT_PATTERN). Codes any remaining line for that
+	     supplier. Last resort, so specific/generic patterns always win.
+
+	Patterns are matched as normalized substrings (case-insensitive, punctuation
+	stripped). A pattern that normalizes to empty is ignored (never a wildcard) —
+	only the explicit "*" sentinel acts supplier-wide.
 
 	Args:
 		description_ocr: OCR-extracted description text
@@ -322,7 +347,7 @@ def match_service_item(
 	if not company:
 		company = frappe.defaults.get_user_default("Company")
 
-	# Priority 1: Supplier-specific mappings (if supplier is provided)
+	# Priority 1: Supplier-specific pattern mappings (if supplier is provided)
 	if supplier:
 		supplier_mappings = frappe.get_all(
 			"OCR Service Mapping",
@@ -333,15 +358,11 @@ def match_service_item(
 		)
 
 		for mapping in supplier_mappings:
+			if (mapping.description_pattern or "").strip() == SUPPLIER_DEFAULT_PATTERN:
+				continue  # the supplier default — handled at Priority 3, never as a substring
 			pattern_norm = normalize_for_matching(mapping.description_pattern)
-			if pattern_norm in description_norm:
-				return {
-					"item_code": mapping.item_code,
-					"item_name": mapping.item_name,
-					"expense_account": mapping.expense_account,
-					"cost_center": mapping.cost_center,
-					"match_status": "Auto Matched",
-				}
+			if pattern_norm and pattern_norm in description_norm:
+				return _service_mapping_result(mapping)
 
 	# Priority 2: Generic mappings (supplier field is empty/null)
 	generic_mappings = frappe.get_all(
@@ -353,14 +374,27 @@ def match_service_item(
 	)
 
 	for mapping in generic_mappings:
+		if (mapping.description_pattern or "").strip() == SUPPLIER_DEFAULT_PATTERN:
+			continue
 		pattern_norm = normalize_for_matching(mapping.description_pattern)
-		if pattern_norm in description_norm:
-			return {
-				"item_code": mapping.item_code,
-				"item_name": mapping.item_name,
-				"expense_account": mapping.expense_account,
-				"cost_center": mapping.cost_center,
-				"match_status": "Auto Matched",
-			}
+		if pattern_norm and pattern_norm in description_norm:
+			return _service_mapping_result(mapping)
+
+	# Priority 3: Supplier default — the "*" wildcard row for this supplier, if any.
+	# Codes any line the specific/generic patterns didn't recognise.
+	if supplier:
+		default_rows = frappe.get_all(
+			"OCR Service Mapping",
+			filters={
+				"company": company,
+				"supplier": supplier,
+				"description_pattern": SUPPLIER_DEFAULT_PATTERN,
+			},
+			fields=["description_pattern", "item_code", "item_name", "expense_account", "cost_center"],
+			limit_page_length=1,
+			ignore_permissions=True,
+		)
+		if default_rows:
+			return _service_mapping_result(default_rows[0])
 
 	return None

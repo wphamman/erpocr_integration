@@ -1507,10 +1507,14 @@ class TestOnUpdateLearning:
 		mock_frappe.get_cached_doc.return_value = settings
 		return settings
 
-	def test_skips_all_learning_when_item_is_default_item(self, mock_frappe):
-		"""default_item matches: NO alias, NO service mapping, NO Item Supplier enqueue."""
+	def test_default_item_saves_service_mapping_not_alias(self, mock_frappe):
+		"""Catch-all (default_item) line WITH an expense account: the service mapping
+		(GL coding) IS learned so the line auto-codes next time — but NO item alias
+		(useless: item is always the catch-all) and NO Item Supplier enqueue (would
+		point a product code at the catch-all)."""
 		self._settings(mock_frappe, default_item="ITEM001")
 		doc = _make_ocr_import(
+			supplier="Acme",
 			items=[
 				_make_item(
 					item_code="ITEM001",
@@ -1519,6 +1523,23 @@ class TestOnUpdateLearning:
 					product_code="P-999",
 				)
 			],
+		)
+		doc.has_value_changed = MagicMock(return_value=False)
+		doc._save_item_alias = MagicMock()
+		doc._save_service_mapping = MagicMock()
+		doc._enqueue_item_supplier_learning = MagicMock()
+
+		doc.on_update()
+
+		doc._save_service_mapping.assert_called_once()
+		doc._save_item_alias.assert_not_called()
+		doc._enqueue_item_supplier_learning.assert_not_called()
+
+	def test_default_item_without_expense_account_learns_nothing(self, mock_frappe):
+		"""Catch-all line with NO expense account: nothing worth learning."""
+		self._settings(mock_frappe, default_item="ITEM001")
+		doc = _make_ocr_import(
+			items=[_make_item(item_code="ITEM001", match_status="Confirmed", expense_account="")],
 		)
 		doc.has_value_changed = MagicMock(return_value=False)
 		doc._save_item_alias = MagicMock()

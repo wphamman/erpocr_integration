@@ -247,6 +247,20 @@ Every time you confirm a supplier or item match, the system remembers it:
 
 The more invoices you process, the less manual work is needed. After a few invoices from the same supplier, most imports will be fully auto-matched.
 
+### Coding generic / catch-all items
+
+If you use a single catch-all item (e.g. a "Non-Stock" item) for many expense lines, the system still learns the **expense account** for each description you confirm — so the next identical line auto-codes itself.
+
+For a supplier whose line descriptions change every time (a transport subcontractor where each line names a different route, driver, or vehicle), per-description learning never settles. For those, set up a **supplier default**:
+
+1. Go to **OCR Service Mapping > New**
+2. **Description Pattern**: enter a single `*`
+3. **Supplier**: choose the supplier (required for a default)
+4. **Item Code** + **Expense Account** (+ Cost Center): the coding to apply
+5. Save
+
+Now every line from that supplier that doesn't match a more specific rule is automatically coded to that account — so those imports reach **Matched** (and can auto-draft) instead of always needing review. Only use `*` together with a supplier.
+
 ---
 
 ## Status Reference

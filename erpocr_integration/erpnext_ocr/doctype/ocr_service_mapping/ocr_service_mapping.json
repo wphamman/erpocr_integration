@@ -25,7 +25,7 @@
 			"in_list_view": 1,
 			"label": "Description Pattern",
 			"reqd": 1,
-			"description": "Text pattern to match (e.g., 'subscription', 'delivery', 'installation')"
+			"description": "Text pattern to match (e.g., 'subscription', 'delivery', 'installation'). Or enter a single '*' to make this a SUPPLIER DEFAULT: it codes any line for the chosen Supplier that no other pattern matches (you must set a Supplier). Use '*' only together with a Supplier."
 		},
 		{
 			"fieldname": "item_code",

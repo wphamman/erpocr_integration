@@ -36,7 +36,7 @@ def process(raw_payload: str):
 - **doc_events hooks** (hooks.py): `on_submit` → marks OCR Import as Completed; `on_cancel` → clears link + resets to Matched
 - `flags.ignore_mandatory = True` on all created documents (drafts may have incomplete data)
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
-- `default_item` in OCR Settings: when set, acts as the matching pipeline's tier 6 fallback (returns "Suggested") AND as the unmatched-line filler at PI creation time. Lets bulk-expense-invoice users skip per-row clicks. Alias / service-mapping / Item Supplier learning are skipped for rows matched to the default_item to avoid polluting those tables with one-shot mappings.
+- `default_item` in OCR Settings: when set, acts as the matching pipeline's tier 6 fallback (returns "Suggested") AND as the unmatched-line filler at PI creation time. Lets bulk-expense-invoice users skip per-row clicks. For rows matched to the default_item, the description→item **alias** and **Item Supplier** learning are skipped (useless when the item is always the catch-all), but **service-mapping learning IS kept** — for a catch-all item the `(supplier, pattern) → expense account + cost center` coding is the meaningful thing to learn, and it lets such lines auto-code (and auto-draft) next time.
 - **Tax template**: `_build_taxes_from_template()` shared helper handles template validation, company check, tax-inclusive detection, and taxes list building for both PI and PR creation
 - **Cost Center precedence** (v1.1.3+): every PI line, PR line, JE debit line, JE tax line, and JE credit line resolves cost_center via **line override → doc-level parent (`OCR Import.cost_center`) → `OCR Settings.default_cost_center`**. The doc-level field is filtered by company on the client side. Service-mapping rows still populate line-level cost_center (which wins), so per-supplier cost centre splits keep working; the doc-level field is the bulk-review shortcut for everything else.
 
@@ -104,7 +104,7 @@ def process(raw_payload: str):
 1. **`Item Supplier` lookup** (`(supplier, supplier_part_no=product_code) → item_code`) — supplier-scoped, deterministic. Multi-hit ambiguity is logged and skipped (falls through). Highest precision because supplier-scoped, runs before global description aliases.
 2. **`OCR Item Alias`** (exact on description — global, not supplier-scoped)
 3. **ERPNext Item** by `item_name` / `item_code` (exact)
-4. **Service mapping** (pattern-based: description substring → item + GL account + cost center)
+4. **Service mapping** (pattern-based: description substring → item + GL account + cost center). Priority within this tier: supplier-specific pattern → generic pattern → **supplier default** (a supplier-scoped row whose `description_pattern` is the literal `*` sentinel — codes ANY remaining line for that supplier; the last-resort tier for suppliers whose descriptions vary too much to learn per-pattern, e.g. a transport subcontractor where every line embeds route/driver/vehicle).
 5. **Fuzzy matching** (difflib SequenceMatcher, configurable threshold, returns "Suggested" status)
 6. **`default_item` fallback** (only if `OCR Settings.default_item` is configured) — returns "Suggested" so user still confirms and `auto_draft` skips
 7. If no match → "Unmatched"
@@ -115,11 +115,11 @@ def process(raw_payload: str):
 - Dedup key: `item_code:supplier:product_code` (collapses concurrent confirms in queue); does NOT replace the in-job DB existence re-check.
 - Try/except around save: failures are logged, never break OCR confirm flow.
 
-**Default-item skip** (v1.1.0+): when `item.item_code == OCR Settings.default_item`, `_save_item_alias` / `_save_service_mapping` / `_enqueue_item_supplier_learning` all skip — those mappings would be redundant with tier 6 fallback and pollute the alias / Item Supplier tables with one-shot rows.
+**Default-item learning** (catch-all item): when `item.item_code == OCR Settings.default_item`, `_save_item_alias` and `_enqueue_item_supplier_learning` skip (a description→catch-all alias is useless; an Item-Supplier row would point a product code at the catch-all). **`_save_service_mapping` does NOT skip** — for a catch-all item the GL coding *is* the learnable signal, so the `(supplier, pattern) → expense account + cost center` mapping is saved and the line auto-codes next time. (Before this change, default_item lines learned nothing, so catch-all-heavy invoices never reached high confidence and auto-draft never fired — see the supplier-default `*` mapping above for variable-description suppliers.)
 
 User confirmations saved as `OCR Supplier Alias` / `OCR Item Alias` (description-based) and `Item Supplier` (supplier-product-based).
 
-Service mappings support supplier-specific patterns (higher priority) and generic patterns.
+Service mappings support supplier-specific patterns (higher priority), generic patterns, and a per-supplier **default** (`description_pattern = *`, supplier set) that codes any otherwise-unmatched line for that supplier as a last resort.
 
 Both pattern storage and runtime matching use `normalize_for_matching()` (strips punctuation, lowercases, collapses whitespace) so patterns match regardless of formatting differences between invoices.
 

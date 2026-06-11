@@ -462,6 +462,120 @@ class TestMatchServiceItem:
 		assert result["item_code"] == "DELIVERY"
 
 
+class TestSupplierDefaultMapping:
+	"""Supplier-default ('*' wildcard) service mappings — code any line for a
+	supplier whose descriptions vary too much to learn per-pattern."""
+
+	def _setup(self, mock_frappe, supplier_mappings=None, generic_mappings=None, supplier_default=None):
+		def side_effect(doctype, **kwargs):
+			if doctype != "OCR Service Mapping":
+				return []
+			filters = kwargs.get("filters", {})
+			if "description_pattern" in filters:  # Priority 3: the supplier-default query
+				return [SimpleNamespace(**supplier_default)] if supplier_default else []
+			if isinstance(filters.get("supplier"), str):  # Priority 1: supplier patterns
+				return [SimpleNamespace(**m) for m in (supplier_mappings or [])]
+			return [SimpleNamespace(**m) for m in (generic_mappings or [])]  # Priority 2: generic
+
+		mock_frappe.get_all = MagicMock(side_effect=side_effect)
+
+	def test_supplier_default_codes_unmatched_line(self, mock_frappe):
+		"""'*' default codes a variable transport line that no pattern matches."""
+		self._setup(
+			mock_frappe,
+			supplier_default={
+				"description_pattern": "*",
+				"item_code": "ITEM001",
+				"item_name": "",
+				"expense_account": "4150/001 - Transport - TC",
+				"cost_center": "HO - TC",
+			},
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item(
+			"Star Pops LTT to Star Pops Plk Soneboy - HCH 371 L",
+			company="Test Company",
+			supplier="Louma",
+		)
+		assert result is not None
+		assert result["item_code"] == "ITEM001"
+		assert result["expense_account"] == "4150/001 - Transport - TC"
+		assert result["match_status"] == "Auto Matched"
+
+	def test_specific_pattern_beats_supplier_default(self, mock_frappe):
+		"""A matching supplier pattern wins over the '*' default."""
+		self._setup(
+			mock_frappe,
+			supplier_mappings=[
+				{
+					"description_pattern": "toll",
+					"item_code": "TOLL-ITEM",
+					"item_name": "Toll",
+					"expense_account": "4160 - Tolls - TC",
+					"cost_center": "",
+				}
+			],
+			supplier_default={
+				"description_pattern": "*",
+				"item_code": "ITEM001",
+				"item_name": "",
+				"expense_account": "4150/001 - Transport - TC",
+				"cost_center": "",
+			},
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item("N1 Toll Plaza", company="Test Company", supplier="Louma")
+		assert result["item_code"] == "TOLL-ITEM"
+
+	def test_no_supplier_default_returns_none(self, mock_frappe):
+		"""No '*' row for the supplier → None (line goes to review)."""
+		self._setup(mock_frappe)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item("Some novel line", company="Test Company", supplier="Louma")
+		assert result is None
+
+	def test_default_not_applied_without_supplier(self, mock_frappe):
+		"""The '*' default is supplier-scoped — never fires when no supplier is set."""
+		self._setup(
+			mock_frappe,
+			supplier_default={
+				"description_pattern": "*",
+				"item_code": "ITEM001",
+				"item_name": "",
+				"expense_account": "X - TC",
+				"cost_center": "",
+			},
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item("anything", company="Test Company")  # no supplier
+		assert result is None
+
+	def test_wildcard_row_not_matched_as_substring(self, mock_frappe):
+		"""A '*' row returned in the pattern query must be skipped by the substring
+		loop — it only ever acts as the explicit Priority-3 default."""
+		self._setup(
+			mock_frappe,
+			supplier_mappings=[
+				{
+					"description_pattern": "*",
+					"item_code": "ITEM001",
+					"item_name": "",
+					"expense_account": "X - TC",
+					"cost_center": "",
+				}
+			],
+			supplier_default=None,  # no explicit default row
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item("anything at all", company="Test Company", supplier="Louma")
+		assert result is None
+
+
 # ---------------------------------------------------------------------------
 # End-to-end matching shape tests
 # ---------------------------------------------------------------------------

@@ -267,10 +267,15 @@ class OCRImport(Document):
 
 		for item in self.items:
 			if item.item_code and item.description_ocr and item.match_status == "Confirmed":
-				# Skip alias / service-mapping / Item-Supplier learning for the default
-				# fallback item — those mappings are redundant with tier 5 fallback and
-				# would only pollute the alias / Item Supplier tables with one-shot rows.
 				if item.item_code == default_item:
+					# Catch-all item: a description→item alias is useless (the item is
+					# always the default) and Item-Supplier learning would point a product
+					# code at the catch-all. But the GL coding IS worth learning — save the
+					# (supplier, pattern) → expense-account service mapping so the line
+					# auto-codes (and so auto-draft can fire) next time. Skip only the
+					# alias + Item-Supplier learning.
+					if item.expense_account:
+						self._save_service_mapping(item)
 					continue
 
 				self._save_item_alias(item)
