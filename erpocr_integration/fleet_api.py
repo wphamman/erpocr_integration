@@ -18,6 +18,23 @@ import json
 import frappe
 from frappe import _
 
+# ── source_type vocabulary (the cross-app source discriminator) ──────────────
+# OCR Fleet Slip.source_type is a Data field that records HOW a slip was
+# ingested. It is the contract's source discriminator — set server-side as a
+# constant, NEVER from client input. Downstream consumers (fleet_management
+# Wesbank recon, Fuel Efficiency Tracker) currently consume slips by record
+# (fleet_vehicle + transaction_date + status) and do NOT read source_type
+# (verified, P4 T1) — but if any consumer ever discriminates on it, these are
+# the only two values it must know about. See CROSS_APP_SURFACE.md §6.
+SOURCE_TYPE_DRIVE = "Gemini Drive Scan"  # 15-min Drive folder poll (poll_drive_fleet_folder)
+SOURCE_TYPE_SHELL = "Gemini Shell Upload"  # phone capture via upload_fleet_slip (this contract)
+
+# The upload contract enforces its OWN size boundary (2MB). The shell compresses
+# to ≤1.5MB client-side; this is the server-side ceiling, deliberately tighter
+# than the 10MB the manual invoice uploader allows — a fleet slip photo never
+# legitimately needs more, and the cap caps Gemini base64-inlining cost on 3G.
+MAX_FLEET_UPLOAD_SIZE = 2 * 1024 * 1024
+
 
 def fleet_gemini_process(
 	file_content: bytes,
@@ -44,7 +61,17 @@ def fleet_gemini_process(
 		ocr_fleet = frappe.get_doc("OCR Fleet Slip", ocr_fleet_name)
 
 		_populate_ocr_fleet(ocr_fleet, extracted_data, settings)
-		_run_fleet_matching(ocr_fleet, settings)
+
+		# Vehicle matching. A shell upload (source_type == Gemini Shell Upload)
+		# where the driver already picked the vehicle arrives with
+		# vehicle_match_status == "Confirmed" and its config applied (fail-safe)
+		# at upload time — do NOT let OCR plate re-matching clobber the driver's
+		# pick. Otherwise run matching; shell-sourced slips fail safe (a vehicle
+		# with no fleet-card provider lands in Needs Review, never the invoice
+		# path), Drive-sourced slips keep their original behaviour.
+		if not (ocr_fleet.vehicle_match_status == "Confirmed" and ocr_fleet.fleet_vehicle):
+			fail_safe = (ocr_fleet.source_type or "").startswith("Gemini Shell")
+			_run_fleet_matching(ocr_fleet, settings, fail_safe=fail_safe)
 
 		ocr_fleet.save(ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
@@ -141,9 +168,14 @@ def _populate_ocr_fleet(ocr_fleet, extracted_data: dict, settings):
 		ocr_fleet.tax_template = settings.non_vat_tax_template
 
 
-def _run_fleet_matching(ocr_fleet, settings):
-	"""Run vehicle matching on the OCR Fleet Slip."""
-	_match_vehicle(ocr_fleet, settings)
+def _run_fleet_matching(ocr_fleet, settings, fail_safe=False):
+	"""Run vehicle matching on the OCR Fleet Slip.
+
+	fail_safe is threaded to _apply_vehicle_config — see its docstring. True for
+	shell/API-sourced slips (a provider-less vehicle lands in Needs Review, never
+	the invoice path); False (default) keeps the Drive pipeline's behaviour.
+	"""
+	_match_vehicle(ocr_fleet, settings, fail_safe=fail_safe)
 
 
 def _clear_vehicle_links(ocr_fleet):
@@ -156,8 +188,11 @@ def _clear_vehicle_links(ocr_fleet):
 	ocr_fleet.cost_center = ""
 
 
-def _match_vehicle(ocr_fleet, settings):
-	"""Match extracted vehicle_registration to Fleet Vehicle."""
+def _match_vehicle(ocr_fleet, settings, fail_safe=False):
+	"""Match extracted vehicle_registration to Fleet Vehicle.
+
+	fail_safe is passed through to _apply_vehicle_config on every match tier.
+	"""
 	reg = (ocr_fleet.vehicle_registration or "").strip().upper()
 	if not reg:
 		_clear_vehicle_links(ocr_fleet)
@@ -185,7 +220,7 @@ def _match_vehicle(ocr_fleet, settings):
 	if vehicle:
 		ocr_fleet.fleet_vehicle = vehicle.name
 		ocr_fleet.vehicle_match_status = "Auto Matched"
-		_apply_vehicle_config(ocr_fleet, vehicle, settings)
+		_apply_vehicle_config(ocr_fleet, vehicle, settings, fail_safe=fail_safe)
 		return
 
 	# Fuzzy match tier 1: normalize by stripping spaces, hyphens, underscores
@@ -208,7 +243,7 @@ def _match_vehicle(ocr_fleet, settings):
 		if v_normalized and v_normalized == normalized_reg:
 			ocr_fleet.fleet_vehicle = v.name
 			ocr_fleet.vehicle_match_status = "Suggested"
-			_apply_vehicle_config(ocr_fleet, v, settings)
+			_apply_vehicle_config(ocr_fleet, v, settings, fail_safe=fail_safe)
 			return
 
 	# Fuzzy match tier 2: similarity score (catches Gemini character misreads
@@ -218,7 +253,7 @@ def _match_vehicle(ocr_fleet, settings):
 	if candidate:
 		ocr_fleet.fleet_vehicle = candidate.name
 		ocr_fleet.vehicle_match_status = "Suggested"
-		_apply_vehicle_config(ocr_fleet, candidate, settings)
+		_apply_vehicle_config(ocr_fleet, candidate, settings, fail_safe=fail_safe)
 		return
 
 	_clear_vehicle_links(ocr_fleet)
@@ -319,12 +354,27 @@ def _fuzzy_match_vehicle(normalized_reg: str, all_vehicles: list, threshold: flo
 	return best_vehicle
 
 
-def _apply_vehicle_config(ocr_fleet, vehicle, settings):
-	"""Set posting mode, supplier, and accounts from vehicle configuration."""
+def _apply_vehicle_config(ocr_fleet, vehicle, settings, fail_safe=False):
+	"""Set posting mode, supplier, and accounts from vehicle configuration.
+
+	fail_safe (shell/API uploads): when the matched vehicle has NO fleet-card
+	provider, do NOT fall through to Direct Expense + default supplier (the
+	invoice path). Leave posting_mode/supplier/expense blank so the slip lands in
+	Needs Review (no supplier) and the PI guard (posting_mode != "Direct Expense")
+	blocks any invoice creation until an OCR Manager explicitly disposes it. The
+	recon-vs-invoice fork must never depend on custom_fleet_card_provider being
+	perfectly maintained (P4 fail-safe ruling — see CROSS_APP_SURFACE.md). Drive
+	ingestion keeps the original Direct-Expense fallback (fail_safe=False).
+	"""
 	if vehicle.get("custom_fleet_card_provider"):
 		ocr_fleet.posting_mode = "Fleet Card"
 		ocr_fleet.fleet_card_supplier = vehicle.custom_fleet_card_provider
 		ocr_fleet.expense_account = vehicle.get("custom_fleet_control_account") or ""
+	elif fail_safe:
+		# Provider missing on an API slip → fail safe to review, never invoice path.
+		ocr_fleet.posting_mode = ""
+		ocr_fleet.fleet_card_supplier = ""
+		ocr_fleet.expense_account = ""
 	else:
 		ocr_fleet.posting_mode = "Direct Expense"
 		ocr_fleet.fleet_card_supplier = settings.get("fleet_default_supplier") or ""
@@ -332,6 +382,241 @@ def _apply_vehicle_config(ocr_fleet, vehicle, settings):
 
 	if vehicle.get("custom_cost_center"):
 		ocr_fleet.cost_center = vehicle.custom_cost_center
+
+
+# ── Upload contract (driver shell, P4) ───────────────────────────────────────
+
+
+def _shape_upload_response(ocr_fleet, *, duplicate: bool) -> dict:
+	"""Minimal phone-renderable response for upload_fleet_slip.
+
+	Same shape for a fresh upload and an idempotent replay so the shell renders
+	one thing. The driver does NOT need the extracted data — the slip is a recon
+	artifact reviewed by accounts later; the shell only needs to know it landed.
+	"""
+	return {
+		"ocr_fleet_slip": ocr_fleet.name,
+		"status": ocr_fleet.status,
+		"client_request_id": ocr_fleet.client_request_id,
+		"duplicate": duplicate,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def upload_fleet_slip(
+	client_request_id: str,
+	fleet_vehicle: str | None = None,
+	vehicle_registration: str | None = None,
+	captured_at: str | None = None,
+):
+	"""Land a phone-captured fleet slip as an OCR Fleet Slip recon record.
+
+	The driver shell's fleet-slip write contract (P4). Multipart file upload;
+	Gemini extraction is queued async (the driver's task ends at "queued"). The
+	endpoint ONLY ever creates an OCR Fleet Slip — it is structurally incapable
+	of creating or feeding a Purchase Invoice (the v1.2.0 recon invariant). A
+	Drive-sourced slip and an API-sourced slip are indistinguishable to
+	downstream consumers except for source_type.
+
+	Request: multipart/form-data with a binary ``file`` field (JPEG/PNG/PDF,
+	≤2MB, magic-byte validated) plus the form params below.
+
+	Args:
+		client_request_id: client-generated UUID, REQUIRED. Generated once per
+			capture and reused verbatim on every retry — a replay returns the
+			ORIGINAL slip with ``duplicate: true`` instead of creating a second
+			(3G retries are the norm). The DB UNIQUE constraint on
+			OCR Fleet Slip.client_request_id is the enforcement point.
+		fleet_vehicle: optional Fleet Vehicle name. When supplied (shell
+			pre-fills from the driver's vehicle, picker-overridable) the vehicle
+			is set + Confirmed and OCR plate matching is skipped — far more
+			reliable than guessing the plate off a photo.
+		vehicle_registration: optional fallback plate string when no vehicle is
+			picked; OCR matching runs async (fail-safe — see below).
+		captured_at: optional ISO datetime of capture on the device, stored
+			distinctly from the server-side creation timestamp (offline-queued
+			uploads arrive late).
+
+	Fail-safe fork: posting_mode is derived from the vehicle's
+	custom_fleet_card_provider. If the provider is missing the slip lands in
+	Needs Review with a blank posting_mode (and the PI guard blocks any invoice)
+	— NEVER silently routed toward the invoice path. The recon-vs-invoice fork
+	must not depend on a data field being perfectly maintained.
+
+	Returns (same shape for fresh + replay):
+		{"ocr_fleet_slip": <OCR-FS-…>, "status": <str>,
+		 "client_request_id": <uuid>, "duplicate": bool}
+
+	Raises: PermissionError for guests / callers without OCR Fleet Slip create;
+	ValidationError for a missing key, a missing/oversize/wrong-type file, or an
+	unknown vehicle.
+	"""
+	from erpocr_integration.api import SUPPORTED_FILE_TYPES, validate_file_magic_bytes
+
+	# ── Permission: create-on-OCR-Fleet-Slip ONLY ──────────────────────────
+	# Deliberately NOT gated on OCR Import create — the driver role grants
+	# create on OCR Fleet Slip and nothing else, so this endpoint can never open
+	# the invoice (OCR Import) surface. Guest is denied explicitly.
+	if frappe.session.user == "Guest":
+		frappe.throw(_("You must be logged in to upload a fleet slip."), frappe.PermissionError)
+	if not frappe.has_permission("OCR Fleet Slip", "create"):
+		frappe.throw(_("You do not have permission to upload fleet slips."), frappe.PermissionError)
+
+	# ── Idempotency key (required) ─────────────────────────────────────────
+	if not (client_request_id and str(client_request_id).strip()):
+		frappe.throw(_("client_request_id is required (idempotency key)."))
+	client_request_id = str(client_request_id).strip()
+
+	# ── Multipart file: presence, type, size (own 2MB boundary), magic bytes ─
+	if not frappe.request or not frappe.request.files:
+		frappe.throw(_("No file uploaded."))
+	file = frappe.request.files.get("file")
+	if not file:
+		frappe.throw(_("No file found in request."))
+
+	filename = file.filename or ""
+	file_ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+	mime_type = SUPPORTED_FILE_TYPES.get(file_ext)
+	if not mime_type:
+		supported = ", ".join(SUPPORTED_FILE_TYPES.keys())
+		frappe.throw(_("Unsupported file type. Accepted formats: {0}").format(supported))
+
+	file.seek(0, 2)
+	file_size = file.tell()
+	file.seek(0)
+	if file_size > MAX_FLEET_UPLOAD_SIZE:
+		frappe.throw(
+			_(
+				"File too large. Maximum size is 2MB. Your file is {0:.2f}MB. Compress before uploading."
+			).format(file_size / (1024 * 1024))
+		)
+	file_content = file.read()
+	if not validate_file_magic_bytes(file_content, mime_type):
+		frappe.throw(_("File content does not match its file type. The file may be corrupted."))
+
+	# ── Settings / company ─────────────────────────────────────────────────
+	settings = frappe.get_cached_doc("OCR Settings")
+	if not settings.get("default_company"):
+		frappe.throw(_("Please set Default Company in OCR Settings."))
+
+	# ── Vehicle resolution (driver-supplied beats plate-OCR) ───────────────
+	vehicle_doc = None
+	if fleet_vehicle:
+		if not frappe.db.exists("DocType", "Fleet Vehicle"):
+			frappe.throw(_("Fleet Vehicle support is not available on this site."))
+		vehicle_doc = frappe.db.get_value(
+			"Fleet Vehicle",
+			{"name": fleet_vehicle, "is_active": 1},
+			[
+				"name",
+				"registration",
+				"custom_fleet_card_provider",
+				"custom_fleet_control_account",
+				"custom_cost_center",
+			],
+			as_dict=True,
+		)
+		if not vehicle_doc:
+			frappe.throw(
+				_("Fleet Vehicle {0} not found or inactive.").format(fleet_vehicle),
+				frappe.DoesNotExistError,
+			)
+
+	# ── Build the slip (server-stamped identity + source) ──────────────────
+	ocr_fleet = frappe.get_doc(
+		{
+			"doctype": "OCR Fleet Slip",
+			"status": "Pending",
+			# Constant source discriminator — NEVER from client input.
+			"source_type": SOURCE_TYPE_SHELL,
+			# Owner is auto-stamped to the session user by Frappe; uploaded_by
+			# records it explicitly (the client cannot set either).
+			"uploaded_by": frappe.session.user,
+			"company": settings.default_company,
+			"client_request_id": client_request_id,
+		}
+	)
+
+	if captured_at:
+		try:
+			from frappe.utils import get_datetime
+
+			ocr_fleet.captured_at = get_datetime(captured_at)
+		except Exception:
+			# A malformed device timestamp must never block the recon upload.
+			frappe.logger().warning(f"upload_fleet_slip: ignoring unparseable captured_at {captured_at!r}")
+
+	if vehicle_doc:
+		# Driver-confirmed vehicle: set it + skip async plate matching. Apply the
+		# vehicle config fail-safe so a provider-less vehicle lands in Needs
+		# Review rather than the invoice path.
+		ocr_fleet.fleet_vehicle = vehicle_doc.name
+		ocr_fleet.vehicle_match_status = "Confirmed"
+		_apply_vehicle_config(ocr_fleet, vehicle_doc, settings, fail_safe=True)
+	elif vehicle_registration:
+		# No confirmed vehicle — store the raw plate; extraction matches it async
+		# (fail-safe, because source_type is a shell upload).
+		ocr_fleet.vehicle_registration = str(vehicle_registration).strip()
+
+	# ── Insert-and-catch (R-B house idempotency template, verbatim) ────────
+	# The DB UNIQUE index on client_request_id (not an app-level pre-check) is
+	# the enforcement point, so a concurrent 3G retry that loses the race returns
+	# the original slip instead of creating a second. A FULL rollback (not
+	# rollback-to-savepoint) is deliberate: under REPEATABLE READ this
+	# transaction's snapshot was fixed before the winning insert committed, so a
+	# same-transaction re-fetch would miss it — ending the transaction opens a
+	# fresh snapshot that sees the committed original. Nothing else in this
+	# request needs preserving (only our own failed insert ran).
+	try:
+		ocr_fleet.insert(ignore_permissions=True)
+	except (frappe.UniqueValidationError, frappe.DuplicateEntryError) as exc:
+		frappe.db.rollback()
+		frappe.clear_messages()
+		try:
+			existing = frappe.get_doc("OCR Fleet Slip", {"client_request_id": client_request_id})
+		except frappe.DoesNotExistError:
+			# No row carries this key → the violation was NOT the idempotency key
+			# (an unexpected unique constraint). Surface the real error.
+			raise exc from None
+		return _shape_upload_response(existing, duplicate=True)
+
+	frappe.db.commit()  # nosemgrep — make the slip durable before attach + enqueue
+
+	# ── Attach the image (private → office-visible via OCR Manager read perm; ─
+	#    not publicly exposed). Enables accounts review + retry on failure.
+	frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": filename,
+			"content": file_content,
+			"attached_to_doctype": "OCR Fleet Slip",
+			"attached_to_name": ocr_fleet.name,
+			"is_private": 1,
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.commit()  # nosemgrep
+
+	# ── Enqueue async extraction — the driver's task ends here ──────────────
+	try:
+		frappe.enqueue(
+			"erpocr_integration.fleet_api.fleet_gemini_process",
+			queue="long",
+			timeout=600,
+			file_content=file_content,
+			filename=filename,
+			ocr_fleet_name=ocr_fleet.name,
+			mime_type=mime_type,
+		)
+	except Exception:
+		frappe.db.set_value("OCR Fleet Slip", ocr_fleet.name, "status", "Error")
+		frappe.db.commit()  # nosemgrep
+		frappe.log_error(
+			title="OCR Fleet Upload Enqueue Error",
+			message=f"Failed to enqueue extraction for {ocr_fleet.name}\n{frappe.get_traceback()}",
+		)
+		frappe.throw(_("Upload saved but processing did not start. It will be retried."))
+
+	return _shape_upload_response(ocr_fleet, duplicate=False)
 
 
 # ── doc_events hooks ──────────────────────────────────────────────
