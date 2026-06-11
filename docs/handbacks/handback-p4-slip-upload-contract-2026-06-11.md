@@ -1,0 +1,263 @@
+# Handback from Claude Code — P4 Fleet-Slip Upload Contract (erpocr side) — 2026-06-11
+
+> Paste into the .ai/architecture chat. Frame as "Handback from Code session — P4 upload contract."
+> **Status: code COMPLETE, committed, green, lint-clean on the feature branch (not pushed).**
+> **P-1 live install + real-image verification + push are HELD pending Willie's go** (another
+> session owned the driver-dev bench window).
+
+---
+
+## 1. Branch and commits
+
+- **Branch:** `feature/p4-slip-upload-contract` (off master `5d52627`, the v1.3.0 release).
+- **Commits this session (erpocr repo):**
+  - `e0245d3` feat(driver): idempotent upload_fleet_slip contract (shell P4)
+  - `2fdaebb` test(driver): upload_fleet_slip contract — idempotency, role, fail-safe, coexistence
+  - `298d44f` docs(cross-app): commit upload_fleet_slip contract + source_type vocabulary
+- **NOT pushed, NOT merged.** Codex review gates it (kickoff). Working tree clean otherwise.
+
+## 2. Files changed (`git diff --stat 5d52627..HEAD` — 8 files, +~470)
+
+- `erpocr_integration/fleet_api.py` — `upload_fleet_slip` (POST) + `_shape_upload_response`,
+  source-type constants (`SOURCE_TYPE_DRIVE/SHELL`), `MAX_FLEET_UPLOAD_SIZE`, and `fail_safe`
+  threaded through `_apply_vehicle_config`/`_match_vehicle`/`_run_fleet_matching` +
+  `fleet_gemini_process` (Confirmed-skip + shell fail-safe).
+- `erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.json` — new fields
+  `client_request_id` (Data, unique, no_copy, hidden, read_only, print_hide) + `captured_at`
+  (Datetime, read_only); new `OCR Fleet Driver` permission row (create + if_owner read only).
+- `erpocr_integration/fixtures/role.json` — `OCR Fleet Driver` role (desk_access 0).
+- `erpocr_integration/hooks.py` — role added to the Role fixtures filter.
+- `erpocr_integration/tests/test_fleet_upload_contract.py` — 33 tests (NEW).
+- `erpocr_integration/tests/test_fleet_driver_role.py` — 6 tests (NEW).
+- `erpocr_integration/tests/conftest.py` — real `UniqueValidationError`/`DuplicateEntryError`/
+  `DoesNotExistError`/`PermissionError` classes, `get_datetime`, `db.rollback`,
+  `clear_messages`, and an `enqueue.side_effect` reset.
+- `CROSS_APP_SURFACE.md` — §2c contract, §5 role, §2a row + count, §6 stability,
+  source_type vocabulary, photo-contract forward notes.
+
+## 3. Test / lint status
+
+- **Tests:** **716 pass, 0 fail** (`pytest erpocr_integration/tests/`, frappe fully mocked).
+  Baseline 677 → +39 (33 upload-contract + 6 driver-role). Run via the fleet venv
+  (`/home/willie/dev/fleet_management/.venv/bin/python -m pytest`) since erpocr has no venv;
+  frappe is mocked so any pytest works.
+- **Lint:** `ruff check` + `ruff format --check` clean on all touched files (erpocr's own
+  pyproject: tab indent, line-length 110, double quotes).
+- **Migrate / live:** NOT run yet (P-1 held). The `client_request_id` UNIQUE index is created by
+  `bench migrate` once installed — verification step is in §8.
+
+## 4. T1 verdict — PASS (recon is source-agnostic)
+
+`fleet_management` consumes OCR Fleet Slips **by record, never by provenance**:
+- `monthly_summary.py:254` filters on `fleet_vehicle` (canonical Link) + `transaction_date` +
+  `status ∈ {Completed, Draft Created, Matched, Needs Review}`; reads only
+  `slip_type, total_amount, litres`.
+- Fuel Efficiency Tracker only checks `frappe.db.exists("DocType","OCR Fleet Slip")`.
+- **Zero** references to `source_type`, `drive_file_id`, `drive_link`, or `uploaded_by` anywhere
+  in `fleet_management`'s non-test code (grep-verified).
+- **Implication for the build:** an API slip is consumed identically to a Drive slip as long as
+  it lands with `fleet_vehicle` + `transaction_date` + a consumed status. The driver-supplied
+  vehicle makes this *more* reliable than the Drive OCR-guess path (which left 20/39 prod slips
+  with blank posting_mode). No gap — no STOP needed.
+- **Out-of-scope observation (not fixed):** `fleet_management/scripts/health_audit.py:207`
+  queries `OCR Fleet Slip` with a `slip_date` filter, but the field is `transaction_date` — that
+  diagnostic script would error. It's a manual script, not the recon path; flagged, left alone.
+
+## 5. Contract as built
+
+```
+erpocr_integration.fleet_api.upload_fleet_slip(
+    client_request_id,            # REQUIRED idempotency key (client UUID, reused on retry)
+    fleet_vehicle=None,           # optional Fleet Vehicle name (driver pick) → Confirmed
+    vehicle_registration=None,    # optional fallback plate string → async match
+    captured_at=None,             # optional ISO device timestamp (stored distinctly)
+)  @frappe.whitelist(methods=["POST"])   # multipart/form-data, binary `file` field
+
+Returns (same shape fresh + replay):
+  {"ocr_fleet_slip": "<OCR-FS-…>", "status": "<str>", "client_request_id": "<uuid>", "duplicate": bool}
+```
+
+- Permission: Guest denied; `has_permission("OCR Fleet Slip","create")`; **never** OCR Import.
+- File: multipart binary, **≤2MB** (own boundary), magic-byte validated, private `File`
+  (office-visible via OCR Manager read; not publicly exposed).
+- Idempotency: R-B verbatim — nullable-unique `client_request_id`, insert-and-catch +
+  **full** `frappe.db.rollback()`, duplicate returns existing + `duplicate:true`, no 2nd enqueue.
+- Fail-safe fork: provider-less vehicle → blank `posting_mode`/supplier → Needs Review; PI guard
+  (`posting_mode != "Direct Expense"`) blocks invoice. NEVER silently toward the invoice path.
+- Confirmed (driver-picked) vehicle is not re-matched by async OCR.
+- `source_type = "Gemini Shell Upload"` constant (never client input). Async extraction enqueued
+  on `long`; returns immediately.
+
+## 6. OCR Fleet Driver role
+
+- `fixtures/role.json`: `OCR Fleet Driver`, `desk_access: 0`, `disabled: 0` (drivers use the
+  shell SPA + the whitelisted API, never the Desk).
+- OCR Fleet Slip perm row: `create:1, read:1, if_owner:1` — everything else 0
+  (no write/delete/submit/export/email/share, permlevel 0).
+- `hooks.py` fixtures filter includes it (ships on install).
+- **Deployment note (Willie's call):** assign drivers `OCR Fleet Driver` IN ADDITION to fleet's
+  `Driver` role. The existing `OCR Fleet Slip Reader` grants broad read+write on *all* slips — if
+  a driver must be strictly own-slips-only, give `OCR Fleet Driver` and NOT Reader.
+
+## 7. Decisions made during implementation (deviations from kickoff text, flagged)
+
+1. **`source_type`: REUSED the existing Data field** (set to `"Gemini Shell Upload"`) instead of
+   adding the kickoff's literal "new Select(Drive/API) field". The SHELL_INTEGRATION_REPORT
+   §3/§5 found the field already exists and ruled to reuse it; T1 confirmed no consumer reads it;
+   reuse avoids migrating existing "Gemini Drive Scan" rows and a dual source-of-truth.
+   **Confirmed by Willie** (answer A). Vocabulary documented in CROSS_APP_SURFACE.md §2c/§6.
+2. **Fail-safe = blank posting_mode + blank supplier** (not a new `needs_review` checkbox). Uses
+   the existing status mechanism: no supplier → `_update_status()` lands the slip in Needs
+   Review, and the PI guard blocks the invoice path. The kickoff allowed "a needs_review flag or
+   equivalent existing mechanism" — this is the equivalent existing mechanism, no schema bloat.
+3. **Fail-safe applies to ALL shell-sourced slips**, not just driver-picked ones: the async
+   matcher also fail-safes when `source_type` starts with "Gemini Shell" (so a registration-only
+   slip that OCR-matches a provider-less vehicle still can't reach Direct Expense). Drive path
+   keeps the original Direct-Expense fallback (`fail_safe=False`).
+4. **2MB server cap** per the kickoff (tighter than the report's "reuse 10MB checks") — the
+   contract enforces its own boundary.
+5. **No per-user pending cap.** upload_pdf has one (20); I omitted it here so an offline-queue
+   drain of many slips at reconnect isn't throttled. Idempotency + role scoping are the
+   protections. The client contract is "one `client_request_id` per capture, reused on retry" —
+   a client that regenerates the key per attempt could flood; documented, not server-capped.
+   Forward note: rate-limiting is a shared-photo-contract concern.
+6. **`desk_access: 0`** on the driver role (tighter than Reader's 1) — drivers never load Desk.
+
+No deviations from the kickoff's *intent* — these are mechanism choices within the rulings.
+
+## 8. P-1 live install — HELD (runbook + the scheduler crash-loop)
+
+**Held** at Willie's instruction (the extraction session owned the bench window). Riders: diagnose
+the crash-looping scheduler first (done, below); coordinate a quiet recreate window.
+
+### 8a. Scheduler crash-loop — DIAGNOSED (pre-existing, unrelated to P4)
+- `starpops-test-scheduler-1`: `ModuleNotFoundError: No module named 'starpops_assets'`,
+  RestartCount 27, looping since **2026-06-11T11:59:04Z** (this morning's last recreate). So
+  **scheduled jobs have not run on the prod-mirror since ~12:00 today.**
+- Root cause: the scheduler runs `setup_module_map(include_all_apps=True)` (no request/job
+  context) → eager-imports every app in apps.txt incl. `starpops_assets`, which is **not** in the
+  override's bind-mount + self-heal guard (list is production/maintenance/fleet/driver/hrms). The
+  recreate wiped its writable-layer install. The backend survives only because gunicorn imports
+  apps lazily per-request.
+- **This also blocks P-1:** a recreated backend would lose `starpops_assets` too, and
+  `bench install-app`/`migrate` eager-import → would fail. So fixing it is a prerequisite, folded
+  into the same override edit (rider: "fix it as part of the recreate").
+
+### 8b. Proposed `compose.override.yaml` change (REVIEWED with Willie; not yet applied)
+At `/home/willie/dev/erpnext-docker/starpops-test/frappe_docker/compose.override.yaml` — add
+`starpops_assets` AND `erpocr_integration` to the bind-mount + self-heal guard of the 4 python
+services (backend, scheduler, queue-short, queue-long): extend the backend `for` loop and add two
+`if`-guards each to scheduler/queue-short/queue-long, plus two volume lines per service. (Exact
+unified diff was shown in-session; it is mechanical and matches the established pattern.)
+
+### 8c. Install runbook (run when Willie gives the word + the window is quiet)
+```bash
+cd /home/willie/dev/erpnext-docker/starpops-test/frappe_docker
+# 1. apply the override edit (8b), then recreate the 4 python services:
+sg docker -c "docker compose -p starpops-test up -d backend scheduler queue-short queue-long"
+# 2. confirm scheduler no longer restarts + apps import:
+sg docker -c "docker compose -p starpops-test ps"
+sg docker -c "docker exec starpops-test-backend-1 /home/frappe/frappe-bench/env/bin/python -c 'import starpops_assets, erpocr_integration; print(\"ok\")'"
+# 3. install on the site (watch for conflicts with mirror prod data — STOP + surface if any):
+sg docker -c "docker exec starpops-test-backend-1 bench --site driver-dev.local install-app erpocr_integration"
+# 4. migrate (creates client_request_id UNIQUE index + captured_at):
+sg docker -c "docker exec starpops-test-backend-1 bench --site driver-dev.local migrate"
+# 5. VERIFY the nullable-unique index:
+sg docker -c "docker exec starpops-test-backend-1 bench --site driver-dev.local mariadb -e \"SHOW INDEX FROM \\\`tabOCR Fleet Slip\\\` WHERE Column_name='client_request_id'\""
+#    expect Non_unique=0, Null=YES, Default=NULL
+# 6. build Desk assets (doctype_js): bench build --app erpocr_integration
+# 7. real-image async test (synthetic): create a user with OCR Fleet Driver role, call
+#    upload_fleet_slip with a real JPEG → assert one slip Pending → extraction → Matched/Needs
+#    Review; retry same client_request_id → duplicate:true, one row. (P-2: mirror data may lag
+#    prod — custom_fleet_card_provider set after the last restore; use synthetic provider
+#    vehicles, or run scripts/restore-prod-to-dev.sh first.)
+```
+Acceptance items still open until this runs: "app installed and healthy on driver-dev",
+"extraction completes async on a real test image", "migrate creates the unique index".
+
+## 9. Codex review prompt (run before merge — focus per kickoff)
+
+```
+Review the branch feature/p4-slip-upload-contract in this repo (erpocr_integration, a Frappe v15
+custom app). Base is master 5d52627 (v1.3.0); the relevant commits are e0245d3, 2fdaebb, 298d44f.
+
+This adds erpocr_integration.fleet_api.upload_fleet_slip — a whitelisted POST that lands a
+phone-captured fleet slip as an OCR Fleet Slip recon record (image attached, Gemini extraction
+queued async, NO Purchase Invoice — the v1.2.0 fleet invariant). Read fleet_api.py (the
+upload_fleet_slip block + _shape_upload_response + the fail_safe changes in _apply_vehicle_config /
+_match_vehicle / _run_fleet_matching / fleet_gemini_process), the new client_request_id +
+captured_at fields and the OCR Fleet Driver permission row in
+erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.json, fixtures/role.json,
+hooks.py (Role fixtures filter), and CROSS_APP_SURFACE.md §2c/§5/§6. The OCR Fleet Slip controller
+is erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.py. The site runs MariaDB
+at REPEATABLE READ.
+
+Intentional design (do NOT flag as bugs): the contract gates on OCR Fleet Slip create only (never
+OCR Import); inserts with ignore_permissions=True after the role gate (the method is the perm
+boundary); owner/uploaded_by are server-stamped from the session user; idempotency via a
+nullable-unique client_request_id with insert-and-catch (not check-then-insert) + a FULL
+frappe.db.rollback() on collision; source_type is a server-set constant; the fail-safe leaves
+posting_mode/supplier BLANK (Needs Review) for a provider-less vehicle rather than Direct Expense.
+
+Focus on CORRECTNESS, especially:
+1. The idempotency race. Duplicate path does FULL rollback then re-fetches by client_request_id.
+   Race-safe across SEPARATE HTTP requests under REPEATABLE READ? Any window for two slips on one
+   key, or a wrong/failed re-fetch? Is guarding ONLY insert() correct (could any other unique key
+   fire there)? Is the commit-after-insert sequencing right vs the rollback path?
+2. The fail-safe provider fork. Can ANY path (driver-picked vehicle, async OCR match of a
+   registration-only slip, retry, Desk edit) route a shell/API slip toward Direct Expense / a
+   Purchase Invoice when the vehicle has no custom_fleet_card_provider? Confirm the Confirmed-skip
+   in fleet_gemini_process can't be bypassed so OCR re-matching clobbers a driver's pick. Does the
+   Drive path remain unchanged (fail_safe=False → Direct-Expense fallback intact)?
+3. Role scoping. OCR Fleet Driver = create + if_owner read only. Can a driver read other drivers'
+   slips, write/delete any slip, or reach OCR Import / the PI surface? Is if_owner sufficient given
+   the contract inserts with ignore_permissions (owner == session user)? Guest denial order.
+4. File handling: 2MB cap + magic-byte validation order, private-File office visibility (no public
+   URL leak), and that a malformed captured_at can't block the upload.
+5. source_type coexistence: an API slip indistinguishable from a Drive slip to fleet_management
+   except source_type; no validation added that could reject a Drive/Desk slip (NULL
+   client_request_id) — confirm nullable-unique coexistence.
+
+Report a numbered list, each PASS / FAIL / CAUTION / NIT with file:line and a one-line rationale.
+Do not edit anything — just review.
+```
+
+## 10. Known issues / risks
+
+- **Idempotency race verified by reasoning + mocked tests, not a real two-process collision**
+  (pytest is mock-based; the DB unique index is the true enforcement point and only exists after
+  migrate). Same caveat as P3. The live two-request test is in §8c step 7.
+- **No per-user flood cap** (§7.5) — relies on the per-capture-key client contract.
+- **`captured_at` parse is lenient** — a malformed value is logged and dropped, never blocks the
+  upload (deliberate; a bad device clock shouldn't lose a slip).
+- **Mirror data may lag prod (P-2):** `custom_fleet_card_provider` set on prod after the last
+  restore — provider-dependent live tests need synthetic vehicles or a fresh restore.
+
+## 11. Photo / upload contract — forward requirements (named here, designed once separately)
+
+This contract NAMES but does not implement (shared with P3, its own post-P3 sitting):
+- Client-side compression to **≤1.5MB** (long edge ~1280–1600px, JPEG q~0.7) before upload.
+- **Offline IndexedDB queue** keyed on `client_request_id` (compressed blob + key + captured_at),
+  draining with backoff on reconnect — the idempotency key is what makes the drain safe.
+- One image in memory at a time (Android 9 / ~2GB RAM).
+- Out of P4 scope entirely: PODs (P6), Wesbank-Import changes, the shared photo-contract *design*.
+
+## 12. Memory delta (durable code-side facts)
+
+- Contract `erpocr_integration.fleet_api.upload_fleet_slip(client_request_id, fleet_vehicle=None,
+  vehicle_registration=None, captured_at=None)` → `{ocr_fleet_slip, status, client_request_id,
+  duplicate}`. Recon-only (no PI), R-B idempotency, fail-safe provider fork, source_type
+  "Gemini Shell Upload". The house write-contract template (P3 R-B) now has a 2nd instance.
+- Field: `OCR Fleet Slip.client_request_id` (Data, nullable-unique, no_copy, hidden) +
+  `captured_at` (Datetime). Role: `OCR Fleet Driver` (create + if_owner read, desk_access 0).
+- source_type vocabulary is the cross-app source discriminator (constant, never client input);
+  no consumer reads it as of P4 T1.
+- Test runner for erpocr: fleet venv python (erpocr has no venv; frappe mocked).
+
+## 13. Open questions for the architecture chat
+
+1. **Driver role assignment** (§6): confirm drivers get `OCR Fleet Driver` and whether to drop
+   `OCR Fleet Slip Reader` from driver users (Reader is broad read+write on all slips).
+2. **Flood protection** (§7.5): accept the key-per-capture client contract as the only guard, or
+   add a per-user pending cap / rate limit in a later pass?
+3. **P-1 window**: when is driver-dev quiet enough to recreate (the extraction session had it)?
