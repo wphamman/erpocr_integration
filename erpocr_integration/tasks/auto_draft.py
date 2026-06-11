@@ -103,6 +103,29 @@ def _auto_detect_document_type(ocr_import) -> str:
 	return "Purchase Invoice"
 
 
+def _invoice_date_in_fiscal_year(ocr_import) -> tuple[bool, str]:
+	"""Verify the OCR invoice_date falls in an active Fiscal Year for the company.
+
+	A Gemini date misread (e.g. year 2001 for 2026) makes create_purchase_invoice
+	fail deep in ERPNext's Fiscal Year validation ("Date ... is not in any active
+	Fiscal Year"). Catch it here so the record is cleanly routed to human review with
+	a clear reason, instead of firing a doomed create that only surfaces as an Error
+	Log entry. An empty invoice_date is fine — create falls back to today().
+	"""
+	invoice_date = getattr(ocr_import, "invoice_date", None)
+	if not invoice_date:
+		return True, ""
+	try:
+		frappe.utils.get_fiscal_year(invoice_date, company=getattr(ocr_import, "company", None), verbose=0)
+		return True, ""
+	except Exception:
+		return (
+			False,
+			f"Invoice date {invoice_date} is outside any active Fiscal Year "
+			f"(likely an OCR misread) — needs review",
+		)
+
+
 def attempt_auto_draft(ocr_import, settings) -> bool:
 	"""Attempt to auto-draft a document from a high-confidence OCR Import.
 
@@ -137,6 +160,14 @@ def attempt_auto_draft(ocr_import, settings) -> bool:
 	if ocr_import.status != "Matched":
 		reason = f"Status is '{ocr_import.status}' (requires 'Matched')"
 		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", reason)
+		return False
+
+	# Guard against Gemini date misreads (e.g. 2001 for 2026): such a date fails
+	# create_purchase_invoice deep in ERPNext's Fiscal Year validation. Skip cleanly
+	# to human review instead of firing a doomed create.
+	date_ok, date_reason = _invoice_date_in_fiscal_year(ocr_import)
+	if not date_ok:
+		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", date_reason)
 		return False
 
 	try:

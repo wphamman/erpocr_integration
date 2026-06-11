@@ -3,9 +3,12 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import frappe
+
 from erpocr_integration.tasks.auto_draft import (
 	_auto_detect_document_type,
 	_auto_link_purchase_order,
+	_invoice_date_in_fiscal_year,
 	_is_high_confidence,
 	attempt_auto_draft,
 )
@@ -398,3 +401,68 @@ class TestAttemptAutoDraft:
 		mock_frappe.db.set_value.assert_called()
 		call_args = mock_frappe.db.set_value.call_args
 		assert "supplier" in str(call_args).lower()
+
+
+class TestInvoiceDateFiscalYearGuard:
+	"""Guard against Gemini date misreads (e.g. 2001 for 2026) that would fail
+	create_purchase_invoice deep in ERPNext's Fiscal Year validation."""
+
+	def test_empty_date_passes(self, mock_frappe):
+		doc = _make_ocr_import(invoice_date=None, company="Test Co")
+		ok, reason = _invoice_date_in_fiscal_year(doc)
+		assert ok is True
+		assert reason == ""
+
+	def test_missing_date_attr_passes(self, mock_frappe):
+		# No invoice_date attribute at all (older records) — must not raise
+		doc = _make_ocr_import(company="Test Co")
+		ok, _ = _invoice_date_in_fiscal_year(doc)
+		assert ok is True
+
+	def test_valid_date_passes(self, mock_frappe):
+		# get_fiscal_year returns (mock) without raising → date is in an active FY
+		doc = _make_ocr_import(invoice_date="2026-06-11", company="Test Co")
+		ok, reason = _invoice_date_in_fiscal_year(doc)
+		assert ok is True
+		assert reason == ""
+
+	def test_bad_date_fails(self, mock_frappe):
+		doc = _make_ocr_import(invoice_date="2001-06-26", company="Test Co")
+		with patch.object(
+			frappe.utils,
+			"get_fiscal_year",
+			side_effect=Exception("Date 2001-06-26 is not in any active Fiscal Year"),
+		):
+			ok, reason = _invoice_date_in_fiscal_year(doc)
+		assert ok is False
+		assert "2001-06-26" in reason
+
+	def test_attempt_skips_on_bad_date(self, mock_frappe):
+		"""Mirrors prod OCR-IMP-00991: high-confidence + Matched, but a misread date.
+		Auto-draft must skip cleanly (no create, reason persisted), not crash."""
+		doc = _make_ocr_import(
+			name="OCR-IMP-991",
+			status="Matched",
+			document_type="",
+			invoice_date="2001-06-26",
+			company="Test Co",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			items=[_make_item()],
+		)
+		doc.create_purchase_invoice = MagicMock()
+		doc.save = MagicMock()
+		settings = _make_settings()
+
+		with patch.object(
+			frappe.utils,
+			"get_fiscal_year",
+			side_effect=Exception("not in any active Fiscal Year"),
+		):
+			result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+		mock_frappe.db.set_value.assert_called()
+		assert "Fiscal Year" in str(mock_frappe.db.set_value.call_args)
