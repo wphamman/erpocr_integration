@@ -141,34 +141,43 @@ A new whitelisted **POST** endpoint, kept shell-agnostic (a generic fleet-slip u
 erpocr_integration.fleet_api.upload_fleet_slip   (@frappe.whitelist(methods=["POST"]))
 
 Request (multipart/form-data):
-  file            : binary  — JPEG/PNG/PDF, ≤10MB, magic-byte validated (reuse upload_pdf checks)
-  idempotency_key : str     — client-generated UUID per capture (REQUIRED)
-  fleet_vehicle   : str?     — Fleet Vehicle name, if the driver picked their vehicle (preferred)
+  file              : binary — JPEG/PNG/PDF, ≤10MB, magic-byte validated (reuse upload_pdf checks)
+  client_request_id : str    — client-generated UUID at submit (REQUIRED; idempotency key)
+  fleet_vehicle     : str?    — Fleet Vehicle name; shell pre-fills from the driver's
+                               get_driver_context (Fleet Vehicle.assigned_user), picker-overridable
   vehicle_registration : str? — fallback plate string if no vehicle picked
-  captured_at     : str?     — ISO datetime of capture on device (for offline-queued uploads)
+  captured_at       : str?    — ISO datetime of capture on device (offline-queued uploads)
 
 Server behaviour:
-  1. Permission: has_permission("OCR Fleet Slip","create"); NOT OCR Import create.
-  2. Idempotency: if an OCR Fleet Slip already exists with this idempotency_key → return it
-     (200, same body) instead of inserting a duplicate. (Requires a new indexed field, e.g.
-     client_upload_id, on OCR Fleet Slip — see Missing #2.)
-  3. Validate file (type/size/magic bytes), insert OCR Fleet Slip placeholder
-     (status=Pending, source_type="API Upload", company=default), attach File (private).
-  4. If fleet_vehicle supplied + feature-detected present → set it and skip fuzzy plate match
-     (vehicle_match_status="Confirmed"); posting_mode then auto-sets from the vehicle's
-     custom_fleet_card_provider (→ Fleet Card for Wesbank vehicles) exactly as today.
-  5. Enqueue fleet_gemini_process on the long queue. Return immediately.
+  1. Permission: has_permission("OCR Fleet Slip","create"); NOT OCR Import create. The driver
+     role is create-on-OCR-Fleet-Slip ONLY, with if_owner read scoping (a driver cannot read
+     other drivers' slips) — the pattern fleet already uses for inspections.
+  2. Idempotency (R-B house template, verbatim): client_request_id stored in a NEW custom field
+     with a DB UNIQUE constraint. Insert-and-catch — on DuplicateEntryError, fetch the existing
+     slip and return it with "duplicate": true. No pre-check SELECT; the unique constraint is the
+     source of truth, safe under concurrent 3G retries.
+  3. source_type discriminates Drive vs API. NOTE: source_type already EXISTS on OCR Fleet Slip
+     (Data; Drive sets "Gemini Drive Scan") — set the API path to a distinct value
+     (e.g. "Gemini Shell Upload"). No new field needed for the discriminator; only
+     client_request_id is a schema add.
+  4. Validate file (type/size/magic bytes), insert OCR Fleet Slip (status=Pending,
+     company=default), attach File (private).
+  5. If fleet_vehicle supplied + feature-detected present → set it, vehicle_match_status="Confirmed",
+     skip fuzzy plate match; posting_mode then auto-derives from custom_fleet_card_provider.
+  6. FAIL SAFE: if posting_mode cannot resolve to "Fleet Card" (vehicle missing the provider),
+     the slip lands flagged-for-review (Needs Review) — NEVER silently routed toward the invoice
+     path. The recon-vs-invoice fork must not depend on a data field being perfectly maintained.
+  7. Enqueue fleet_gemini_process on the long queue. Return immediately.
 
 Return shape (200):
-  { "ocr_fleet_slip": "OCR-FS-00040", "status": "Pending", "idempotency_key": "<uuid>",
-    "duplicate": false }
+  { "ocr_fleet_slip": "OCR-FS-00040", "status": "Pending",
+    "client_request_id": "<uuid>", "duplicate": false }
 ```
 
-- **Scope enforcement:** the endpoint only ever creates an OCR Fleet Slip in the vehicle-derived
-  posting_mode; it cannot create a PI or an OCR Import. The driver role grants create on
-  OCR Fleet Slip and nothing else.
-- **Idempotency:** the `idempotency_key` makes the POST safe to retry on 3G — a duplicate POST
-  returns the existing slip (`"duplicate": true`) rather than a second record.
+- **Scope enforcement:** the endpoint only ever creates an OCR Fleet Slip; it cannot create a PI
+  or an OCR Import. The driver role grants create on OCR Fleet Slip and nothing else, `if_owner`-scoped.
+- **Idempotency:** the `client_request_id` + DB unique constraint (insert-and-catch) makes the
+  POST safe to retry on 3G — a duplicate returns the existing slip with `"duplicate": true`.
 - **Async:** returns the slip name + `Pending` immediately; the shell shows "uploaded / queued"
   and does **not** wait for Gemini. Accounts review later in the Desk (unchanged).
 - **Status read-back (optional):** the shell can poll `GET /api/resource/OCR Fleet Slip/<name>`
@@ -199,16 +208,36 @@ Return shape (200):
 
 ---
 
-## 5. Risks / open questions (ranked)
+## 5. Decisions (resolved 2026-06-11) + carried-forward verification
 
-| # | Risk / question | Owner | Notes |
-|---|---|---|---|
-| 1 | **Does the recon actually consume shell-uploaded slips?** The Wesbank recon target lives in **`fleet_management`** (prod doctypes `Wesbank Import`, `Wesbank Account Map`, `Wesbank Account Map Entry` — module "Fleet"), **not in this app**. It reads OCR Fleet Slips by status (per CLAUDE.md). Need to confirm a slip ingested via the new API (source_type "API Upload", not Drive) is picked up identically. | **Architecture chat** (+ fleet_management owner) | The recon target EXISTS — good. But the read path was not inspected here (different app). **Unverified** that source/ingest-path doesn't matter to it. |
-| 2 | **Vehicle→driver mapping.** Reliable recon needs the driver's vehicle on the slip. How does the shell know which vehicle(s) a driver may capture for? | **Willie** | 20/39 prod slips never resolved a vehicle (blank posting_mode). A vehicle picker fed from `Fleet Vehicle` fixes this — but the driver↔vehicle assignment source is unspecified. |
-| 3 | **New driver create-role + idempotency field** are schema/permission additions to *this* app. | **Willie** (then implement) | Role: create on OCR Fleet Slip only. Field: `client_upload_id` (indexed) for dedup. Both are erpocr_integration changes, not shell. |
-| 4 | **posting_mode correctness for shell slips.** It auto-sets from the vehicle's `custom_fleet_card_provider`. If a driver's vehicle lacks the provider, the slip won't become Fleet Card and could be mis-handled as Direct Expense. | **Willie** | Confirm all fleet-card vehicles have `custom_fleet_card_provider` set (it drives the whole recon-vs-invoice fork). |
-| 5 | **Drive vs API coexistence.** If drivers move to the shell but the Drive folder stays active, slips could arrive twice (one Drive, one API). | **Architecture chat** | Decide whether the shell replaces or supplements the Drive drop; idempotency only dedups *within* the API path, not across Drive+API. |
-| 6 | **driver-dev.local not validated.** All live facts are from prod; the stated dev mirror was unreachable from this session. | Willie (FYI) | If dev has diverged from prod, re-verify the doctype/role facts there before building. |
+The report's original open questions were resolved in the architecture chat + by Willie on
+2026-06-11. Recorded here as the design baseline for the P4 kickoff:
+
+1. **Drive vs API → SUPPLEMENT, never replace.** Drive keeps serving office/bulk/back-capture;
+   the API serves phone capture. `source_type` discriminates them — and **already exists** on
+   OCR Fleet Slip (Data field), so no schema add for the discriminator.
+2. **Recon consumption of API slips → P4 kickoff Task T1 (verify, don't assume).** The Wesbank
+   recon lives in `fleet_management` (`Wesbank Import` + maps, module "Fleet"); it almost
+   certainly keys on the slip record, not its provenance, but this must be **verified** before
+   relying on it. Until then, design so an API slip is **indistinguishable from a Drive slip at
+   the doctype level except `source_type`**. *(This is the one item NOT closed here — it's a
+   kickoff task, owner = whoever runs T1 against `fleet_management`.)*
+3. **Driver↔vehicle mapping → already exists.** `Fleet Vehicle.assigned_user` via
+   `get_driver_context`. Shell pre-fills the driver's vehicle with a **picker override**
+   (possession ruling — relief drivers fuel the truck they're actually driving). Driver-confirmed
+   vehicle beats plate-OCR and fixes the 20/39 unresolved-vehicle problem going forward.
+4. **Create-role + idempotency → APPROVED, tightened.** Role = create-on-OCR-Fleet-Slip ONLY
+   (not OCR Import), **`if_owner`-scoped** so a driver cannot read other drivers' slips (the
+   pattern fleet uses for inspections). Idempotency = the **R-B house template verbatim**: client
+   UUID at submit → `client_request_id` custom field → DB unique constraint → insert-and-catch →
+   return existing + `duplicate:true`.
+5. **`custom_fleet_card_provider` audit → Willie runs the one-query check (prod + mirror).**
+   Independent of the audit, the contract **must FAIL SAFE**: a slip against an unprovided vehicle
+   lands **flagged-for-review**, never silently routed toward the invoice path. The
+   recon-vs-invoice fork may not depend on a data field being perfectly maintained. *(Baked into
+   §3 server behaviour step 6.)*
+6. **`driver-dev.local` not validated here** (unreachable this session; facts are from prod). If
+   the mirror has diverged, re-verify the doctype/role facts there before building.
 
 ### Bottom line
 The hard part already exists: a non-accounting **recon record** (OCR Fleet Slip / Fleet Card),
