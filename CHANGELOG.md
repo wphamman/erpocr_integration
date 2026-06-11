@@ -2,9 +2,7 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-On `master`, not yet tagged or deployed — prod runs v1.2.0.
+## [1.3.0] — 2026-06-11
 
 ### Added
 - **Catch-all items are now learnable (auto-draft fix).** When a confirmed line uses the configured `default_item` (a generic non-stock catch-all), the system now learns its GL coding as a `(supplier, pattern) → expense account + cost center` service mapping. Previously *all* learning was skipped for default-item lines, so they stayed "Suggested" and never reached the auto-draft confidence gate. Recurring descriptions now auto-code and can auto-draft.
@@ -459,6 +457,7 @@ First stable release. The full pipeline — invoices, delivery notes, fleet slip
 - Supplier and item matching with alias learning.
 - Automatic draft PI creation with tax, currency, and PO linkage.
 
+[1.3.0]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.3.0
 [1.0.4]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.4
 [1.0.3]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.3
 [1.0.2]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.2
