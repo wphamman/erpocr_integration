@@ -537,6 +537,34 @@ class TestSupplierDefaultMapping:
 		result = match_service_item("Some novel line", company="Test Company", supplier="Louma")
 		assert result is None
 
+	def test_generic_pattern_beats_supplier_default(self, mock_frappe):
+		"""Policy (deliberate): a recognised GENERIC pattern wins over the supplier
+		'*' default. The default is a last resort for UNrecognised lines only — so
+		adding it is purely additive and never disables existing generic patterns."""
+		self._setup(
+			mock_frappe,
+			generic_mappings=[
+				{
+					"description_pattern": "delivery",
+					"item_code": "DELIVERY",
+					"item_name": "Delivery Fee",
+					"expense_account": "5200 - Delivery - TC",
+					"cost_center": "",
+				}
+			],
+			supplier_default={
+				"description_pattern": "*",
+				"item_code": "ITEM001",
+				"item_name": "",
+				"expense_account": "4150/001 - Transport - TC",
+				"cost_center": "",
+			},
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item("Delivery Fee", company="Test Company", supplier="Louma")
+		assert result["item_code"] == "DELIVERY"
+
 	def test_default_not_applied_without_supplier(self, mock_frappe):
 		"""The '*' default is supplier-scoped — never fires when no supplier is set."""
 		self._setup(
