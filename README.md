@@ -28,7 +28,7 @@ A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 
 - **Email Monitoring** — Forward invoice emails to a monitored inbox for automatic processing
 - **Google Drive Scanning** — Drop files into a Drive folder for batch processing every 15 minutes
 - **Multi-Invoice PDFs** — Handles statements/batch scans with multiple invoices per PDF
-- **Smart Matching** — Six-tier pipeline: ERPNext `Item Supplier` lookup (supplier-scoped, highest precision) → alias / exact name → service mapping → fuzzy match → optional `default_item` fallback. The Item Supplier table auto-populates as users confirm matches, so the system gets sharper over time without a manual mapping job.
+- **Smart Matching** — Six-tier pipeline: ERPNext `Item Supplier` lookup (supplier-scoped, highest precision) → alias / exact name → service mapping → fuzzy match → optional `default_item` fallback. The Item Supplier table auto-populates as users confirm matches, so the system gets sharper over time without a manual mapping job. Lines that use a generic "catch-all" item also learn their expense-account coding, and a supplier can be given a default coding rule (a `*` service mapping) for descriptions that vary every time.
 - **User-Driven Document Creation** — Review extraction, confirm matches, then choose what to create:
   - **Purchase Invoice** — with optional Purchase Order and Purchase Receipt linking
   - **Purchase Receipt** — with optional Purchase Order linking

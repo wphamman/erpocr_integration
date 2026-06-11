@@ -2,6 +2,17 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+On `master`, not yet tagged or deployed — prod runs v1.2.0.
+
+### Added
+- **Catch-all items are now learnable (auto-draft fix).** When a confirmed line uses the configured `default_item` (a generic non-stock catch-all), the system now learns its GL coding as a `(supplier, pattern) → expense account + cost center` service mapping. Previously *all* learning was skipped for default-item lines, so they stayed "Suggested" and never reached the auto-draft confidence gate. Recurring descriptions now auto-code and can auto-draft.
+- **Supplier default coding.** An OCR Service Mapping whose Description Pattern is a single `*` (with a Supplier set) codes any otherwise-unmatched line for that supplier — for suppliers whose descriptions vary every time (e.g. a transport subcontractor where each line names a different route/driver/vehicle). Last-resort tier, after supplier-specific and generic patterns.
+
+### Fixed
+- **Auto-draft no longer silently fails on a misread invoice date.** A Gemini date misread (e.g. 2001 for 2026) outside any active Fiscal Year now skips auto-draft cleanly to "Needs Review" with a clear reason, instead of firing a create that fails deep in ERPNext's Fiscal Year validation and only surfaces in the Error Log.
+
 ## [1.2.0] — 2026-06-03
 
 OCR Fleet Slip workflow now branches by `posting_mode`. Fleet Card slips (paid via a fleet card provider like Wesbank) close as **control records** with no Purchase Invoice — the provider's monthly invoice in `fleet_management` is the source of truth for the cost, and a per-slip PI would double-count. Direct Expense slips (paid on a business debit/credit card) keep the existing PI flow.
