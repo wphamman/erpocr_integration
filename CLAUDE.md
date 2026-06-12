@@ -4,9 +4,11 @@ Frappe v15 custom app: Gemini 2.5 Flash extracts structured data from PDFs/image
 ERPNext draft documents. Four pipelines — invoices (OCR Import → PI/PR/JE), delivery notes
 (OCR Delivery Note → PO/PR), fleet slips (OCR Fleet Slip → PI, or a Fleet-Card control record
 with no PI), and statement reconciliation (OCR Statement → match lines vs submitted PIs).
-Ingest via manual upload, email forwarding, and Google Drive folder polling; opt-in auto-draft
-for high-confidence matches. ~$0.0001/doc. Installs via `bench get-app`; all config lives in
-the OCR Settings single DocType. Currently v1.2.0.
+Ingest via manual upload, email forwarding, Google Drive folder polling, plus a driver-shell
+phone-upload contract for fleet slips (`upload_fleet_slip`, P4); opt-in auto-draft for
+high-confidence matches. ~$0.0001/doc. Installs via `bench get-app`; all config lives in
+the OCR Settings single DocType. Currently v1.3.0 (P4 fleet-slip upload contract merged on
+master, unreleased — see CHANGELOG `[Unreleased]`).
 
 ## Knowledge (always loaded)
 @docs/architecture.md
