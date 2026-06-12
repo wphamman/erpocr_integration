@@ -943,3 +943,53 @@ class TestApplyVehicleConfigFromLink:
 		doc._apply_vehicle_config_from_link()
 
 		assert doc.posting_mode == ""  # unchanged
+
+	def test_shell_source_provider_less_fails_safe(self, mock_frappe):
+		"""Codex FAIL-2 fix: a shell-sourced slip (re)linked to a provider-less
+		vehicle stays BLANK (Needs Review), not Direct Expense — so neither a Desk
+		re-link nor the upload's own on_update can undo the upload-time fail-safe
+		and open the invoice path."""
+		mock_frappe.db.exists.return_value = True
+		mock_frappe.db.get_value.return_value = SimpleNamespace(
+			name="VEH-NOPROV",
+			registration="NOP 000",
+			custom_fleet_card_provider="",
+			custom_fleet_control_account="",
+			custom_cost_center="",
+		)
+		mock_frappe.get_cached_doc.return_value = _make_settings()
+
+		doc = _make_fleet_slip(
+			fleet_vehicle="VEH-NOPROV",
+			vehicle_match_status="Confirmed",
+			posting_mode="",
+			source_type="Gemini Shell Upload",
+		)
+		doc._apply_vehicle_config_from_link()
+
+		assert doc.posting_mode == ""
+		assert doc.fleet_card_supplier == ""
+		assert doc.expense_account == ""
+
+	def test_shell_source_with_provider_still_fleet_card(self, mock_frappe):
+		"""A shell slip linked to a provider vehicle still gets Fleet Card."""
+		mock_frappe.db.exists.return_value = True
+		mock_frappe.db.get_value.return_value = SimpleNamespace(
+			name="VEH-PROV",
+			registration="PRO 111",
+			custom_fleet_card_provider="WesBank",
+			custom_fleet_control_account="3100 - Control - TC",
+			custom_cost_center="",
+		)
+		mock_frappe.get_cached_doc.return_value = _make_settings()
+
+		doc = _make_fleet_slip(
+			fleet_vehicle="VEH-PROV",
+			vehicle_match_status="Confirmed",
+			posting_mode="",
+			source_type="Gemini Shell Upload",
+		)
+		doc._apply_vehicle_config_from_link()
+
+		assert doc.posting_mode == "Fleet Card"
+		assert doc.fleet_card_supplier == "WesBank"

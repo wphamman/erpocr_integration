@@ -148,7 +148,7 @@ scheduler_events = {
 # --------
 
 fixtures = [
-	{"dt": "Role", "filters": [["name", "in", ["OCR Manager", "OCR Fleet Slip Reader"]]]},
+	{"dt": "Role", "filters": [["name", "in", ["OCR Manager", "OCR Fleet Slip Reader", "OCR Fleet Driver"]]]},
 	{"dt": "Number Card", "filters": [["module", "=", "ERPNext OCR"]]},
 	{"dt": "Dashboard Chart", "filters": [["module", "=", "ERPNext OCR"]]},
 	{"dt": "Custom Field", "filters": [["name", "like", "Fleet Vehicle-custom_%"]]},

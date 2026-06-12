@@ -15,5 +15,13 @@
 		"is_custom": 0,
 		"desk_access": 1,
 		"disabled": 0
+	},
+	{
+		"doctype": "Role",
+		"name": "OCR Fleet Driver",
+		"role_name": "OCR Fleet Driver",
+		"is_custom": 0,
+		"desk_access": 0,
+		"disabled": 0
 	}
 ]

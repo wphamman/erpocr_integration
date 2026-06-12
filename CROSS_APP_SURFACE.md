@@ -1,7 +1,8 @@
 # CROSS_APP_SURFACE.md — erpocr_integration
 
 Canonical record of this app's external surface (portfolio rule **R3**: one documented
-whitelisted API layer per app). Authored against **v1.2.0**.
+whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
+contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0 line.
 
 `erpocr_integration` is an **underlying app, not a shell** — it knows nothing of its
 consumers. Its only cross-app coupling is a **soft, runtime feature-detected** integration
@@ -18,7 +19,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
   and the planned `starpops_accounts` fold-in. This app imports/references none of them.
 - Arrow direction is clean: consumers → erpocr_integration. Never the reverse.
 
-## 2. Whitelisted RPC endpoints (31 total; **0 `allow_guest`**)
+## 2. Whitelisted RPC endpoints (32 total; **0 `allow_guest`**)
 
 ### 2a. Module-level endpoints (`frappe.call` method paths)
 | Method path | HTTP | Guard | Purpose |
@@ -38,6 +39,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.dn_api.match_dn_po_items` | GET | per-doc read | DN PO item match (UI) |
 | `erpocr_integration.fleet_api.retry_fleet_extraction` | POST | OCR Fleet Slip perm | Retry fleet extraction |
 | `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip perm | Re-route mis-foldered slip to invoice pipeline |
+| `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create only** (driver shell) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
 | `erpocr_integration.tasks.drive_integration.test_drive_connection` | GET | System Manager | Config self-test |
 | `erpocr_integration.tasks.email_monitor.trigger_email_check` | POST | System Manager | Manual email poll |
 
@@ -49,6 +51,61 @@ status + `document_type` + cross-document lock guards (see CLAUDE.md → *Server
 - **OCR Delivery Note**: `create_purchase_order`, `create_purchase_receipt`, `unlink_document`, `mark_no_action`
 - **OCR Fleet Slip**: `create_purchase_invoice`, `mark_recorded`, `unlink_document`, `mark_no_action`
 - **OCR Statement**: `mark_reviewed`
+
+### 2c. Driver-shell fleet-slip upload contract (P4 — the one deliberate cross-app *write* surface here)
+
+`erpocr_integration.fleet_api.upload_fleet_slip` — a shell-agnostic POST that lands a
+phone-captured fleet slip as an **OCR Fleet Slip recon record** (image attached, Gemini
+extraction queued async). Consumed by the `driver_ui_shell` Fleet-Slip screen; this app stays
+unaware of the shell.
+
+```
+upload_fleet_slip(client_request_id, fleet_vehicle=None, vehicle_registration=None, captured_at=None)
+  @frappe.whitelist(methods=["POST"])   # multipart/form-data — binary `file` field (JPEG/PNG/PDF)
+
+Returns (same shape fresh + idempotent replay):
+  {"ocr_fleet_slip": <OCR-FS-…>, "status": <str>, "client_request_id": <uuid>, "duplicate": bool}
+```
+
+- **Recon-only, never invoice.** Creates an OCR Fleet Slip with `purchase_invoice` NULL (the
+  v1.2.0 invariant). The endpoint is structurally incapable of creating/feeding a Purchase
+  Invoice or an OCR Import — it gates on `OCR Fleet Slip` **create** and nothing else.
+- **Role:** `OCR Fleet Driver` (§5) — create on OCR Fleet Slip ONLY, reads `if_owner`-scoped
+  (a driver cannot read other drivers' slips). Guest denied explicitly.
+- **Idempotency = the R-B house write-contract template, verbatim.** A client UUID
+  (`client_request_id`) under a DB **nullable-unique** constraint; **insert-and-catch** the
+  unique violation (not check-then-insert) + **full** `frappe.db.rollback()` (REPEATABLE-READ
+  correctness) → a 3G retry returns the original slip with `duplicate: true`. Identical shape to
+  `fleet_management.api.submit_vehicle_inspection` (P3) — see that repo's
+  `handback-p3-inspection-contract-2026-06-11.md`. NULL for Drive/Desk slips (multiple NULLs
+  coexist), so the Drive pipeline is untouched.
+- **Fail-safe provider fork.** `posting_mode` derives from the vehicle's
+  `custom_fleet_card_provider`. If the provider is missing the slip lands in **Needs Review**
+  with a blank `posting_mode`/supplier (and the PI guard `posting_mode != "Direct Expense"`
+  blocks any invoice) — **never silently routed toward the invoice path**. The recon-vs-invoice
+  fork must not depend on a data field being perfectly maintained. (Applies to shell-sourced
+  slips throughout, incl. async OCR re-matching; the Drive path keeps its Direct-Expense
+  fallback.)
+- **Driver-supplied vehicle beats plate-OCR.** A supplied `fleet_vehicle` is set + marked
+  `Confirmed`; async extraction does **not** re-match (it would clobber the driver's pick).
+- **`captured_at`** = device-truth capture time, stored distinctly from the server creation
+  timestamp (offline-queued uploads arrive late).
+- **File:** multipart binary (not base64), **≤2MB** server-enforced (the contract's own
+  boundary, tighter than the 10MB invoice uploader), magic-byte validated, stored as a
+  **private** `File` → office-visible via OCR Manager read perm, never publicly exposed.
+- **`source_type` vocabulary (the source discriminator — set as a constant, NEVER from client
+  input):** `"Gemini Drive Scan"` (Drive poll) · `"Gemini Shell Upload"` (this contract).
+  Consumers must treat `source_type` as the discriminator. **As of P4 T1, no consumer reads it**
+  — `fleet_management` (`monthly_summary.py`, Fuel Efficiency Tracker) consumes slips by record
+  (`fleet_vehicle` + `transaction_date` + `status`), so an API slip and a Drive slip are
+  identical to downstream code except this field. If a consumer ever starts discriminating on
+  it, these two values are the whole vocabulary.
+- **Forward notes — the shared phone photo/upload contract (designed once, separately; not built
+  here).** The shell side names, but this contract does not implement: client-side compression
+  to **≤1.5MB** (long edge ~1280–1600px, JPEG q~0.7) before upload; an **offline IndexedDB
+  queue** keyed on `client_request_id` (compressed blob + key + `captured_at`) that drains with
+  backoff when signal returns — the idempotency key is what makes that drain safe. PODs (P6) and
+  the Wesbank-recon consumption of API slips are out of P4 scope.
 
 ## 3. Data read surface (REST resource / `frappe.client.*`)
 External consumers read these DocTypes; **their field names are the de-facto contract**:
@@ -85,12 +142,20 @@ on OCR-built fuel/toll PIs:
 
 ## 5. Roles (shipped via `fixtures/role.json`)
 - **OCR Manager** — operations: review imports, create documents.
-- **OCR Fleet Slip Reader** — read access to fleet slip data.
+- **OCR Fleet Slip Reader** — read + write (no create/delete) on fleet slip data (Desk review).
+- **OCR Fleet Driver** (P4) — **create on OCR Fleet Slip ONLY**, reads `if_owner`-scoped, no
+  Desk access. The driver-shell upload identity (§2c). Assigned to driver users **in addition
+  to** `fleet_management`'s `Driver` role; deliberately NOT granted OCR Import create, so a
+  driver can never open the invoice surface. (Note: the existing `OCR Fleet Slip Reader` grants
+  broad read+write on *all* slips — if a driver should be strictly own-slips-only, assign
+  `OCR Fleet Driver` and NOT Reader; deployment/shell decision.)
 - Stats endpoint (§2a) is gated separately to **System Manager / Accounts Manager**.
 
 ## 6. Stability / change policy
-- **Load-bearing contract**: the Custom-Field names in §4 and the read-surface field names in
-  §3. Changing them requires coordinating with `fleet_management` + the Fleet Dashboard.
+- **Load-bearing contract**: the Custom-Field names in §4, the read-surface field names in §3,
+  the §2c upload contract (signature + return shape + `client_request_id` field +
+  `source_type` vocabulary). Changing them requires coordinating with `fleet_management`, the
+  Fleet Dashboard, and the `driver_ui_shell`.
 - **Internal / unstable for external callers**: the §2b controller actions (this app's Desk
   surface). §2a methods are stable but mostly UI helpers — only `get_ocr_stats` is a
   deliberate consumer endpoint.

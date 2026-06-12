@@ -27,7 +27,27 @@ def _build_frappe_mock():
 	mock.db.get_value = MagicMock(return_value=None)
 	mock.db.exists = MagicMock(return_value=False)
 	mock.db.commit = MagicMock()
+	mock.db.rollback = MagicMock()
 	mock.db.set_value = MagicMock()
+	# frappe.clear_messages — no-op in tests (idempotency duplicate path calls it)
+	mock.clear_messages = MagicMock()
+
+	# Real exception classes so ``except (frappe.UniqueValidationError,
+	# frappe.DuplicateEntryError)`` works and the insert-and-catch idempotency
+	# path (upload_fleet_slip / fleet contracts) can be exercised under the mock.
+	class _MockDoesNotExistError(Exception):
+		pass
+
+	class _MockUniqueValidationError(Exception):
+		pass
+
+	class _MockDuplicateEntryError(Exception):
+		pass
+
+	mock.DoesNotExistError = _MockDoesNotExistError
+	mock.UniqueValidationError = _MockUniqueValidationError
+	mock.DuplicateEntryError = _MockDuplicateEntryError
+	mock.PermissionError = PermissionError
 	# frappe.get_all returns empty list by default
 	mock.get_all = MagicMock(return_value=[])
 	mock.get_single = MagicMock()
@@ -94,6 +114,9 @@ _frappe_utils_mock.flt = _mock_flt
 _frappe_utils_mock.today = MagicMock(return_value="2025-01-15")
 _frappe_utils_mock.escape_html = MagicMock(side_effect=lambda x: x)
 _frappe_utils_mock.get_link_to_form = MagicMock(side_effect=lambda dt, name: f"{dt}/{name}")
+# get_datetime passthrough — the upload contract parses captured_at; in tests we
+# echo the input so the stored value is inspectable.
+_frappe_utils_mock.get_datetime = MagicMock(side_effect=lambda x: x)
 sys.modules["frappe.utils"] = _frappe_utils_mock
 
 # Mock frappe.custom.doctype.custom_field.custom_field so install.py can import
@@ -147,6 +170,8 @@ def reset_frappe_mock():
 	_frappe_mock.db.exists.return_value = False
 	_frappe_mock.db.exists.side_effect = None
 	_frappe_mock.db.commit.reset_mock()
+	_frappe_mock.db.rollback.reset_mock()
+	_frappe_mock.clear_messages.reset_mock()
 	_frappe_mock.db.sql.reset_mock()
 	_frappe_mock.db.sql.return_value = []
 	_frappe_mock.db.sql.side_effect = None
@@ -165,6 +190,7 @@ def reset_frappe_mock():
 	_frappe_mock.get_meta = MagicMock()
 	_frappe_mock.log_error.reset_mock()
 	_frappe_mock.enqueue.reset_mock()
+	_frappe_mock.enqueue.side_effect = None  # reset_mock() does not clear side_effect
 	_frappe_mock.delete_doc.reset_mock()
 	_frappe_mock.set_user.reset_mock()
 	_frappe_mock.msgprint = MagicMock()
