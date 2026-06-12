@@ -1,7 +1,7 @@
 # Handback from Claude Code — P4 Fleet-Slip Upload Contract (erpocr side) — 2026-06-11
 
 > Paste into the .ai/architecture chat. Frame as "Handback from Code session — P4 upload contract."
-> **Status: code COMPLETE + PUSHED; P-1 INSTALLED + LIVE-VERIFIED on driver-dev (data-safe).**
+> **Status: code COMPLETE + MERGED to master (`--no-ff` `b975086`); P-1 INSTALLED + LIVE-VERIFIED on driver-dev (data-safe).**
 > The contract is proven end-to-end live (idempotency, source_type, owner-stamp, captured_at,
 > private attachment, fail-safe, recon-only, async pipeline) AND the driver role is verified live
 > (create + if_owner read scoping). **One required prod-deploy step surfaced + cleared on the mirror:
@@ -17,7 +17,10 @@
   - `e0245d3` feat(driver): idempotent upload_fleet_slip contract (shell P4)
   - `2fdaebb` test(driver): upload_fleet_slip contract — idempotency, role, fail-safe, coexistence
   - `298d44f` docs(cross-app): commit upload_fleet_slip contract + source_type vocabulary
-- **NOT pushed, NOT merged.** Codex review gates it (kickoff). Working tree clean otherwise.
+  - `b0c2671` / `e1fa568` / `c46b28d` docs(handback) + `0aeb256` fix(driver): Codex review fixes (§15)
+- **MERGED to master** via `--no-ff` merge `b975086` after the Codex gate cleared, and pushed.
+  origin/master HEAD = the merge commit. Working tree clean. **Not tagged / not deployed** — tag a
+  new release + run the prod deploy (incl. the §14f Restore-Original-Permissions step) when ready.
 
 ## 2. Files changed (`git diff --stat 5d52627..HEAD` — 8 files, +~470)
 
