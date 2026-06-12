@@ -1,9 +1,10 @@
 # Handback from Claude Code — P4 Fleet-Slip Upload Contract (erpocr side) — 2026-06-11
 
 > Paste into the .ai/architecture chat. Frame as "Handback from Code session — P4 upload contract."
-> **Status: code COMPLETE, committed, green, lint-clean on the feature branch (not pushed).**
-> **P-1 live install + real-image verification + push are HELD pending Willie's go** (another
-> session owned the driver-dev bench window).
+> **Status: code COMPLETE + PUSHED; P-1 INSTALLED + LIVE-VERIFIED on driver-dev (data-safe).**
+> The contract is proven end-to-end live (idempotency, source_type, owner-stamp, captured_at,
+> private attachment, fail-safe, recon-only, async extraction pipeline). **One prod-deploy gotcha
+> surfaced: the OCR Fleet Slip Custom DocPerm shadow masks the OCR Fleet Driver role** — see §14.
 
 ---
 
@@ -261,3 +262,69 @@ This contract NAMES but does not implement (shared with P3, its own post-P3 sitt
 2. **Flood protection** (§7.5): accept the key-per-capture client contract as the only guard, or
    add a per-user pending cap / rate limit in a later pass?
 3. **P-1 window**: when is driver-dev quiet enough to recreate (the extraction session had it)?
+
+---
+
+## 14. P-1 EXECUTED on driver-dev.local (2026-06-12) — evidence + the DocPerm-shadow finding
+
+**Outcome: install-app + migrate are data-safe; the contract is proven end-to-end live; one
+prod-deploy gotcha (the Custom DocPerm shadow) blocks the OCR Fleet Driver role until reset.**
+
+### 14a. Environment work
+- Override edited (`starpops-test/frappe_docker/compose.override.yaml`): added `starpops_assets`
+  + `erpocr_integration` to the bind-mount + self-heal of the 4 python services. **Uncommitted in
+  that repo** (works on disk; commit if you want it tracked). Also fixed the pre-existing
+  `starpops_assets` scheduler crash-loop (it had self-resolved via a 12:06 recreate, but the edit
+  makes it durable). NB: the startup self-heal lost a race (4 containers editable-installing the
+  same bind-mount at once) — a one-time manual `pip install -e` per container settled it; worth a
+  small stagger/lock if this recurs.
+- `sites/apps.txt`: appended `erpocr_integration` (install-app requires it). The file had no
+  trailing newline → first append corrupted the last line; rewritten cleanly (9 apps, one per line).
+- A Docker Desktop engine crash mid-window (host-side) took the stack down between recreate and
+  install; restarted by Willie, stack auto-recovered, writable-layer editable installs survived.
+
+### 14b. install-app + migrate — BEFORE/AFTER evidence (the prod-window record)
+| | BEFORE | AFTER |
+|---|---|---|
+| `installed_apps` has erpocr | no | **yes** |
+| OCR Import / Fleet Slip / Service Mapping / Statement | 834 / 39 / 452 / 1 | **834 / 39 / 452 / 1 (identical)** |
+| `tabOCR Fleet Slip` columns | 48 (no `client_request_id`/`captured_at`) | **50** (+`client_request_id` varchar(140) NULL, +`captured_at` datetime(6) NULL) |
+| `client_request_id` index | — | **Non_unique=0, Null=YES** (nullable-unique) |
+| 39 legacy rows non-NULL on new cols | — | **0 / 0** |
+| `OCR Fleet Driver` role | absent | installed (disabled=0, desk_access=0) |
+
+"Register app over existing restored tables" = additive schema sync, **zero row loss**. This is
+exactly the prod deploy-choreography install step; the evidence above is its dry-run record.
+
+### 14c. Contract live verification (as a create-capable user, under the shadow)
+`upload_fleet_slip` driven against the real DB + real enqueue with a synthetic JPEG:
+- Two calls, same `client_request_id` → **one slip** (`count_for_key=1`), 2nd returns
+  `duplicate:true`, same name → **idempotency live on the real DB unique index**.
+- `source_type="Gemini Shell Upload"` (constant), `owner`/`uploaded_by` server-stamped,
+  `captured_at` stored, **private** File attached, `posting_mode=""` (fail-safe), `purchase_invoice=None`
+  (recon-only), returned `Pending` immediately.
+- **Async extraction pipeline proven**: the job enqueued → queue-long worker ran `fleet_gemini_process`
+  → reached the Gemini call → failed at **`Failed to decrypt key … gemini_api_key — Encryption key
+  is invalid`** (a post-restore artifact: the key is encrypted with prod's `encryption_key`, not the
+  mirror's) → the error path correctly set status=Error + logged "Fleet Extraction Error". A
+  *successful* Gemini extraction is blocked only by the mirror's key mismatch (works on prod, or
+  re-enter the key in OCR Settings on the mirror). All test data cleaned up (count back to 39).
+
+### 14d. ⚠️ Prod-deploy finding — the OCR Fleet Slip Custom DocPerm shadow
+The driver-role create gate could **not** be verified live: as the synthetic driver
+(`OCR Fleet Driver` role assigned), `has_permission("OCR Fleet Slip","create")` returned **False**.
+Root cause: `OCR Fleet Slip` has a **Custom DocPerm shadow** (3 rows: Reader/Manager/System Manager,
+on prod and the mirror) — and when any Custom DocPerm rows exist, Frappe **ignores the standard JSON
+DocPerms entirely**, so the new `OCR Fleet Driver` row (shipped via doctype JSON → `tabDocPerm`) is
+invisible. This is the same shadow that blocks `raw_payload` (permlevel-1) reads (known issue).
+- **The role design is CORRECT** (verified by reading Frappe `permissions.py`: `create` is
+  explicitly excluded from the if_owner downgrade — line `and ptype != "create"` — so a single
+  `{create:1, read:1, if_owner:1}` row grants create + owner-scoped read once unshadowed). No code
+  change needed.
+- **Required prod (and mirror) deploy step:** Customize Form → **Restore Original Permissions** on
+  OCR Fleet Slip (deletes the Custom DocPerm shadow so the standard perms — incl. OCR Fleet Driver
+  AND the permlevel-1 System Manager row that fixes `raw_payload` — take effect). Programmatic:
+  `frappe.permissions.reset_perms("OCR Fleet Slip")` + `clear-cache`.
+- On the mirror this reset was **not** applied (the harness classifier flagged it as a perm-config
+  change beyond install/verify on a shared bench — left for Willie). Until it's reset, the driver
+  role won't function on driver-dev or prod.
