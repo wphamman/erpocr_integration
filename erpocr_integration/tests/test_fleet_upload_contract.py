@@ -278,6 +278,9 @@ class TestUploadHappyPath:
 		assert kwargs["timeout"] == 600
 		assert kwargs["ocr_fleet_name"] == "OCR-FS-00040"
 		assert kwargs["mime_type"] == "image/jpeg"
+		# Tied to the commit so the slip+File+job land atomically and the worker
+		# never races the commit.
+		assert kwargs["enqueue_after_commit"] is True
 
 	def test_captured_at_stored(self, mock_frappe):
 		holder = _wire_upload(mock_frappe)
@@ -285,13 +288,23 @@ class TestUploadHappyPath:
 		# get_datetime is an echo passthrough in the conftest mock.
 		assert holder["slip"].captured_at == "2026-06-11T08:30:00"
 
-	def test_enqueue_failure_marks_error_and_raises(self, mock_frappe):
+	def test_pre_commit_failure_leaves_no_committed_slip(self, mock_frappe):
+		"""Atomicity (Codex FAIL-1 fix): slip + File + job land on ONE commit, the
+		LAST step. A failure before it (modelled via the enqueue registration
+		raising) never reaches the commit, so the request rolls back and an
+		idempotent retry rebuilds a complete slip instead of replaying a half-built
+		keyed row that retries could never repair."""
 		_wire_upload(mock_frappe)
-		mock_frappe.enqueue.side_effect = Exception("queue down")
+		mock_frappe.enqueue.side_effect = Exception("redis down")
 		with pytest.raises(Exception):
 			upload_fleet_slip(client_request_id="k1")
-		# Slip flipped to Error so it doesn't sit as stale Pending.
-		mock_frappe.db.set_value.assert_any_call("OCR Fleet Slip", "OCR-FS-00040", "status", "Error")
+		mock_frappe.db.commit.assert_not_called()
+
+	def test_happy_path_commits_exactly_once(self, mock_frappe):
+		"""The atomic unit is a single commit (was two: slip then File)."""
+		_wire_upload(mock_frappe)
+		upload_fleet_slip(client_request_id="k1")
+		assert mock_frappe.db.commit.call_count == 1
 
 
 # ---------------------------------------------------------------------------

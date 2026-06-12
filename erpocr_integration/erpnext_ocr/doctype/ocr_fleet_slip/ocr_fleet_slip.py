@@ -39,7 +39,20 @@ class OCRFleetSlip(Document):
 				self._apply_vehicle_config_from_link()
 
 	def _apply_vehicle_config_from_link(self):
-		"""Re-apply posting config when user manually links a Fleet Vehicle."""
+		"""Re-apply posting config when a Fleet Vehicle is (re-)linked on this slip.
+
+		Runs from on_update whenever fleet_vehicle changes on a Confirmed slip —
+		including the shell upload's own insert and any later Desk re-link.
+
+		Shell/API-sourced slips FAIL SAFE (P4): a provider-less vehicle leaves
+		posting_mode/supplier/expense BLANK (→ the slip stays in Needs Review and
+		the PI guard `posting_mode != "Direct Expense"` blocks any invoice) rather
+		than silently flipping to Direct Expense. This keeps the recon-vs-invoice
+		fork from depending on `custom_fleet_card_provider` being maintained, and
+		stops a Desk re-link (or the upload's own on_update) from undoing the
+		upload-time fail-safe. The operator can still set Direct Expense explicitly
+		(posting_mode is an editable Select). Drive slips keep the old fallback.
+		"""
 		if not frappe.db.exists("DocType", "Fleet Vehicle"):
 			return
 
@@ -59,11 +72,17 @@ class OCRFleetSlip(Document):
 			return
 
 		settings = frappe.get_cached_doc("OCR Settings")
+		fail_safe = (self.source_type or "").startswith("Gemini Shell")
 
 		if vehicle.custom_fleet_card_provider:
 			self.posting_mode = "Fleet Card"
 			self.fleet_card_supplier = vehicle.custom_fleet_card_provider
 			self.expense_account = vehicle.custom_fleet_control_account
+		elif fail_safe:
+			# Provider missing on a shell slip → fail safe to review, never invoice.
+			self.posting_mode = ""
+			self.fleet_card_supplier = ""
+			self.expense_account = ""
 		else:
 			self.posting_mode = "Direct Expense"
 			self.fleet_card_supplier = settings.get("fleet_default_supplier") or ""

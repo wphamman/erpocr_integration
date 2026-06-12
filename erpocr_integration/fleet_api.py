@@ -580,10 +580,14 @@ def upload_fleet_slip(
 			raise exc from None
 		return _shape_upload_response(existing, duplicate=True)
 
-	frappe.db.commit()  # nosemgrep — make the slip durable before attach + enqueue
-
-	# ── Attach the image (private → office-visible via OCR Manager read perm; ─
-	#    not publicly exposed). Enables accounts review + retry on failure.
+	# ── Attach the image + queue extraction ATOMICALLY with the slip insert ──
+	# The slip row, its private File, and the extraction job all land on ONE
+	# commit. Any failure before that commit rolls the whole unit back, so an
+	# idempotent retry creates a fresh, COMPLETE slip rather than replaying a
+	# half-built one (a committed keyed row with no image / no queued job) that
+	# retries could never repair. enqueue_after_commit ties the job to the commit:
+	# it fires only if the transaction lands, and the worker is then guaranteed to
+	# find the committed slip (no worker-races-commit window).
 	frappe.get_doc(
 		{
 			"doctype": "File",
@@ -591,31 +595,22 @@ def upload_fleet_slip(
 			"content": file_content,
 			"attached_to_doctype": "OCR Fleet Slip",
 			"attached_to_name": ocr_fleet.name,
-			"is_private": 1,
+			"is_private": 1,  # office-visible via OCR Manager read; not publicly exposed
 		}
 	).insert(ignore_permissions=True)
-	frappe.db.commit()  # nosemgrep
 
-	# ── Enqueue async extraction — the driver's task ends here ──────────────
-	try:
-		frappe.enqueue(
-			"erpocr_integration.fleet_api.fleet_gemini_process",
-			queue="long",
-			timeout=600,
-			file_content=file_content,
-			filename=filename,
-			ocr_fleet_name=ocr_fleet.name,
-			mime_type=mime_type,
-		)
-	except Exception:
-		frappe.db.set_value("OCR Fleet Slip", ocr_fleet.name, "status", "Error")
-		frappe.db.commit()  # nosemgrep
-		frappe.log_error(
-			title="OCR Fleet Upload Enqueue Error",
-			message=f"Failed to enqueue extraction for {ocr_fleet.name}\n{frappe.get_traceback()}",
-		)
-		frappe.throw(_("Upload saved but processing did not start. It will be retried."))
+	frappe.enqueue(
+		"erpocr_integration.fleet_api.fleet_gemini_process",
+		queue="long",
+		timeout=600,
+		enqueue_after_commit=True,
+		file_content=file_content,
+		filename=filename,
+		ocr_fleet_name=ocr_fleet.name,
+		mime_type=mime_type,
+	)
 
+	frappe.db.commit()  # nosemgrep — slip + File + queued job land atomically
 	return _shape_upload_response(ocr_fleet, duplicate=False)
 
 
