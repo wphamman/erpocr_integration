@@ -41,7 +41,9 @@ DN Pipeline:   Drop DN scan in Drive folder → 15-min poll → Gemini API → C
                ├─ Link PO → Create Purchase Receipt (rates from PO)
                └─ No PO → Create Purchase Order (draft, rates filled by accounts team)
 
-Fleet Pipeline: Drop fleet slip scan in Drive folder → 15-min poll → Gemini API → Create OCR Fleet Slip → Vehicle Match → Review
+Fleet Pipeline: Fleet slip → Create OCR Fleet Slip → Vehicle Match → Review
+                ├─ INGEST (a): Drop scan in Drive folder → 15-min poll (back-office/bulk)
+                ├─ INGEST (b): driver-shell phone upload → upload_fleet_slip (P4; idempotent, recon-only, fail-safe)
                 ├─ Fleet card supplier (Wesbank etc.) → captured for reconciliation against monthly fleet card invoice (Matched is the terminal state — no PI from this app)
                 └─ Unauthorized / non-card purchase → optional Create Purchase Invoice (rare; supplier = default from OCR Settings)
 
@@ -73,7 +75,7 @@ Statement Pipeline: Drive scan → classifier routes to statement → Gemini API
 | `erpocr_integration/dn_api.py` | DN background processing (`dn_gemini_process`), PO matching, doc_event hooks, retry |
 | `erpocr_integration/erpnext_ocr/doctype/ocr_delivery_note/ocr_delivery_note.py` | OCR DN controller — create_purchase_order(), create_purchase_receipt(), unlink, no_action |
 | `erpocr_integration/public/js/ocr_delivery_note.js` | DN client: PO matching dialogs (qty-focused), Create dropdown (PO/PR), real-time status |
-| `erpocr_integration/fleet_api.py` | Fleet background processing (`fleet_gemini_process`), vehicle matching (exact + normalized + fuzzy `_fuzzy_match_vehicle`), doc_event hooks, retry, `route_to_invoice_pipeline` (re-route mis-folder slips to invoice pipeline) |
+| `erpocr_integration/fleet_api.py` | Fleet background processing (`fleet_gemini_process`), vehicle matching (exact + normalized + fuzzy `_fuzzy_match_vehicle`), doc_event hooks, retry, `route_to_invoice_pipeline` (re-route mis-folder slips to invoice pipeline), `upload_fleet_slip` (driver-shell idempotent phone-capture upload contract, P4 — see [CROSS_APP_SURFACE.md §2c](../CROSS_APP_SURFACE.md)) |
 | `erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.py` | OCR Fleet Slip controller — create_purchase_invoice(), mark_recorded(), unlink, no_action, status workflow |
 | `erpocr_integration/public/js/ocr_fleet_slip.js` | Fleet client: Create PI button, vehicle config display, status intro, unauthorized warning |
 | `erpocr_integration/statement_api.py` | Statement background processing (`statement_gemini_process`), reconciliation orchestration, `rereconcile_statement` |
@@ -127,7 +129,7 @@ Pending → Needs Review → Matched → Draft Created (Direct Expense) / Comple
 - **Single transaction per slip** — no child table; fuel fill-up or toll charge lives directly on the main doc
 - **Slip classification**: `slip_type` (Fuel / Toll / Other) determines item and form sections
 - **Unauthorized flag**: `slip_type = Other` auto-sets `unauthorized_flag` — orange warning on form; review then either Mark Recorded (Fleet Card) / Create PI (Direct Expense) / Mark No Action (genuinely unauthorized)
-- **Drive-only input** — drivers drop scans in a shared Drive folder; no manual upload or email
+- **Two ingest paths** (P4): (1) the Drive folder poll (back-office/bulk; `source_type = "Gemini Drive Scan"`), and (2) the **driver-shell phone upload** — `upload_fleet_slip` (`source_type = "Gemini Shell Upload"`): idempotent (R-B `client_request_id`), recon-only (never a PI), fail-safe (provider-less vehicle → Needs Review, never the invoice path), via the `OCR Fleet Driver` role. Both land the same OCR Fleet Slip, indistinguishable downstream except `source_type`. No email ingestion. See [CROSS_APP_SURFACE.md §2c](../CROSS_APP_SURFACE.md).
 - **Per-vehicle posting mode** auto-set from Fleet Vehicle custom fields (`custom_fleet_card_provider`, `custom_fleet_control_account`, `custom_cost_center`):
   - Fleet card provider set → **Fleet Card** mode (operator runs Mark Recorded once verified)
   - Fleet card provider blank → **Direct Expense** mode → PI supplier = `fleet_default_supplier` from OCR Settings, expense = `fleet_expense_account`

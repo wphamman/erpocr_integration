@@ -2,6 +2,20 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Merged to master, not yet tagged/deployed.
+
+### Added — Driver-shell fleet-slip upload contract (P4)
+- **`fleet_api.upload_fleet_slip(client_request_id, fleet_vehicle=None, vehicle_registration=None, captured_at=None)`** — a whitelisted POST that lands a phone-captured fleet slip as an **OCR Fleet Slip recon record** (image attached, Gemini extraction queued async). Multipart binary upload, own **2MB** server cap, magic-byte validated, private File attachment. Structurally **recon-only** — it can never create or feed a Purchase Invoice. Contract documented in [CROSS_APP_SURFACE.md §2c](CROSS_APP_SURFACE.md).
+- **Idempotency = the R-B house template** (matches `fleet_management.submit_vehicle_inspection`): a nullable-unique `client_request_id` field on OCR Fleet Slip + insert-and-catch + full rollback → a 3G retry returns the original slip with `duplicate: true`, never a second.
+- **Fail-safe provider fork** — `posting_mode` derives from the vehicle's `custom_fleet_card_provider`; provider missing → the slip lands in Needs Review with blank `posting_mode` (PI guard blocks any invoice), **never silently routed toward the invoice path**. Applies to shell-sourced slips throughout (async OCR matching *and* the controller's `_apply_vehicle_config_from_link` on (re-)link); the Drive path keeps its Direct-Expense fallback.
+- **New `OCR Fleet Driver` role** — create on OCR Fleet Slip ONLY, reads `if_owner`-scoped (a driver cannot read other drivers' slips), no Desk access; Guest denied.
+- New fields on OCR Fleet Slip: `client_request_id` (Data, nullable-unique, no_copy, hidden), `captured_at` (Datetime, device-truth). `source_type` reused as the Drive-vs-API discriminator (`"Gemini Drive Scan"` / `"Gemini Shell Upload"`, server-set constant).
+- Upload + attach + enqueue land on a single commit (`enqueue_after_commit=True`) so a failure can't strand a keyed slip without its image/job.
+
+> **Deploy note:** the OCR Fleet Slip **Custom DocPerm shadow** on prod masks the new role (and `raw_payload`). The deploy MUST run **Customize Form → Restore Original Permissions** on OCR Fleet Slip, or the driver role is silently dead. See the P4 handback §14f.
+
 ## [1.3.0] — 2026-06-11
 
 ### Added
