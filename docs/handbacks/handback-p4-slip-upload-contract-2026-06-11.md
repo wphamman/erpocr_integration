@@ -6,6 +6,7 @@
 > private attachment, fail-safe, recon-only, async pipeline) AND the driver role is verified live
 > (create + if_owner read scoping). **One required prod-deploy step surfaced + cleared on the mirror:
 > Restore Original Permissions on the OCR Fleet Slip Custom DocPerm shadow** — see §14d–14f.
+> **Codex review run: 8 PASS / 2 FAIL; both FAILs fixed in `0aeb256` (§15) — re-review warranted.**
 
 ---
 
@@ -368,3 +369,26 @@ prod dump still carries `tabOCR*` — so post-restore the OCR tables are orphane
 erpocr + starpops_assets (+ the scheduler-loop cause) and RUNBOOK restore quirks. `sites/apps.txt`
 (erpocr appended) lives in the docker `sites` volume, not the repo — persists in the volume, nothing
 to commit.
+
+---
+
+## 15. Codex review — RUN, both FAILs fixed (`0aeb256`)
+
+Codex reviewed `e18857a` (read-only): **8 PASS, 2 FAIL**. Both FAILs were real and are fixed in
+`0aeb256` (pushed); the 8 PASS items confirm the core design (idempotency race, nullable-unique
+coexistence, Confirmed-skip, fail_safe threading, role scoping + guest gate, file validation order).
+
+- **FAIL #1 — non-atomic upload (`fleet_api.py`).** The slip committed *before* the File insert +
+  enqueue, so a crash/File/enqueue failure after that commit stranded a keyed slip that idempotent
+  retries returned un-repaired (no image, no job). **Fix:** slip + private File + extraction job now
+  land on a SINGLE commit (the last step), with `enqueue_after_commit=True` tying the job to the
+  commit — any pre-commit failure rolls the whole unit back (a retry rebuilds a complete slip), and
+  the worker can never race the commit.
+- **FAIL #2 — fail-safe undone on re-link (`ocr_fleet_slip.py`).** `_apply_vehicle_config_from_link`
+  sent provider-less vehicles to Direct Expense; `on_update` fires it on BOTH a Desk re-link AND the
+  shell upload's own insert (`has_value_changed(fleet_vehicle)` on a Confirmed slip) — silently
+  undoing the upload-time fail-safe and satisfying the PI guard. **Fix:** it now fail-safes for
+  shell-sourced slips (provider-less → blank `posting_mode` → stays Needs Review, invoice blocked);
+  Drive keeps the Direct-Expense fallback; the operator can still set Direct Expense explicitly.
+- Tests +3 (719 pass, ruff clean): atomic single-commit + no-partial-on-failure; shell fail-safe
+  holds on re-link and with a provider. **A re-review of `0aeb256` is warranted** (2 focused fixes).
