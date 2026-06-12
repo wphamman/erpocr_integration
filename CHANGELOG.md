@@ -2,9 +2,7 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-Merged to master, not yet tagged/deployed.
+## [1.4.0] — 2026-06-12
 
 ### Added — Driver-shell fleet-slip upload contract (P4)
 - **`fleet_api.upload_fleet_slip(client_request_id, fleet_vehicle=None, vehicle_registration=None, captured_at=None)`** — a whitelisted POST that lands a phone-captured fleet slip as an **OCR Fleet Slip recon record** (image attached, Gemini extraction queued async). Multipart binary upload, own **2MB** server cap, magic-byte validated, private File attachment. Structurally **recon-only** — it can never create or feed a Purchase Invoice. Contract documented in [CROSS_APP_SURFACE.md §2c](CROSS_APP_SURFACE.md).
