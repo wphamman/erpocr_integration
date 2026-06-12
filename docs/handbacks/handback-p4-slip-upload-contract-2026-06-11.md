@@ -3,8 +3,9 @@
 > Paste into the .ai/architecture chat. Frame as "Handback from Code session — P4 upload contract."
 > **Status: code COMPLETE + PUSHED; P-1 INSTALLED + LIVE-VERIFIED on driver-dev (data-safe).**
 > The contract is proven end-to-end live (idempotency, source_type, owner-stamp, captured_at,
-> private attachment, fail-safe, recon-only, async extraction pipeline). **One prod-deploy gotcha
-> surfaced: the OCR Fleet Slip Custom DocPerm shadow masks the OCR Fleet Driver role** — see §14.
+> private attachment, fail-safe, recon-only, async pipeline) AND the driver role is verified live
+> (create + if_owner read scoping). **One required prod-deploy step surfaced + cleared on the mirror:
+> Restore Original Permissions on the OCR Fleet Slip Custom DocPerm shadow** — see §14d–14f.
 
 ---
 
@@ -325,6 +326,45 @@ invisible. This is the same shadow that blocks `raw_payload` (permlevel-1) reads
   OCR Fleet Slip (deletes the Custom DocPerm shadow so the standard perms — incl. OCR Fleet Driver
   AND the permlevel-1 System Manager row that fixes `raw_payload` — take effect). Programmatic:
   `frappe.permissions.reset_perms("OCR Fleet Slip")` + `clear-cache`.
-- On the mirror this reset was **not** applied (the harness classifier flagged it as a perm-config
-  change beyond install/verify on a shared bench — left for Willie). Until it's reset, the driver
-  role won't function on driver-dev or prod.
+**Verbatim Custom DocPerm snapshot (OCR Fleet Slip, before restore — the record of what prod's
+restore step discards).** All 3 rows dated `2026-05-06`, permlevel 0, if_owner 0:
+
+| role | read | write | create | delete | report | export | print | email | share |
+|---|---|---|---|---|---|---|---|---|---|
+| OCR Fleet Slip Reader | 1 | 1 | 0 | 0 | 0 | **1** | 0 | 0 | 0 |
+| OCR Manager | 1 | 1 | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| System Manager | 1 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | 0 |
+
+**Assessment: all 3 are STALE, none deliberate** — each is a subset of the shipped JSON captured
+before later hardening (missing `report`/`print`/`email`/`share`; missing the System Manager
+permlevel-1 row = the `raw_payload` blocker; missing the OCR Fleet Driver row). The only
+existing-role perm that *changes* on restore is **Reader `export` 1→0**, which is the intended
+hardening (the shipped JSON sets it 0; `test_fleet_slip_reader_role.py` asserts it). **Nothing to
+re-apply on prod.**
+
+### 14e. Restore DONE + driver role verified live (2026-06-12, Willie-approved)
+`frappe.permissions.reset_perms("OCR Fleet Slip")` + `clear-cache` → Custom DocPerm count 0;
+standard JSON now governs (OCR Fleet Driver create+read+if_owner present; System Manager permlevel-1
+back → `raw_payload` readable). Driver-role verified **live** as a synthetic `OCR Fleet Driver`:
+- `has_permission(create)` = **True**; uploaded a slip via the contract → owner = the driver (stamped).
+- `read` own slip = **True**; `read` another user's slip (`OCR-FS-00039`, owner Administrator) =
+  **False**; `get_list` as the driver returned **only its own slip (1, not 39)** → if_owner scoping holds.
+- Test data cleaned (count back to 39).
+
+### 14f. REQUIRED erpocr deploy-request step (carry into the eventual prod deploy)
+The shadow exists on **prod** too. The deploy request MUST include, for `OCR Fleet Slip`:
+1. **Snapshot** the existing Custom DocPerm rows (role/perms/if_owner) — record before discarding.
+2. **Customize Form → Restore Original Permissions** (or `frappe.permissions.reset_perms` + clear-cache).
+3. **Verify** both: a driver can create (contract works) AND System Manager can read `raw_payload`.
+4. **Re-apply** any *deliberate* customizations from step 1 (on driver-dev there were none — all stale;
+   re-audit prod's set at deploy time in case it diverged).
+Context: the `restore-prod-to-dev.sh` three-place strip removes erpocr from `installed_apps` but the
+prod dump still carries `tabOCR*` — so post-restore the OCR tables are orphaned; reconcile with
+`install-app erpocr_integration` (additive). RUNBOOK updated with this + the encrypted-credential
+(Gemini-key) restore quirk.
+
+### 14g. Infra commits
+`erpnext-docker/starpops-test` (LOCAL, not pushed): `5322f08` — compose.override.yaml self-heal for
+erpocr + starpops_assets (+ the scheduler-loop cause) and RUNBOOK restore quirks. `sites/apps.txt`
+(erpocr appended) lives in the docker `sites` volume, not the repo — persists in the volume, nothing
+to commit.
