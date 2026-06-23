@@ -2,6 +2,11 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-06-23
+
+### Fixed
+- **Driver-shell fleet-slip upload no longer 500s on every submit (timezone bug).** `upload_fleet_slip` stored the tz-aware datetime returned by `get_datetime(captured_at)` straight into the naive MariaDB `captured_at` column. The driver shell always sends `captured_at = new Date().toISOString()` (UTC `Z`), so MariaDB rejected it with error 1292 — and the failure fires at `insert()`, **outside** the parse `try/except` — making **every** shell slip submit 500. The client (correctly) treats 500 as retriable, so the driver UI sat stuck on "Queued" with zero records landing. Now mirrors the fix `fleet_management` already shipped for the identical bug (P3.5 `submit_vehicle_inspection`): a tz-aware value is converted to the site timezone, then `tzinfo`/microseconds are stripped so the stored value is naive site-local — exactly like `now_datetime()`. The `None` / unparseable / already-naive paths are unchanged (a malformed device timestamp is logged + dropped, never blocks the recon upload); the Drive pipeline (`fleet_gemini_process`) never sets `captured_at` and is unaffected.
+
 ## [1.4.0] — 2026-06-12
 
 ### Added — Driver-shell fleet-slip upload contract (P4)
@@ -469,6 +474,7 @@ First stable release. The full pipeline — invoices, delivery notes, fleet slip
 - Supplier and item matching with alias learning.
 - Automatic draft PI creation with tax, currency, and PO linkage.
 
+[1.4.1]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.4.1
 [1.3.0]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.3.0
 [1.0.4]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.4
 [1.0.3]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.3
