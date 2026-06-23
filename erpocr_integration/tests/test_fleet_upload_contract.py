@@ -282,11 +282,63 @@ class TestUploadHappyPath:
 		# never races the commit.
 		assert kwargs["enqueue_after_commit"] is True
 
-	def test_captured_at_stored(self, mock_frappe):
+	def test_captured_at_tz_aware_normalized_to_site_naive(self, mock_frappe):
+		"""A shell-shaped UTC 'Z' captured_at lands tz-NAIVE site-local — no 1292.
+
+		The bug: get_datetime('…Z') returns a tz-AWARE datetime; assigning it to
+		the naive MariaDB DATETIME column raises (1292) at insert(), OUTSIDE the
+		parse try/except, so EVERY driver-shell slip 500'd.
+
+		Mock-trap (cost real time in fleet P3.5): the conftest echo-mocks
+		get_datetime, so a string/naive mock would HIDE this exact bug. This test
+		patches a GENUINELY tz-aware datetime in (real get_datetime behaviour) so
+		the tzinfo-stripping is actually exercised."""
+		from datetime import datetime, timezone
+
 		holder = _wire_upload(mock_frappe)
-		upload_fleet_slip(client_request_id="k1", captured_at="2026-06-11T08:30:00")
-		# get_datetime is an echo passthrough in the conftest mock.
-		assert holder["slip"].captured_at == "2026-06-11T08:30:00"
+		# The shell always sends new Date().toISOString() — UTC with a 'Z'.
+		aware_utc = datetime(2026, 6, 23, 8, 26, 0, 123456, tzinfo=timezone.utc)
+		with (
+			patch("frappe.utils.get_datetime", return_value=aware_utc),
+			patch("frappe.utils.get_system_timezone", return_value="Africa/Johannesburg"),
+		):
+			upload_fleet_slip(client_request_id="k-tz", captured_at="2026-06-23T08:26:00.123456Z")
+
+		stored = holder["slip"].captured_at
+		# 08:26 UTC → 10:26 SAST (+02:00), tz stripped, microseconds zeroed —
+		# exactly like now_datetime() produces.
+		assert stored == datetime(2026, 6, 23, 10, 26, 0)
+		assert stored.tzinfo is None
+		assert stored.microsecond == 0
+
+	def test_captured_at_naive_stored_unchanged(self, mock_frappe):
+		"""An already-naive captured_at passes through (microseconds zeroed, no tz
+		conversion) — the coexistence path stays correct."""
+		from datetime import datetime
+
+		holder = _wire_upload(mock_frappe)
+		naive = datetime(2026, 6, 11, 8, 30, 0, 500000)
+		with patch("frappe.utils.get_datetime", return_value=naive):
+			upload_fleet_slip(client_request_id="k1", captured_at="2026-06-11T08:30:00.5")
+		assert holder["slip"].captured_at == datetime(2026, 6, 11, 8, 30, 0)
+		assert holder["slip"].captured_at.tzinfo is None
+
+	def test_captured_at_none_not_set(self, mock_frappe):
+		"""The Drive pipeline + offline-with-no-timestamp path: captured_at omitted
+		→ never assigned (server-side creation timestamp governs)."""
+		holder = _wire_upload(mock_frappe)
+		upload_fleet_slip(client_request_id="k1")
+		assert holder["slip"].get("captured_at") is None
+
+	def test_captured_at_unparseable_dropped_not_fatal(self, mock_frappe):
+		"""A malformed device timestamp is logged + dropped — it must NEVER block
+		the recon upload (the slip still lands)."""
+		holder = _wire_upload(mock_frappe)
+		with patch("frappe.utils.get_datetime", side_effect=ValueError("bad")):
+			result = upload_fleet_slip(client_request_id="k1", captured_at="not-a-date")
+		assert holder["slip"].get("captured_at") is None
+		assert holder["slip"].inserted is True
+		assert result["duplicate"] is False
 
 	def test_pre_commit_failure_leaves_no_committed_slip(self, mock_frappe):
 		"""Atomicity (Codex FAIL-1 fix): slip + File + job land on ONE commit, the

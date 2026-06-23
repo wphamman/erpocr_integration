@@ -539,9 +539,21 @@ def upload_fleet_slip(
 
 	if captured_at:
 		try:
-			from frappe.utils import get_datetime
+			from frappe.utils import get_datetime, get_system_timezone
 
-			ocr_fleet.captured_at = get_datetime(captured_at)
+			parsed = get_datetime(captured_at)
+			if parsed is not None and parsed.tzinfo is not None:
+				# The device sends UTC (ISO 'Z'); a tz-aware value is rejected by
+				# MariaDB's naive DATETIME column (error 1292) — and the failure
+				# fires at insert(), OUTSIDE this try/except. Convert to the site
+				# timezone, then drop tzinfo/microseconds so the stored value is
+				# naive site-local — exactly like now_datetime().
+				from zoneinfo import ZoneInfo
+
+				parsed = parsed.astimezone(ZoneInfo(get_system_timezone()))
+			if parsed is not None:
+				parsed = parsed.replace(tzinfo=None, microsecond=0)
+			ocr_fleet.captured_at = parsed
 		except Exception:
 			# A malformed device timestamp must never block the recon upload.
 			frappe.logger().warning(f"upload_fleet_slip: ignoring unparseable captured_at {captured_at!r}")
