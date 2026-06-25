@@ -402,6 +402,38 @@ def _shape_upload_response(ocr_fleet, *, duplicate: bool) -> dict:
 	}
 
 
+def _verify_image_decodable(content: bytes) -> None:
+	"""Reject a genuinely-undecodable image with a clean 4xx (not a 500).
+
+	Magic bytes prove only the header. ``Image.verify()`` rejects a file that is
+	not a real image (a non-image body, or garbage past a faked header) — the
+	class that 500s inside PIL when Frappe later builds a thumbnail.
+
+	We deliberately do NOT force a full pixel decode (``Image.load()``): Frappe
+	globally sets ``ImageFile.LOAD_TRUNCATED_IMAGES = True``
+	(frappe/core/doctype/file/file.py), so the platform intentionally TOLERATES a
+	merely-truncated image — a photo that lost its tail in transit still attaches
+	and renders, and does not 500. verify() matches that posture: it passes a
+	truncated-but-openable image and rejects only the genuinely broken ones.
+	(A bare-Pillow probe shows load() rejecting truncation, but that flag is False
+	only outside the Frappe runtime — not in production.)
+
+	Pillow ships with Frappe — no new dependency. Images only — callers must NOT
+	pass PDFs (PIL won't raster them).
+	"""
+	from io import BytesIO
+
+	from PIL import Image
+
+	try:
+		Image.open(BytesIO(content)).verify()
+	except Exception:
+		frappe.throw(
+			_("That image couldn't be read — please retake the photo."),
+			frappe.ValidationError,
+		)
+
+
 @frappe.whitelist(methods=["POST"])
 def upload_fleet_slip(
 	client_request_id: str,
@@ -493,6 +525,14 @@ def upload_fleet_slip(
 	file_content = file.read()
 	if not validate_file_magic_bytes(file_content, mime_type):
 		frappe.throw(_("File content does not match its file type. The file may be corrupted."))
+	# Second gate (images only): magic bytes prove just the HEADER. An image with
+	# a valid header but a truncated/corrupt body passes the check above, then
+	# 500s when Frappe/PIL decodes it (thumbnail/preview). Decode-verify here so
+	# an undecodable image is rejected with a clean 4xx, never a 500 — and BEFORE
+	# any File is created (no orphan). PDFs are not raster-decoded by PIL, so they
+	# skip this gate (slips are legitimately PDF).
+	if mime_type.startswith("image/"):
+		_verify_image_decodable(file_content)
 
 	# ── Settings / company ─────────────────────────────────────────────────
 	settings = frappe.get_cached_doc("OCR Settings")
