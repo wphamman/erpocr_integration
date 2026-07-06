@@ -25,5 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest requests google-api-python-client google-auth
+      # Pillow: test_fleet_upload_contract builds a real JPEG for the
+      # upload_fleet_slip decode-gate (PIL Image.verify at the endpoint).
+      - run: pip install pytest requests google-api-python-client google-auth Pillow
       - run: pytest erpocr_integration/tests/ -v
