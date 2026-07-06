@@ -386,3 +386,90 @@ class TestDuplicateBillNo:
 
 		assert stmt.items[0].matched_invoice == "PI-100A"
 		assert stmt.items[0].recon_status == "Amount Mismatch"
+
+	def test_recycled_ref_prefers_in_period_on_mismatch(self, mock_frappe):
+		"""A supplier recycling last year's invoice number: with no exact
+		amount match (OCR noise), the IN-PERIOD candidate must win — not the
+		earliest-posted prior-period one."""
+		stmt = _make_statement(
+			period_from="2026-06-01",
+			period_to="2026-06-30",
+			items=[_make_stmt_item(reference="INV-001", debit=1052.00)],
+		)
+		mock_frappe.get_all.return_value = [
+			{
+				"name": "PI-LAST-JULY",
+				"bill_no": "INV-001",
+				"grand_total": 980.0,
+				"outstanding_amount": 0.0,
+				"posting_date": "2025-07-15",  # earliest — must NOT win
+			},
+			{
+				"name": "PI-THIS-JUNE",
+				"bill_no": "INV-001",
+				"grand_total": 1052.50,  # 0.50 off — defeats the amount gate
+				"outstanding_amount": 1052.50,
+				"posting_date": "2026-06-10",
+			},
+		]
+
+		reconcile_statement(stmt)
+
+		assert stmt.items[0].matched_invoice == "PI-THIS-JUNE"
+		assert stmt.items[0].recon_status == "Amount Mismatch"
+
+	def test_recurring_same_amount_prefers_in_period(self, mock_frappe):
+		"""Recurring same-ref same-amount charge (monthly RENT): the amount
+		matches every month — the in-period PI must win over older ones."""
+		stmt = _make_statement(
+			period_from="2026-06-01",
+			period_to="2026-06-30",
+			items=[_make_stmt_item(reference="RENT", debit=5000.0)],
+		)
+		mock_frappe.get_all.return_value = [
+			{
+				"name": f"PI-RENT-{m}",
+				"bill_no": "RENT",
+				"grand_total": 5000.0,
+				"outstanding_amount": 0.0,
+				"posting_date": f"2026-0{m}-01",
+			}
+			for m in range(1, 7)
+		]
+
+		reconcile_statement(stmt)
+
+		assert stmt.items[0].matched_invoice == "PI-RENT-6"
+		assert stmt.items[0].recon_status == "Matched"
+
+	def test_full_amount_re_reference_reuses_consumed_pi(self, mock_frappe):
+		"""The statement lists the SAME invoice twice at full amount while a
+		different-amount PI shares the normalized ref — the second line must
+		re-reference the consumed PI, not be forced onto the wrong one."""
+		stmt = _make_statement(
+			items=[
+				_make_stmt_item(reference="INV/100", debit=1000.0),
+				_make_stmt_item(reference="INV-100", debit=1000.0),
+			],
+		)
+		mock_frappe.get_all.return_value = [
+			{
+				"name": "PI-100A",
+				"bill_no": "INV/100",
+				"grand_total": 1000.0,
+				"outstanding_amount": 1000.0,
+				"posting_date": "2026-02-05",
+			},
+			{
+				"name": "PI-100B",
+				"bill_no": "INV-100",
+				"grand_total": 2500.0,
+				"outstanding_amount": 2500.0,
+				"posting_date": "2026-02-20",
+			},
+		]
+
+		reconcile_statement(stmt)
+
+		assert stmt.items[0].matched_invoice == "PI-100A"
+		assert stmt.items[1].matched_invoice == "PI-100A"  # re-reference, not PI-100B

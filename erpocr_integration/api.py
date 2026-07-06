@@ -327,22 +327,37 @@ def gemini_process(
 						title="Auto-Draft Error",
 						message=f"Auto-draft failed for {doc_name}\n{frappe.get_traceback()}",
 					)
+			# Persist auto-draft work — the trailing notification below must not
+			# be able to roll back created drafts via the except handler.
+			frappe.db.commit()  # nosemgrep
 
-		# Publish realtime update
-		ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
-		if getattr(ocr_import_first, "auto_drafted", 0):
-			msg = "Auto-drafted! Document created automatically. Please review and submit."
-			if invoice_count > 1:
-				msg = f"{invoice_count} invoices extracted. High-confidence records auto-drafted."
-		else:
-			msg = "Extraction complete! Please review and confirm matches."
-			if invoice_count > 1:
-				msg = f"Extraction complete! {invoice_count} invoices created. Please review."
-		frappe.publish_realtime(
-			event="ocr_extraction_progress",
-			message={"ocr_import": ocr_import_name, "status": ocr_import_first.status, "message": msg},
-			user=uploaded_by,
-		)
+		# Publish realtime update. Best-effort: everything real is committed by
+		# now, so a notification failure must NOT reach the except handler —
+		# that would roll back nothing but still mark a successful run Error.
+		try:
+			ocr_import_first = frappe.get_doc("OCR Import", ocr_import_name)
+			if getattr(ocr_import_first, "auto_drafted", 0):
+				msg = "Auto-drafted! Document created automatically. Please review and submit."
+				if invoice_count > 1:
+					msg = f"{invoice_count} invoices extracted. High-confidence records auto-drafted."
+			else:
+				msg = "Extraction complete! Please review and confirm matches."
+				if invoice_count > 1:
+					msg = f"Extraction complete! {invoice_count} invoices created. Please review."
+			frappe.publish_realtime(
+				event="ocr_extraction_progress",
+				message={
+					"ocr_import": ocr_import_name,
+					"status": ocr_import_first.status,
+					"message": msg,
+				},
+				user=uploaded_by,
+			)
+		except Exception:
+			frappe.log_error(
+				title="OCR Notification Error",
+				message=f"Post-extraction notify failed for {ocr_import_name}\n{frappe.get_traceback()}",
+			)
 
 	except Exception as e:
 		# Roll back the open transaction FIRST. The multi-invoice loop saves the
@@ -405,7 +420,14 @@ def _select_tax_template(settings, subtotal: float, tax_amount: float):
 
 	try:
 		template = frappe.get_cached_doc("Purchase Taxes and Charges Template", default_template)
-		total_rate = sum(float(row.rate or 0) for row in template.taxes if float(row.rate or 0) > 0)
+		# Net percentage anchor: Deduct rows subtract (a template with e.g.
+		# VAT 15% Add + withholding 15% Deduct nets 0% — summing both to 30%
+		# would misroute every ordinary invoice to the import template).
+		total_rate = sum(
+			float(row.rate or 0) * (-1 if row.add_deduct_tax == "Deduct" else 1)
+			for row in template.taxes
+			if float(row.rate or 0) > 0
+		)
 	except Exception:
 		return default_template
 

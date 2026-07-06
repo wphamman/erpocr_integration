@@ -69,6 +69,12 @@ def reconcile_statement(ocr_statement) -> None:
 	# Track which PIs were matched (for reverse check)
 	matched_pi_names = set()
 
+	def _amount_matches(c, amount):
+		return abs((c["grand_total"] or 0) - amount) < 0.01
+
+	def _in_period(c):
+		return not ocr_statement.period_from or str(c.get("posting_date")) >= str(ocr_statement.period_from)
+
 	# Forward reconciliation: match each statement line to a PI
 	for item in ocr_statement.items:
 		# Credit lines are payments — mark and skip
@@ -90,18 +96,27 @@ def reconcile_statement(ocr_statement) -> None:
 			item.recon_status = "Missing from ERPNext"
 			continue
 
-		# Pick the best candidate, not blindly the first (finding R2): when
-		# several PIs share a normalized bill_no (INV/100 vs INV-100, or a
-		# genuinely re-used supplier number), prefer an not-yet-matched PI whose
-		# grand_total equals the statement debit; else the earliest-posted
-		# not-yet-matched one (list is posting_date-ordered); else fall back to
-		# the first candidate (legitimate re-reference of the same invoice).
+		# Pick the best candidate, not blindly the first (finding R2): several
+		# PIs can share a normalized bill_no (INV/100 vs INV-100, a re-used or
+		# recycled supplier number, a recurring same-ref charge). Preference
+		# order — in-period beats brought-forward at equal evidence, so a
+		# recycled reference from last year can't shadow this period's invoice:
+		#   1. amount match among not-yet-matched IN-PERIOD candidates
+		#   2. amount match among not-yet-matched prior-period (brought-forward)
+		#   3. amount match among already-matched (legit re-reference of one PI,
+		#      e.g. the statement lists the same invoice twice)
+		#   4. earliest not-yet-matched in-period candidate
+		#   5. earliest not-yet-matched candidate
+		#   6. first candidate (everything consumed)
 		stmt_amount = item.debit or 0
 		unconsumed = [c for c in candidates if c["name"] not in matched_pi_names]
-		pool = unconsumed or candidates
-		pi = next(
-			(c for c in pool if abs((c["grand_total"] or 0) - stmt_amount) < 0.01),
-			pool[0],
+		unconsumed_in_period = [c for c in unconsumed if _in_period(c)]
+		pi = (
+			next((c for c in unconsumed_in_period if _amount_matches(c, stmt_amount)), None)
+			or next((c for c in unconsumed if _amount_matches(c, stmt_amount)), None)
+			or next((c for c in candidates if _amount_matches(c, stmt_amount)), None)
+			or (unconsumed_in_period[0] if unconsumed_in_period else None)
+			or (unconsumed[0] if unconsumed else candidates[0])
 		)
 		item.matched_invoice = pi["name"]
 		item.erp_amount = pi["grand_total"]

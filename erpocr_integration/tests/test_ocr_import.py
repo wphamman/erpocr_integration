@@ -1796,51 +1796,69 @@ class TestImportVATInjection:
 
 class TestAliasUpsert:
 	"""A later confirmation with a different target must UPDATE the alias, not
-	be silently dropped (first-mapping-wins-forever poisoned auto-matching)."""
+	be silently dropped (first-mapping-wins-forever poisoned auto-matching).
+	Updates go through db.set_value (alias controllers are pass-only)."""
 
 	def test_supplier_alias_corrected(self, mock_frappe):
 		doc = _make_ocr_import(supplier="New Supplier", supplier_name_ocr="ACME LTD")
-		mock_frappe.db.exists.return_value = "ACME LTD"
 		mock_frappe.db.get_value.return_value = "Old Supplier"
-		alias_doc = MagicMock()
-		mock_frappe.get_doc.return_value = alias_doc
 
 		doc._save_supplier_alias()
 
-		assert alias_doc.supplier == "New Supplier"
-		alias_doc.save.assert_called_once_with(ignore_permissions=True)
+		mock_frappe.db.set_value.assert_called_once_with(
+			"OCR Supplier Alias", "ACME LTD", {"supplier": "New Supplier", "source": "Auto"}
+		)
+		mock_frappe.get_doc.assert_not_called()
 
 	def test_supplier_alias_unchanged_skips_write(self, mock_frappe):
 		doc = _make_ocr_import(supplier="Same Supplier", supplier_name_ocr="ACME LTD")
-		mock_frappe.db.exists.return_value = "ACME LTD"
 		mock_frappe.db.get_value.return_value = "Same Supplier"
 
 		doc._save_supplier_alias()
 
+		mock_frappe.db.set_value.assert_not_called()
 		mock_frappe.get_doc.assert_not_called()
 
 	def test_supplier_alias_created_when_new(self, mock_frappe):
 		doc = _make_ocr_import(supplier="New Supplier", supplier_name_ocr="ACME LTD")
-		mock_frappe.db.exists.return_value = None
+		mock_frappe.db.get_value.return_value = None
 		new_doc = MagicMock()
 		mock_frappe.get_doc.return_value = new_doc
 
 		doc._save_supplier_alias()
 
 		new_doc.insert.assert_called_once_with(ignore_permissions=True)
+		mock_frappe.db.set_value.assert_not_called()
 
 	def test_item_alias_corrected(self, mock_frappe):
 		doc = _make_ocr_import()
 		item = _make_item(description_ocr="Widget", item_code="ITEM-B")
-		mock_frappe.db.exists.return_value = "Widget"
 		mock_frappe.db.get_value.return_value = "ITEM-A"
-		alias_doc = MagicMock()
-		mock_frappe.get_doc.return_value = alias_doc
 
 		doc._save_item_alias(item)
 
-		assert alias_doc.item_code == "ITEM-B"
-		alias_doc.save.assert_called_once_with(ignore_permissions=True)
+		mock_frappe.db.set_value.assert_called_once_with(
+			"OCR Item Alias", "Widget", {"item_code": "ITEM-B", "source": "Auto"}
+		)
+
+	def test_item_alias_stale_row_cannot_clobber(self, mock_frappe):
+		"""allow_update=False (row unchanged in this save — a stale still-
+		Confirmed record being re-saved) must NOT rewrite an existing alias,
+		but may still insert a missing one."""
+		doc = _make_ocr_import()
+		item = _make_item(description_ocr="Widget", item_code="ITEM-B")
+		mock_frappe.db.get_value.return_value = "ITEM-A"
+
+		doc._save_item_alias(item, allow_update=False)
+
+		mock_frappe.db.set_value.assert_not_called()
+
+		# Missing alias still inserts even without allow_update
+		mock_frappe.db.get_value.return_value = None
+		new_doc = MagicMock()
+		mock_frappe.get_doc.return_value = new_doc
+		doc._save_item_alias(item, allow_update=False)
+		new_doc.insert.assert_called_once_with(ignore_permissions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1935,3 +1953,145 @@ class TestUnlinkWriteGuard:
 
 		doc.db_set.assert_not_called()
 		mock_frappe.delete_doc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Code-review hardening of the import-VAT injection + JE split
+# ---------------------------------------------------------------------------
+
+
+class TestInjectionGuards:
+	"""Injection must be scoped to pure-Actual templates and must never emit
+	an Actual row flagged included_in_print_rate (ERPNext rejects that)."""
+
+	def _mixed_template(self):
+		pct = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="On Net Total",
+			row_id=None,
+			account_head="2200 - VAT Input - TC",
+			description="VAT 15%",
+			rate=15.0,
+			cost_center=None,
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		actual = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="Actual",
+			row_id=None,
+			account_head="2230 - Freight - TC",
+			description="Freight",
+			rate=0.0,
+			cost_center=None,
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		return SimpleNamespace(company="Test Company", taxes=[pct, actual])
+
+	def _create_pi(self, mock_frappe, sample_settings, doc, template):
+		def get_cached_doc_handler(doctype, name=None):
+			if doctype == "OCR Settings":
+				return sample_settings
+			if doctype == "Purchase Taxes and Charges Template":
+				return template
+			return MagicMock()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_doc_handler
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler()
+		created_pi = MagicMock()
+		created_pi.name = "PI-GUARD-001"
+		mock_frappe.get_doc.return_value = created_pi
+		mock_frappe.msgprint = MagicMock()
+		doc.create_purchase_invoice()
+		return mock_frappe.get_doc.call_args[0][0]
+
+	def test_mixed_template_not_injected(self, mock_frappe, sample_settings):
+		"""A percentage template with an auxiliary Actual row must NOT get the
+		extracted VAT injected — that would double-tax ordinary invoices."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			tax_template="VAT 15% + Freight",
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(rate=1000, qty=1, amount=1000)],
+		)
+		pi_dict = self._create_pi(mock_frappe, sample_settings, doc, self._mixed_template())
+
+		for tax in pi_dict["taxes"]:
+			assert "tax_amount" not in tax
+
+	def test_inclusive_detection_never_flags_actual_rows(self, mock_frappe, sample_settings):
+		"""Case B shape: VAT-inclusive item sum + Actual import template. The
+		Actual row must NOT get included_in_print_rate=1 (ERPNext's
+		validate_inclusive_tax rejects it at insert)."""
+		actual_row = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="Actual",
+			row_id=None,
+			account_head="9500/000 - Vat Control Account - CC",
+			description="Customs VAT",
+			rate=0.0,
+			cost_center=None,
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		template = SimpleNamespace(company="Test Company", taxes=[actual_row])
+		# items sum ≈ total (inclusive shape) → _detect_tax_inclusive_rates True
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			tax_template="9 - Import with Std VAT",
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(rate=1150, qty=1, amount=1150)],
+		)
+		pi_dict = self._create_pi(mock_frappe, sample_settings, doc, template)
+
+		tax = pi_dict["taxes"][0]
+		assert tax["included_in_print_rate"] == 0
+		assert tax["tax_amount"] == 150.00  # still injected
+
+
+class TestJESplitExactness:
+	def test_three_row_split_sums_exactly(self, mock_frappe, sample_settings):
+		"""Booked tax must equal the extracted tax_amount exactly for a 3-row
+		odd split (rounding remainder handling)."""
+		rows = [SimpleNamespace(account_head=f"22{i}0 - Tax {i} - TC", rate=3.0) for i in range(3)]
+		template = SimpleNamespace(company="Test Company", taxes=rows)
+		doc = _make_ocr_import(
+			document_type="Journal Entry",
+			credit_account="2100 - Accounts Payable - TC",
+			tax_template="Three Way",
+			tax_amount=1.00,
+			items=[_make_item(amount=1000)],
+		)
+
+		def get_cached_doc_handler(doctype, name=None):
+			if doctype == "OCR Settings":
+				return sample_settings
+			if doctype == "Purchase Taxes and Charges Template":
+				return template
+			return MagicMock()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_doc_handler
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler()
+		created_je = MagicMock()
+		created_je.name = "JE-3WAY"
+		mock_frappe.get_doc.return_value = created_je
+		mock_frappe.msgprint = MagicMock()
+
+		doc.create_journal_entry()
+
+		je_dict = mock_frappe.get_doc.call_args[0][0]
+		tax_debits = [
+			a["debit_in_account_currency"] for a in je_dict["accounts"] if a["account"].startswith("22")
+		]
+		assert round(sum(tax_debits), 2) == 1.00

@@ -203,7 +203,13 @@ def _build_taxes_from_template(ocr_import) -> tuple[str, list[dict]] | tuple[Non
 			"rate": tax_row.rate,
 			"cost_center": tax_row.cost_center,
 			"account_currency": tax_row.account_currency,
-			"included_in_print_rate": 1 if rates_include_tax else tax_row.included_in_print_rate,
+			# Never force included_in_print_rate onto an Actual row — ERPNext's
+			# validate_inclusive_tax rejects Actual + inclusive at insert time.
+			"included_in_print_rate": (
+				1
+				if (rates_include_tax and tax_row.charge_type != "Actual")
+				else tax_row.included_in_print_rate
+			),
 			"included_in_paid_amount": tax_row.included_in_paid_amount,
 		}
 		for tax_row in template.taxes
@@ -213,13 +219,27 @@ def _build_taxes_from_template(ocr_import) -> tuple[str, list[dict]] | tuple[Non
 	# carry no percentage; the tax IS the extracted amount. Inject it into the
 	# template's first Actual row so the draft posts the real import VAT instead
 	# of 0 (previously the accountant re-keyed the tax table on every customs
-	# invoice). Percentage templates are untouched — ERPNext computes their rows.
+	# invoice). ONLY for pure-Actual templates: a mixed template (percentage rows
+	# plus an auxiliary Actual row, e.g. a freight line kept in a standard VAT
+	# template) must not get the extracted VAT injected on top of its computed
+	# percentage rows — that would silently double-tax ordinary invoices.
 	extracted_tax = flt(ocr_import.tax_amount, 2)
-	if extracted_tax > 0:
-		for tax in taxes:
-			if tax.get("charge_type") == "Actual":
-				tax["tax_amount"] = extracted_tax
-				break
+	charge_rows = [t for t in taxes if t.get("account_head")]
+	actual_rows = [t for t in charge_rows if t.get("charge_type") == "Actual"]
+	if extracted_tax > 0 and charge_rows and len(actual_rows) == len(charge_rows):
+		actual_rows[0]["tax_amount"] = extracted_tax
+		if len(actual_rows) > 1:
+			# Multi-Actual-row template (e.g. import VAT + duty as separate
+			# Actual rows): the split can't be inferred — the full amount went
+			# to the first row. Same loud-warning treatment as the JE path.
+			frappe.msgprint(
+				_(
+					"Tax template '{0}' has multiple Actual rows but the split cannot "
+					"be inferred — the full tax amount was placed on '{1}'. "
+					"Review the tax table on the draft."
+				).format(ocr_import.tax_template, actual_rows[0].get("account_head")),
+				indicator="orange",
+			)
 
 	return ocr_import.tax_template, taxes
 
@@ -277,8 +297,27 @@ class OCRImport(Document):
 
 		default_item = (frappe.get_cached_doc("OCR Settings").get("default_item") or "").strip()
 
+		# Which item rows actually changed in THIS save? Confirmed persists on a
+		# row forever, so without this an unrelated later re-save (link a PO,
+		# edit a cost center) would re-fire alias learning from stale rows and
+		# silently revert a newer curated alias. Defensive: if the previous
+		# state isn't available (fresh insert, mocked tests), treat as changed.
+		prev_rows = {}
+		try:
+			doc_before = self.get_doc_before_save()
+			if doc_before:
+				prev_rows = {
+					row.name: (row.item_code or "", row.match_status or "") for row in doc_before.items
+				}
+		except Exception:
+			prev_rows = {}
+
 		for item in self.items:
 			if item.item_code and item.description_ocr and item.match_status == "Confirmed":
+				row_changed = not prev_rows or prev_rows.get(item.name) != (
+					item.item_code or "",
+					item.match_status or "",
+				)
 				if item.item_code == default_item:
 					# Catch-all item: a description→item alias is useless (the item is
 					# always the default) and Item-Supplier learning would point a product
@@ -290,7 +329,7 @@ class OCRImport(Document):
 						self._save_service_mapping(item)
 					continue
 
-				self._save_item_alias(item)
+				self._save_item_alias(item, allow_update=row_changed)
 
 				# Only save service mapping alongside explicit item confirmation
 				if item.expense_account:
@@ -349,20 +388,19 @@ class OCRImport(Document):
 		Upserts: a later confirmation with a different supplier UPDATES the
 		existing alias instead of being silently dropped — otherwise the first
 		mapping wins forever and a wrong alias keeps auto-matching at
-		tier-1 confidence (high enough to auto-draft).
+		tier-1 confidence (high enough to auto-draft). Alias controllers are
+		pass-only, so db.set_value (one round-trip) is safe for the update.
+		Guarded by on_update's has_value_changed("supplier") check, so only a
+		deliberate change in THIS save can rewrite an existing alias.
 		"""
 		ocr_text = self.supplier_name_ocr.strip()
 		if not ocr_text:
 			return
 
-		existing = frappe.db.exists("OCR Supplier Alias", ocr_text)
-		if existing:
-			if frappe.db.get_value("OCR Supplier Alias", existing, "supplier") != self.supplier:
-				doc = frappe.get_doc("OCR Supplier Alias", existing)
-				doc.supplier = self.supplier
-				doc.source = "Auto"
-				doc.save(ignore_permissions=True)
-		else:
+		# One read answers both "exists?" (None = no row; supplier is required
+		# so a row never carries NULL) and "changed?".
+		existing_supplier = frappe.db.get_value("OCR Supplier Alias", ocr_text, "supplier")
+		if existing_supplier is None:
 			frappe.get_doc(
 				{
 					"doctype": "OCR Supplier Alias",
@@ -371,25 +409,25 @@ class OCRImport(Document):
 					"source": "Auto",
 				}
 			).insert(ignore_permissions=True)
+		elif existing_supplier != self.supplier:
+			frappe.db.set_value("OCR Supplier Alias", ocr_text, {"supplier": self.supplier, "source": "Auto"})
 
-	def _save_item_alias(self, item):
+	def _save_item_alias(self, item, allow_update=True):
 		"""Save (or correct) the item alias for future auto-matching.
 
 		Upserts for the same reason as _save_supplier_alias — a user correcting
 		a description→item mapping must take effect on the next invoice.
+		`allow_update=False` (a re-save where this row did NOT change) still
+		inserts a missing alias but never rewrites an existing one — otherwise
+		any later save of a stale still-Confirmed record would silently revert
+		a newer curated alias.
 		"""
 		ocr_text = item.description_ocr.strip()
 		if not ocr_text:
 			return
 
-		existing = frappe.db.exists("OCR Item Alias", ocr_text)
-		if existing:
-			if frappe.db.get_value("OCR Item Alias", existing, "item_code") != item.item_code:
-				doc = frappe.get_doc("OCR Item Alias", existing)
-				doc.item_code = item.item_code
-				doc.source = "Auto"
-				doc.save(ignore_permissions=True)
-		else:
+		existing_item = frappe.db.get_value("OCR Item Alias", ocr_text, "item_code")
+		if existing_item is None:
 			frappe.get_doc(
 				{
 					"doctype": "OCR Item Alias",
@@ -398,6 +436,8 @@ class OCRImport(Document):
 					"source": "Auto",
 				}
 			).insert(ignore_permissions=True)
+		elif allow_update and existing_item != item.item_code:
+			frappe.db.set_value("OCR Item Alias", ocr_text, {"item_code": item.item_code, "source": "Auto"})
 
 	def _save_service_mapping(self, item):
 		"""
@@ -1000,7 +1040,17 @@ class OCRImport(Document):
 						share = flt(tax_amt * flt(row.rate) / total_rate, 2)
 						allocations.append((row, share))
 						allocated = flt(allocated + share, 2)
-					allocations.append((tax_rows[-1], flt(tax_amt - allocated, 2)))
+					remainder = flt(tax_amt - allocated, 2)
+					if remainder < 0:
+						# Rounding overshoot (possible with 3+ rows): a negative
+						# remainder would be dropped by the amount<=0 skip below
+						# and booked tax would exceed tax_amt. Absorb it into the
+						# largest earlier share so the sum stays exact.
+						biggest = max(range(len(allocations)), key=lambda i: allocations[i][1])
+						row_i, amt_i = allocations[biggest]
+						allocations[biggest] = (row_i, flt(amt_i + remainder, 2))
+						remainder = 0.0
+					allocations.append((tax_rows[-1], remainder))
 				else:
 					# Multi-row template with zero-rate (Actual) rows — allocation
 					# can't be inferred from rates. Book to the first account and

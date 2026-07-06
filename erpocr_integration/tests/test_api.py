@@ -366,7 +366,7 @@ class TestSelectTaxTemplate:
 		return SimpleNamespace(**base)
 
 	def _mock_default_template(self, mock_frappe, rates=(15.0,)):
-		rows = [SimpleNamespace(rate=r) for r in rates]
+		rows = [SimpleNamespace(rate=r, add_deduct_tax="Add") for r in rates]
 		mock_frappe.get_cached_doc.return_value = SimpleNamespace(taxes=rows)
 
 	def test_no_tax_selects_non_vat(self, mock_frappe):
@@ -412,3 +412,14 @@ class TestSelectTaxTemplate:
 		"""A default template with no percentage rows can't anchor the ratio test."""
 		self._mock_default_template(mock_frappe, rates=(0.0,))
 		assert _select_tax_template(self._settings(), 1000.0, 9999.0) == "1 - Standard VAT"
+
+	def test_deduct_rows_subtract_from_anchor(self, mock_frappe):
+		"""A default template with VAT 15% Add + withholding 15% Deduct nets
+		0% — the anchor must not become 30% and misroute ordinary invoices."""
+		rows = [
+			SimpleNamespace(rate=15.0, add_deduct_tax="Add"),
+			SimpleNamespace(rate=15.0, add_deduct_tax="Deduct"),
+		]
+		mock_frappe.get_cached_doc.return_value = SimpleNamespace(taxes=rows)
+		# Net anchor 0 → can't classify → default template (never import)
+		assert _select_tax_template(self._settings(), 1000.0, 150.0) == "1 - Standard VAT"

@@ -17,6 +17,12 @@ Roadmap build from the 2026-07-06 live-system review (`docs/reviews/REVIEW-LIVE-
 - **Alias re-learning upsert (review M1).** Correcting a supplier/item alias now UPDATES the existing `OCR Supplier Alias` / `OCR Item Alias` row. Previously the first mapping won forever — a wrong alias kept auto-matching at tier-1 confidence (high enough to auto-draft) and corrections were silently dropped.
 - **JE multi-tax-account split (review M2).** A multi-row tax template no longer books the entire tax amount to the first account: rated rows split the extracted tax proportionally (rounding remainder on the last row); non-inferable splits (zero-rate rows) book to the first account with a loud review warning.
 - **Image fleet slips are decode-verified at upload**: `upload_fleet_slip` runs a PIL decode-gate so a corrupt-but-magic-valid JPEG/PNG is rejected at the endpoint instead of landing a slip whose extraction can never succeed.
+- **Review-pass hardening of the above** (8-angle adversarial review of this release's diff):
+  - Actual-VAT injection is scoped to **pure-Actual templates** (a percentage template with an auxiliary Actual row is never injected — would have double-taxed) and warns when a template has multiple Actual rows; inclusive-rate detection never flags an Actual row `included_in_print_rate` (ERPNext rejects that at insert).
+  - The `_select_tax_template` ratio anchor subtracts **Deduct** rows (an Add+Deduct default template no longer misroutes ordinary invoices to the import template).
+  - Statement recon candidate preference: **in-period beats brought-forward** at equal evidence (a recycled invoice number from last year can't shadow this period's invoice; recurring same-ref/same-amount charges match the in-period PI), and a full-amount re-reference re-uses the already-matched PI.
+  - `gemini_process` commits after auto-draft and isolates the trailing notification, so a late notify failure can't roll back drafts or mark a successful run Error.
+  - Alias corrections only rewrite an existing alias when the row actually changed in that save (a stale still-Confirmed record being re-saved can no longer revert a newer curated alias); JE proportional split stays exact under rounding overshoot.
 
 ### Security
 - **`OCRImport.unlink_document` now requires write permission on the OCR Import (review S1)** — previously a role with only read on OCR Import plus delete on Purchase Invoice could delete the draft and reset the record via `db_set`.
