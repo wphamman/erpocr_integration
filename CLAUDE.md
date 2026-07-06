@@ -7,7 +7,7 @@ with no PI), and statement reconciliation (OCR Statement → match lines vs subm
 Ingest via manual upload, email forwarding, Google Drive folder polling, plus a driver-shell
 phone-upload contract for fleet slips (`upload_fleet_slip`, P4); opt-in auto-draft for
 high-confidence matches. ~$0.0001/doc. Installs via `bench get-app`; all config lives in
-the OCR Settings single DocType. Currently v1.4.0.
+the OCR Settings single DocType. Currently v1.4.1.
 
 ## Knowledge (always loaded)
 @docs/architecture.md
