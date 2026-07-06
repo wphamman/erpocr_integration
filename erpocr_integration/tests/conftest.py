@@ -95,6 +95,19 @@ _frappe_model_document_mock.Document = _MockDocument
 sys.modules["frappe.model"] = MagicMock()
 sys.modules["frappe.model.document"] = _frappe_model_document_mock
 
+# Mock erpnext.accounts.utils — auto_draft's fiscal-year guard imports
+# get_fiscal_year from here at call time. The real function lives in ERPNext,
+# NOT frappe.utils (prod bug: frappe.utils.get_fiscal_year AttributeError'd on
+# every call, the blanket except reported every date as "outside any active
+# Fiscal Year", and ALL gate-passing auto-drafts were blocked — invisible under
+# this mock because a MagicMock attribute never raises). Registering the module
+# here lets tests exercise both the pass and reject paths against the REAL
+# import location.
+_erpnext_accounts_utils_mock = MagicMock()
+sys.modules["erpnext"] = MagicMock()
+sys.modules["erpnext.accounts"] = MagicMock()
+sys.modules["erpnext.accounts.utils"] = _erpnext_accounts_utils_mock
+
 
 # Mock frappe.utils with a working flt function (needed for JE amount math)
 def _mock_flt(value, precision=None):

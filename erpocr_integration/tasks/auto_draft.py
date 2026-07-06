@@ -115,8 +115,24 @@ def _invoice_date_in_fiscal_year(ocr_import) -> tuple[bool, str]:
 	invoice_date = getattr(ocr_import, "invoice_date", None)
 	if not invoice_date:
 		return True, ""
+
+	# get_fiscal_year lives in erpnext.accounts.utils, NOT frappe.utils. The
+	# original call (frappe.utils.get_fiscal_year) raised AttributeError on
+	# every invocation, and the blanket except turned that into "outside any
+	# active Fiscal Year" — silently blocking EVERY gate-passing auto-draft on
+	# prod while valid Fiscal Years existed. The mocked test suite couldn't
+	# catch it (a MagicMock attribute never raises); verified on a real bench.
+	# Import separately so a missing function/module can never masquerade as
+	# a fiscal-year rejection again.
 	try:
-		frappe.utils.get_fiscal_year(invoice_date, company=getattr(ocr_import, "company", None), verbose=0)
+		from erpnext.accounts.utils import get_fiscal_year
+	except ImportError:
+		# No ERPNext (not a real site shape — the app hard-links ERPNext
+		# doctypes). Let create_purchase_invoice surface any FY problem.
+		return True, ""
+
+	try:
+		get_fiscal_year(invoice_date, company=getattr(ocr_import, "company", None), verbose=0)
 		return True, ""
 	except Exception:
 		return (

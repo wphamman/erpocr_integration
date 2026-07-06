@@ -2,6 +2,12 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] — 2026-07-06
+
+### Fixed
+- **Auto-draft was 100% blocked by the fiscal-year guard (prod root cause found via skip-reason data).** `_invoice_date_in_fiscal_year` called `frappe.utils.get_fiscal_year` — a function that does **not exist** (it lives in `erpnext.accounts.utils`; verified on a real bench). The `AttributeError` raised on every call and the blanket `except` reported every date as "outside any active Fiscal Year", so **every invoice that passed the auto-draft confidence gate was skipped** (~10 on prod since the guard shipped) while valid Fiscal Years existed. Invisible to the mocked test suite (a MagicMock attribute never raises) — same failure class as the v1.4.1 tz-mock lesson. Now imports from `erpnext.accounts.utils` with a separate ImportError path (a missing module can never masquerade as a fiscal-year rejection), plus a conftest `erpnext` module registration so tests exercise the real import location.
+- **CI installs Pillow** — the v1.5.0 merge brought the decode-verify tests (which build a real JPEG via PIL) onto master; the CI venv lacked Pillow and collection failed. App runtime unaffected (Frappe ships Pillow).
+
 ## [1.5.0] — 2026-07-06
 
 Roadmap build from the 2026-07-06 live-system review (`docs/reviews/REVIEW-LIVE-erpocr_integration-2026-07-06.md`) — findings referenced below by review ID.

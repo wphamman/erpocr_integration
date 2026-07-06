@@ -420,16 +420,46 @@ class TestInvoiceDateFiscalYearGuard:
 		assert ok is True
 
 	def test_valid_date_passes(self, mock_frappe):
-		# get_fiscal_year returns (mock) without raising → date is in an active FY
+		# erpnext's get_fiscal_year returns (mock) without raising → active FY
 		doc = _make_ocr_import(invoice_date="2026-06-11", company="Test Co")
 		ok, reason = _invoice_date_in_fiscal_year(doc)
 		assert ok is True
 		assert reason == ""
 
+	def test_guard_calls_erpnext_not_frappe_utils(self, mock_frappe):
+		"""Regression for the prod auto-draft blocker: get_fiscal_year lives in
+		erpnext.accounts.utils — the old frappe.utils call AttributeError'd on
+		every invocation and the blanket except reported EVERY date as outside
+		the fiscal year, blocking all gate-passing auto-drafts."""
+		import sys as _sys
+
+		erpnext_utils = _sys.modules["erpnext.accounts.utils"]
+		doc = _make_ocr_import(invoice_date="2026-06-18", company="Test Co")
+
+		with patch.object(erpnext_utils, "get_fiscal_year") as mock_gfy:
+			ok, _ = _invoice_date_in_fiscal_year(doc)
+
+		assert ok is True
+		mock_gfy.assert_called_once_with("2026-06-18", company="Test Co", verbose=0)
+
+	def test_missing_erpnext_fails_open(self, mock_frappe):
+		"""No ERPNext importable → guard passes (True) rather than fake-rejecting
+		— a missing module must never masquerade as a fiscal-year problem."""
+		import sys as _sys
+
+		doc = _make_ocr_import(invoice_date="2026-06-18", company="Test Co")
+		with patch.dict(_sys.modules, {"erpnext.accounts.utils": None}):
+			ok, reason = _invoice_date_in_fiscal_year(doc)
+		assert ok is True
+		assert reason == ""
+
 	def test_bad_date_fails(self, mock_frappe):
+		import sys as _sys
+
+		erpnext_utils = _sys.modules["erpnext.accounts.utils"]
 		doc = _make_ocr_import(invoice_date="2001-06-26", company="Test Co")
 		with patch.object(
-			frappe.utils,
+			erpnext_utils,
 			"get_fiscal_year",
 			side_effect=Exception("Date 2001-06-26 is not in any active Fiscal Year"),
 		):
@@ -440,6 +470,8 @@ class TestInvoiceDateFiscalYearGuard:
 	def test_attempt_skips_on_bad_date(self, mock_frappe):
 		"""Mirrors prod OCR-IMP-00991: high-confidence + Matched, but a misread date.
 		Auto-draft must skip cleanly (no create, reason persisted), not crash."""
+		import sys as _sys
+
 		doc = _make_ocr_import(
 			name="OCR-IMP-991",
 			status="Matched",
@@ -455,8 +487,9 @@ class TestInvoiceDateFiscalYearGuard:
 		doc.save = MagicMock()
 		settings = _make_settings()
 
+		erpnext_utils = _sys.modules["erpnext.accounts.utils"]
 		with patch.object(
-			frappe.utils,
+			erpnext_utils,
 			"get_fiscal_year",
 			side_effect=Exception("not in any active Fiscal Year"),
 		):
