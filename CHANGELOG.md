@@ -2,7 +2,7 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.0] — 2026-07-06
 
 Roadmap build from the 2026-07-06 live-system review (`docs/reviews/REVIEW-LIVE-erpocr_integration-2026-07-06.md`) — findings referenced below by review ID.
 
