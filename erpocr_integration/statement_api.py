@@ -130,7 +130,7 @@ def _run_statement_matching(ocr_statement) -> None:
 		ocr_statement.supplier_match_status = "Unmatched"
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def rereconcile_statement(statement_name: str) -> None:
 	"""Re-run reconciliation after manual supplier change."""
 	if not frappe.has_permission("OCR Statement", "write", statement_name):

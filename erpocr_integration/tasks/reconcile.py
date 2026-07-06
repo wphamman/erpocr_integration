@@ -20,20 +20,26 @@ def reconcile_statement(ocr_statement) -> None:
 	if not ocr_statement.supplier or not ocr_statement.company:
 		return
 
-	# Get all submitted PIs for this supplier.
-	# When statement period dates are present, bound by them. When missing, fall
-	# back to a 365-day window from today — an unbounded get_all on a supplier
-	# with 10k+ PIs would blow out query latency and memory; 1 year covers every
-	# realistic late-arriving statement without opening the whole history.
+	# Get submitted PIs for this supplier.
+	#
+	# The candidate window for FORWARD matching is deliberately WIDER than the
+	# statement period: open-item statements carry unpaid invoices from prior
+	# months (brought forward), and a period-bounded pool mis-flagged those as
+	# "Missing from ERPNext" (live-review finding R1). We look back 365 days
+	# before the period start — same bound rationale as the no-period fallback
+	# (a supplier with 10k+ PIs must not trigger an unbounded get_all); nothing
+	# posted AFTER period_to can be on the statement, so that stays the upper
+	# cap. The REVERSE check below remains strictly period-bounded.
 	pi_filters = {
 		"supplier": ocr_statement.supplier,
 		"company": ocr_statement.company,
 		"docstatus": 1,
 	}
-	if ocr_statement.period_from and ocr_statement.period_to:
+	window_anchor = ocr_statement.period_from or ocr_statement.period_to
+	if ocr_statement.period_to:
 		pi_filters["posting_date"] = [
 			"between",
-			[ocr_statement.period_from, ocr_statement.period_to],
+			[frappe.utils.add_days(window_anchor, -365), ocr_statement.period_to],
 		]
 	else:
 		pi_filters["posting_date"] = [
@@ -45,6 +51,10 @@ def reconcile_statement(ocr_statement) -> None:
 		"Purchase Invoice",
 		filters=pi_filters,
 		fields=["name", "bill_no", "grand_total", "outstanding_amount", "posting_date"],
+		# Explicit, deterministic order: candidate selection and the v16 default-
+		# sort flip (modified → creation) must not decide which PI a statement
+		# line reconciles against (live-review finding R2/O2).
+		order_by="posting_date asc, name asc",
 		ignore_permissions=True,
 		limit_page_length=0,
 	)
@@ -80,15 +90,25 @@ def reconcile_statement(ocr_statement) -> None:
 			item.recon_status = "Missing from ERPNext"
 			continue
 
-		# Take the first match
-		pi = candidates[0]
+		# Pick the best candidate, not blindly the first (finding R2): when
+		# several PIs share a normalized bill_no (INV/100 vs INV-100, or a
+		# genuinely re-used supplier number), prefer an not-yet-matched PI whose
+		# grand_total equals the statement debit; else the earliest-posted
+		# not-yet-matched one (list is posting_date-ordered); else fall back to
+		# the first candidate (legitimate re-reference of the same invoice).
+		stmt_amount = item.debit or 0
+		unconsumed = [c for c in candidates if c["name"] not in matched_pi_names]
+		pool = unconsumed or candidates
+		pi = next(
+			(c for c in pool if abs((c["grand_total"] or 0) - stmt_amount) < 0.01),
+			pool[0],
+		)
 		item.matched_invoice = pi["name"]
 		item.erp_amount = pi["grand_total"]
 		item.erp_outstanding = pi["outstanding_amount"]
 		matched_pi_names.add(pi["name"])
 
 		# Compare amounts
-		stmt_amount = item.debit or 0
 		erp_amount = pi["grand_total"] or 0
 		diff = abs(stmt_amount - erp_amount)
 
@@ -100,7 +120,10 @@ def reconcile_statement(ocr_statement) -> None:
 			item.difference = round(stmt_amount - erp_amount, 2)
 
 	# Reverse check: find PIs NOT on the statement
-	# Only when period is trustworthy (both dates set)
+	# Only when period is trustworthy (both dates set). Strictly period-bounded:
+	# all_pis now includes prior-period (brought-forward) candidates for forward
+	# matching, but a prior-period PI absent from this statement is NOT a
+	# discrepancy — only PIs posted inside the period belong here.
 	if ocr_statement.period_from and ocr_statement.period_to:
 		statement_normalized_refs = {
 			normalize_for_matching((item.reference or "").strip())
@@ -108,6 +131,8 @@ def reconcile_statement(ocr_statement) -> None:
 			if (item.reference or "").strip()
 		}
 		for pi in all_pis:
+			if str(pi.get("posting_date")) < str(ocr_statement.period_from):
+				continue
 			if pi["name"] in matched_pi_names:
 				continue
 			pi_normalized = normalize_for_matching(pi.get("bill_no", ""))

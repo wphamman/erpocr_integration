@@ -345,6 +345,14 @@ def gemini_process(
 		)
 
 	except Exception as e:
+		# Roll back the open transaction FIRST. The multi-invoice loop saves the
+		# placeholder and inserts additional OCR Imports into one transaction with
+		# a single commit after the loop — without this rollback, a failure on
+		# invoice N would let the Error-status commit below flush invoices 1..N-1
+		# as committed orphans (never archived, dedup-skipped forever, and
+		# auto-draftable from a "failed" extraction).
+		frappe.db.rollback()  # nosemgrep
+
 		# Update status to Error
 		try:
 			error_log = frappe.log_error(
@@ -371,6 +379,48 @@ def gemini_process(
 			frappe.log_error(title="OCR Integration Critical Error", message=frappe.get_traceback())
 
 
+def _select_tax_template(settings, subtotal: float, tax_amount: float):
+	"""Pick the tax template for an extracted invoice.
+
+	- No tax → non_vat_tax_template.
+	- Tax present → default (percentage) VAT template, UNLESS an
+	  `import_tax_template` is configured and the extracted tax is far from what
+	  the default template's percentage rows would compute on the subtotal.
+	  Customs brokers (Cargo Compass) bill import VAT as an **Actual** amount
+	  unrelated to 15% of their own service charges — observed on prod at
+	  7.5x-111% of subtotal vs the expected ~15% — so a large deviation means
+	  Actual import VAT and the Actual-charge import template is the right one
+	  (create_purchase_invoice injects the extracted amount into its Actual row).
+
+	Fails safe: any lookup/shape problem falls back to the default template
+	(pre-existing behavior).
+	"""
+	if tax_amount <= 0:
+		return settings.non_vat_tax_template
+
+	default_template = settings.default_tax_template
+	import_template = getattr(settings, "import_tax_template", None)
+	if not import_template or not default_template or subtotal <= 0:
+		return default_template
+
+	try:
+		template = frappe.get_cached_doc("Purchase Taxes and Charges Template", default_template)
+		total_rate = sum(float(row.rate or 0) for row in template.taxes if float(row.rate or 0) > 0)
+	except Exception:
+		return default_template
+
+	if total_rate <= 0:
+		return default_template
+
+	expected = subtotal * total_rate / 100.0
+	# 25% relative tolerance: OCR noise on a genuine percentage-VAT invoice
+	# stays on the default template; import VAT trips it by an order of magnitude.
+	if abs(tax_amount - expected) > 0.25 * max(tax_amount, expected):
+		return import_template
+
+	return default_template
+
+
 def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_result: dict):
 	"""Populate an OCR Import record with extracted invoice data and Drive info."""
 	header_fields = extracted_data.get("header_fields", {})
@@ -393,12 +443,12 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 	ocr_import.confidence = max(0.0, min(100.0, raw_confidence * 100))  # Clamp to 0-100
 	ocr_import.raw_payload = extracted_data.get("raw_response", "")
 
-	# Auto-set tax template based on whether tax was detected
+	# Auto-set tax template based on whether tax was detected (and, for
+	# customs/import invoices, whether the tax looks like an Actual amount
+	# rather than a percentage of the subtotal — see _select_tax_template).
 	tax_amount = float(header_fields.get("tax_amount") or 0)
-	if tax_amount > 0:
-		ocr_import.tax_template = settings.default_tax_template
-	else:
-		ocr_import.tax_template = settings.non_vat_tax_template
+	subtotal = float(header_fields.get("subtotal") or 0)
+	ocr_import.tax_template = _select_tax_template(settings, subtotal, tax_amount)
 
 	# Add line items
 	ocr_import.items = []

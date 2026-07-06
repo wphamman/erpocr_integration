@@ -2,6 +2,26 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Roadmap build from the 2026-07-06 live-system review (`docs/reviews/REVIEW-LIVE-erpocr_integration-2026-07-06.md`) — findings referenced below by review ID.
+
+### Added
+- **Customs/import VAT handled correctly (review V1 — the Cargo Compass fix).** New OCR Settings field **Import (Actual VAT) Tax Template**. When set, template auto-selection runs a ratio test: extracted VAT that is far from the standard percentage of the subtotal (customs brokers bill import VAT as a fixed amount — observed on prod at 7.5x-111% of subtotal vs ~15%) selects the Actual-type import template instead of the percentage default. `_build_taxes_from_template` then **injects the extracted `tax_amount` into the template's first Actual row**, so the draft PI posts the real customs VAT against the VAT-control account — previously the accountant re-keyed the tax table on every customs invoice. Acceptance-tested against prod PI `ACC-PINV-2026-00416` (net R57,614.30 + Actual VAT R64,038.90). Setting unset → behavior unchanged.
+- **Back-link from created documents to their OCR Import (review U1).** New read-only `custom_ocr_import` Link field on Purchase Invoice / Purchase Receipt / Journal Entry, set at creation — one click from the accounting document back to the OCR staging record (raw extraction, match state, retry). Installed by the new `install.setup_custom_fields()` (runs on install + every migrate).
+
+### Fixed
+- **Multi-invoice partial failure no longer strands orphan records (review C1).** `gemini_process` now rolls back the open transaction before writing the Error status. Previously, a failure on invoice N of a multi-invoice PDF committed invoices 1..N-1 as orphans — never archived, dedup-skipped forever, and auto-draftable from a "failed" extraction.
+- **Standalone install no longer breaks on Fleet Vehicle fixtures (review O1).** The 5 `Fleet Vehicle-custom_*` Custom Fields moved from `fixtures/custom_field.json` (synced unconditionally — fails on sites without fleet_management) into the gated `setup_optional_custom_fields()`, the pattern the install module's own docstring prescribes.
+- **Statement reconciliation: brought-forward invoices + duplicate bill_no (reviews R1, R2/O2).** The forward-match candidate pool now reaches 365 days before the statement period (open-item statements list unpaid prior-period invoices; these were mis-flagged "Missing from ERPNext"), while the reverse check stays strictly period-bounded. Duplicate normalized `bill_no` candidates are now resolved deterministically: prefer the not-yet-matched PI whose grand_total equals the statement debit, else earliest posting date (`order_by` added — also v16 default-sort-flip safe).
+- **Alias re-learning upsert (review M1).** Correcting a supplier/item alias now UPDATES the existing `OCR Supplier Alias` / `OCR Item Alias` row. Previously the first mapping won forever — a wrong alias kept auto-matching at tier-1 confidence (high enough to auto-draft) and corrections were silently dropped.
+- **JE multi-tax-account split (review M2).** A multi-row tax template no longer books the entire tax amount to the first account: rated rows split the extracted tax proportionally (rounding remainder on the last row); non-inferable splits (zero-rate rows) book to the first account with a loud review warning.
+- **Image fleet slips are decode-verified at upload**: `upload_fleet_slip` runs a PIL decode-gate so a corrupt-but-magic-valid JPEG/PNG is rejected at the endpoint instead of landing a slip whose extraction can never succeed.
+
+### Security
+- **`OCRImport.unlink_document` now requires write permission on the OCR Import (review S1)** — previously a role with only read on OCR Import plus delete on Purchase Invoice could delete the draft and reset the record via `db_set`.
+- **All 15 state-changing whitelisted document methods are now `methods=["POST"]` (review S2)** — create/unlink/mark methods across OCR Import, OCR Fleet Slip, OCR Delivery Note, OCR Statement, and `rereconcile_statement` were GET-callable, bypassing Frappe's CSRF check. Matches the app's own v16-safe convention; the desk UI already POSTs, so no client change.
+
 ## [1.4.1] — 2026-06-23
 
 ### Fixed

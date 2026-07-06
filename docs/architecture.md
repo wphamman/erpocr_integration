@@ -197,6 +197,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Scan Inbox Folder ID**: Google Drive folder ID polled every 15 minutes for new PDFs
 - **VAT Tax Template**: Applied when OCR detects tax on the invoice
 - **Non-VAT Tax Template**: Applied when no tax detected (foreign/non-VAT suppliers)
+- **Import (Actual VAT) Tax Template**: Actual-charge template for customs/import invoices (e.g. "9 - Import with Std VAT"). Auto-selected instead of the VAT template when the extracted VAT is far from the standard percentage of the subtotal (customs brokers bill import VAT as a fixed amount); the extracted amount is injected into the template's Actual row. Unset → old behavior.
 - **Default Item**: Non-stock item used for unmatched line items (OCR description becomes the item description)
 - **Default Credit Account**: Default credit account for Journal Entries (e.g., Accounts Payable, Petty Cash, Bank)
 - **Matching Threshold**: Minimum similarity score (0-100) for fuzzy matching (default: 80)

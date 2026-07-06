@@ -147,9 +147,13 @@ scheduler_events = {
 # Fixtures
 # --------
 
+# NOTE: no Custom Field fixtures. Fields parented on an optional sibling app's
+# doctype (Fleet Vehicle) MUST be provisioned via install.setup_optional_custom_fields()
+# — fixture sync runs unconditionally and breaks install on sites without that app.
+# Fields on core doctypes (the PI/PR/JE → OCR Import back-link) live in
+# install.setup_custom_fields() for the same single-owner reason.
 fixtures = [
 	{"dt": "Role", "filters": [["name", "in", ["OCR Manager", "OCR Fleet Slip Reader", "OCR Fleet Driver"]]]},
 	{"dt": "Number Card", "filters": [["module", "=", "ERPNext OCR"]]},
 	{"dt": "Dashboard Chart", "filters": [["module", "=", "ERPNext OCR"]]},
-	{"dt": "Custom Field", "filters": [["name", "like", "Fleet Vehicle-custom_%"]]},
 ]

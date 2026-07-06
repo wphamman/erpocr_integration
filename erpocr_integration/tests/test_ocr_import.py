@@ -792,7 +792,9 @@ class TestFleetVehicleTag:
 
 		pi_dict = mock_frappe.get_doc.call_args[0][0]
 		assert pi_dict["custom_fleet_vehicle"] == "VEH-001"
-		mock_frappe.get_meta.return_value.has_field.assert_called_with("custom_fleet_vehicle")
+		# any_call (not called_with): the back-link has_field("custom_ocr_import")
+		# check runs after the fleet-vehicle one in create_purchase_invoice.
+		mock_frappe.get_meta.return_value.has_field.assert_any_call("custom_fleet_vehicle")
 
 	def test_pi_omits_custom_fleet_vehicle_when_blank(self, mock_frappe, sample_settings):
 		"""fleet_vehicle blank → key absent on pi_dict (stays NULL, not empty string)."""
@@ -1658,3 +1660,278 @@ class TestOnUpdateLearning:
 		# Should NOT raise
 		doc.on_update()
 		mock_frappe.log_error.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Import (Actual) VAT injection — live-review V1 / roadmap C1-1
+# ---------------------------------------------------------------------------
+
+
+class TestImportVATInjection:
+	"""Actual-charge templates get the extracted tax_amount injected; percentage
+	templates are untouched (ERPNext computes their rows)."""
+
+	def _actual_template(self):
+		row = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="Actual",
+			row_id=None,
+			account_head="9500/000 - Vat Control Account - CC",
+			description="Customs VAT",
+			rate=0.0,
+			cost_center=None,
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		return SimpleNamespace(company="Test Company", taxes=[row])
+
+	def test_cargo_compass_ji279503_acceptance(self, mock_frappe, sample_settings):
+		"""Acceptance criterion (review C1-#1): reproduce ACC-PINV-2026-00416 —
+		net R57,614.30 in service items + ONE Actual tax row of R64,038.90
+		against the VAT control account — with no manual correction."""
+		items = [
+			_make_item(description_ocr="SHIPPING LINE CHARGES", qty=1, rate=9625.00, amount=9625.00),
+			_make_item(description_ocr="ROADHAUL - FCL 40", qty=1, rate=18620.00, amount=18620.00),
+			_make_item(description_ocr="EMPTY RETURN TO PORT", qty=1, rate=9500.00, amount=9500.00),
+			_make_item(description_ocr="FUEL SURCHARGE", qty=1, rate=4551.00, amount=4551.00),
+			_make_item(description_ocr="GENSET", qty=1, rate=5790.00, amount=5790.00),
+			_make_item(description_ocr="CARGO DUES FCL", qty=1, rate=4052.65, amount=4052.65),
+			_make_item(description_ocr="AGENCY", qty=1, rate=1797.83, amount=1797.83),
+			_make_item(description_ocr="BAILEE FEE", qty=1, rate=1277.82, amount=1277.82),
+			_make_item(description_ocr="CUSTOMS DOCUMENTATION", qty=1, rate=600.00, amount=600.00),
+			_make_item(description_ocr="C.T.O. / NAVIS FEE", qty=1, rate=100.00, amount=100.00),
+			_make_item(description_ocr="PORT HEALTH RELEASE", qty=1, rate=850.00, amount=850.00),
+			_make_item(description_ocr="PLANT INSPECTOR RELEASE", qty=1, rate=850.00, amount=850.00),
+		]
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			tax_template="9 - Import with Std VAT",
+			subtotal=57614.30,
+			tax_amount=64038.90,
+			total_amount=121653.20,
+			items=items,
+		)
+		template = self._actual_template()
+
+		def get_cached_doc_handler(doctype, name=None):
+			if doctype == "OCR Settings":
+				return sample_settings
+			if doctype == "Purchase Taxes and Charges Template":
+				return template
+			return MagicMock()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_doc_handler
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler()
+		created_pi = MagicMock()
+		created_pi.name = "PI-CARGO-001"
+		mock_frappe.get_doc.return_value = created_pi
+		mock_frappe.msgprint = MagicMock()
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		# Items = the 12 zero-rated service lines, summing to the subtotal
+		assert len(pi_dict["items"]) == 12
+		assert abs(sum(i["rate"] * i["qty"] for i in pi_dict["items"]) - 57614.30) < 0.01
+		# ONE Actual tax row carrying the extracted customs VAT
+		assert pi_dict["taxes_and_charges"] == "9 - Import with Std VAT"
+		assert len(pi_dict["taxes"]) == 1
+		tax = pi_dict["taxes"][0]
+		assert tax["charge_type"] == "Actual"
+		assert tax["account_head"] == "9500/000 - Vat Control Account - CC"
+		assert tax["tax_amount"] == 64038.90
+
+	def test_percentage_template_rows_not_injected(self, mock_frappe, sample_settings):
+		"""A percentage template must NOT get a tax_amount key — ERPNext
+		computes percentage rows itself."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			tax_template="1 - Standard VAT",
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(rate=1000, qty=1, amount=1000)],
+		)
+		row = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="On Net Total",
+			row_id=None,
+			account_head="2200 - VAT Input - TC",
+			description="VAT 15%",
+			rate=15.0,
+			cost_center=None,
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		template = SimpleNamespace(company="Test Company", taxes=[row])
+
+		def get_cached_doc_handler(doctype, name=None):
+			if doctype == "OCR Settings":
+				return sample_settings
+			if doctype == "Purchase Taxes and Charges Template":
+				return template
+			return MagicMock()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_doc_handler
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler()
+		created_pi = MagicMock()
+		created_pi.name = "PI-PCT-001"
+		mock_frappe.get_doc.return_value = created_pi
+		mock_frappe.msgprint = MagicMock()
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert "tax_amount" not in pi_dict["taxes"][0]
+
+
+# ---------------------------------------------------------------------------
+# Alias upsert — live-review M1 / roadmap C1-6
+# ---------------------------------------------------------------------------
+
+
+class TestAliasUpsert:
+	"""A later confirmation with a different target must UPDATE the alias, not
+	be silently dropped (first-mapping-wins-forever poisoned auto-matching)."""
+
+	def test_supplier_alias_corrected(self, mock_frappe):
+		doc = _make_ocr_import(supplier="New Supplier", supplier_name_ocr="ACME LTD")
+		mock_frappe.db.exists.return_value = "ACME LTD"
+		mock_frappe.db.get_value.return_value = "Old Supplier"
+		alias_doc = MagicMock()
+		mock_frappe.get_doc.return_value = alias_doc
+
+		doc._save_supplier_alias()
+
+		assert alias_doc.supplier == "New Supplier"
+		alias_doc.save.assert_called_once_with(ignore_permissions=True)
+
+	def test_supplier_alias_unchanged_skips_write(self, mock_frappe):
+		doc = _make_ocr_import(supplier="Same Supplier", supplier_name_ocr="ACME LTD")
+		mock_frappe.db.exists.return_value = "ACME LTD"
+		mock_frappe.db.get_value.return_value = "Same Supplier"
+
+		doc._save_supplier_alias()
+
+		mock_frappe.get_doc.assert_not_called()
+
+	def test_supplier_alias_created_when_new(self, mock_frappe):
+		doc = _make_ocr_import(supplier="New Supplier", supplier_name_ocr="ACME LTD")
+		mock_frappe.db.exists.return_value = None
+		new_doc = MagicMock()
+		mock_frappe.get_doc.return_value = new_doc
+
+		doc._save_supplier_alias()
+
+		new_doc.insert.assert_called_once_with(ignore_permissions=True)
+
+	def test_item_alias_corrected(self, mock_frappe):
+		doc = _make_ocr_import()
+		item = _make_item(description_ocr="Widget", item_code="ITEM-B")
+		mock_frappe.db.exists.return_value = "Widget"
+		mock_frappe.db.get_value.return_value = "ITEM-A"
+		alias_doc = MagicMock()
+		mock_frappe.get_doc.return_value = alias_doc
+
+		doc._save_item_alias(item)
+
+		assert alias_doc.item_code == "ITEM-B"
+		alias_doc.save.assert_called_once_with(ignore_permissions=True)
+
+
+# ---------------------------------------------------------------------------
+# JE multi-tax-account split — live-review M2 / roadmap C1-7
+# ---------------------------------------------------------------------------
+
+
+class TestJEMultiTaxSplit:
+	def _je_doc(self, tax_amount):
+		return _make_ocr_import(
+			document_type="Journal Entry",
+			credit_account="2100 - Accounts Payable - TC",
+			tax_template="VAT + Levy",
+			tax_amount=tax_amount,
+			items=[_make_item(amount=1000)],
+		)
+
+	def _setup(self, mock_frappe, sample_settings, tax_rows):
+		template = SimpleNamespace(company="Test Company", taxes=tax_rows)
+
+		def get_cached_doc_handler(doctype, name=None):
+			if doctype == "OCR Settings":
+				return sample_settings
+			if doctype == "Purchase Taxes and Charges Template":
+				return template
+			return MagicMock()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_doc_handler
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler()
+		created_je = MagicMock()
+		created_je.name = "JE-SPLIT-001"
+		mock_frappe.get_doc.return_value = created_je
+		mock_frappe.msgprint = MagicMock()
+
+	def test_two_rated_rows_split_proportionally(self, mock_frappe, sample_settings):
+		"""VAT 15% + levy 2% template, tax 170 → 150.00 + 20.00, JE balances."""
+		rows = [
+			SimpleNamespace(account_head="2200 - VAT Input - TC", rate=15.0),
+			SimpleNamespace(account_head="2210 - Levy - TC", rate=2.0),
+		]
+		self._setup(mock_frappe, sample_settings, rows)
+
+		self._je_doc(170.00).create_journal_entry()
+
+		je_dict = mock_frappe.get_doc.call_args[0][0]
+		accounts = je_dict["accounts"]
+		# 1 expense + 2 tax debits + 1 credit
+		assert len(accounts) == 4
+		by_account = {a["account"]: a["debit_in_account_currency"] for a in accounts[:-1]}
+		assert by_account["2200 - VAT Input - TC"] == 150.00
+		assert by_account["2210 - Levy - TC"] == 20.00
+		total_debit = sum(a["debit_in_account_currency"] for a in accounts)
+		total_credit = sum(a["credit_in_account_currency"] for a in accounts)
+		assert abs(total_debit - total_credit) < 0.005
+
+	def test_uninferable_split_books_first_account_and_warns(self, mock_frappe, sample_settings):
+		"""Zero-rate (Actual) row in a multi-row template → full amount on the
+		first account + an orange review warning (never a silent drop)."""
+		rows = [
+			SimpleNamespace(account_head="2200 - VAT Input - TC", rate=15.0),
+			SimpleNamespace(account_head="2220 - Actual Charge - TC", rate=0.0),
+		]
+		self._setup(mock_frappe, sample_settings, rows)
+
+		self._je_doc(170.00).create_journal_entry()
+
+		je_dict = mock_frappe.get_doc.call_args[0][0]
+		accounts = je_dict["accounts"]
+		tax_lines = [a for a in accounts if a["account"] == "2200 - VAT Input - TC"]
+		assert tax_lines[0]["debit_in_account_currency"] == 170.00
+		warning_calls = [
+			c for c in mock_frappe.msgprint.call_args_list if c.kwargs.get("indicator") == "orange"
+		]
+		assert warning_calls
+
+
+# ---------------------------------------------------------------------------
+# unlink_document write guard — live-review S1 / roadmap C1-5
+# ---------------------------------------------------------------------------
+
+
+class TestUnlinkWriteGuard:
+	def test_unlink_requires_ocr_import_write(self, mock_frappe):
+		"""Read-only OCR Import + delete-on-PI must no longer be enough to
+		unlink: the source-doc write check runs FIRST."""
+		doc = _make_ocr_import(status="Draft Created", purchase_invoice="PI-001")
+		doc.db_set = MagicMock()
+		mock_frappe.has_permission.return_value = False
+
+		with pytest.raises(Exception):
+			doc.unlink_document()
+
+		doc.db_set.assert_not_called()
+		mock_frappe.delete_doc.assert_not_called()

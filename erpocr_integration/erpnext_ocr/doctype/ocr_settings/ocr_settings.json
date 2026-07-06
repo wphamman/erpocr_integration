@@ -21,6 +21,7 @@
 		"default_warehouse",
 		"default_tax_template",
 		"non_vat_tax_template",
+		"import_tax_template",
 		"column_break_defaults",
 		"default_expense_account",
 		"default_cost_center",
@@ -149,6 +150,13 @@
 			"fieldname": "non_vat_tax_template",
 			"fieldtype": "Link",
 			"label": "Non-VAT Tax Template",
+			"options": "Purchase Taxes and Charges Template"
+		},
+		{
+			"description": "Actual-charge template for customs/import invoices (e.g., 9 - Import with Std VAT). Auto-selected instead of the VAT Tax Template when the extracted VAT does not look like the standard percentage of the subtotal (customs brokers bill import VAT as a fixed amount); the extracted VAT amount is injected into the template's Actual row.",
+			"fieldname": "import_tax_template",
+			"fieldtype": "Link",
+			"label": "Import (Actual VAT) Tax Template",
 			"options": "Purchase Taxes and Charges Template"
 		},
 		{

@@ -552,3 +552,85 @@ class TestRetryGeminiExtraction:
 		call_kwargs = mock_frappe.enqueue.call_args[1]
 		assert call_kwargs["pdf_content"] == b"%PDF-1.4 email pdf"
 		assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# 6. Multi-invoice partial failure → rollback (api.py, live-review C1 / roadmap C1-2)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiInvoicePartialFailureRollback:
+	"""If invoice N of a multi-invoice PDF fails mid-loop, the open transaction
+	must be rolled back BEFORE the Error status is committed — otherwise
+	invoices 1..N-1 land as committed orphans (never archived, dedup-skipped
+	forever, auto-draftable from a 'failed' extraction)."""
+
+	def _two_invoice_list(self):
+		def header(n):
+			return {
+				"supplier_name": f"Supplier {n}",
+				"invoice_number": f"INV-00{n}",
+				"invoice_date": "2026-06-01",
+				"total_amount": 100.0 * n,
+				"tax_amount": 0,
+				"confidence": 0.9,
+			}
+
+		return [
+			{"header_fields": header(1), "line_items": [], "raw_response": "{}", "extraction_time": 1.0},
+			{"header_fields": header(2), "line_items": [], "raw_response": "{}", "extraction_time": 1.0},
+		]
+
+	def test_insert_failure_on_second_invoice_rolls_back(self, mock_frappe, sample_settings):
+		placeholder = MagicMock()
+		placeholder.items = []
+		placeholder.append = MagicMock(
+			side_effect=lambda table, row: placeholder.items.append(SimpleNamespace(**row))
+		)
+		placeholder.email_message_id = None
+		placeholder.drive_file_id = None
+		placeholder.drive_retry_count = 0
+
+		second_doc = MagicMock()
+		second_doc.items = []
+		second_doc.append = MagicMock(
+			side_effect=lambda table, row: second_doc.items.append(SimpleNamespace(**row))
+		)
+		second_doc.insert.side_effect = Exception("simulated insert failure on invoice 2")
+
+		def get_doc_handler(arg, name=None):
+			# Fetching the placeholder by name vs building the additional
+			# invoice from a dict.
+			if isinstance(arg, dict):
+				return second_doc
+			return placeholder
+
+		with patch.object(
+			erpocr_integration.tasks.gemini_extract,
+			"extract_invoice_data",
+			return_value=self._two_invoice_list(),
+		):
+			mock_frappe.get_cached_doc = MagicMock(return_value=sample_settings)
+			mock_frappe.db.get_value = MagicMock(return_value=None)
+			mock_frappe.get_doc = MagicMock(side_effect=get_doc_handler)
+			mock_frappe.db.rollback.reset_mock()
+
+			erpocr_integration.api.gemini_process(
+				pdf_content=b"%PDF-1.4 test",
+				filename="two-invoices.pdf",
+				ocr_import_name="OCR-IMP-MULTI",
+				source_type="Gemini Upload",
+				uploaded_by="Administrator",
+			)
+
+		# Invoice 1 was saved into the open transaction...
+		placeholder.save.assert_called_with(ignore_permissions=True)
+		# ...so the failure on invoice 2 must roll it back BEFORE the Error
+		# status is written and committed.
+		mock_frappe.db.rollback.assert_called()
+		error_status_writes = [
+			c
+			for c in mock_frappe.db.set_value.call_args_list
+			if len(c.args) >= 3 and isinstance(c.args[2], dict) and c.args[2].get("status") == "Error"
+		]
+		assert error_status_writes, "placeholder must be marked Error after rollback"
