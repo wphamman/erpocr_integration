@@ -54,19 +54,39 @@ class TestSetupOptionalCustomFields:
 		assert f["label"] == "Fleet Vehicle (optional)"
 
 	def test_after_install_delegates(self, mock_frappe):
-		"""after_install hook delegates to setup_optional_custom_fields."""
+		"""after_install runs the always-on back-link setup but skips the gated
+		Fleet Vehicle block when the doctype is absent (standalone site)."""
 		mock_frappe.db.exists.return_value = False
 		with patch("erpocr_integration.install.create_custom_fields") as mock_create:
 			after_install()
-		mock_create.assert_not_called()
+		# Exactly one call: setup_custom_fields (PI/PR/JE → OCR Import back-links).
+		# The gated Fleet Vehicle block must NOT have fired.
+		mock_create.assert_called_once()
+		created = mock_create.call_args[0][0]
+		assert "Fleet Vehicle" not in created
+		assert set(created) == {"Purchase Invoice", "Purchase Receipt", "Journal Entry"}
+		for rows in created.values():
+			assert rows[0]["fieldname"] == "custom_ocr_import"
+			assert rows[0]["options"] == "OCR Import"
 
 	def test_after_migrate_delegates(self, mock_frappe):
-		"""after_migrate runs the same setup; idempotency comes from
-		create_custom_fields itself (Frappe-side guarantee)."""
+		"""after_migrate runs both setups when Fleet Vehicle exists; idempotency
+		comes from create_custom_fields itself (Frappe-side guarantee)."""
 		mock_frappe.db.exists.return_value = True
 		with patch("erpocr_integration.install.create_custom_fields") as mock_create:
 			after_migrate()
-		mock_create.assert_called_once()
+		# Two calls: back-links (always) + the gated Fleet Vehicle/OCR Import block.
+		assert mock_create.call_count == 2
+		gated = mock_create.call_args_list[1][0][0]
+		assert "Fleet Vehicle" in gated
+		# The five fields previously shipped as fixtures (moved here — review O1)
+		assert [f["fieldname"] for f in gated["Fleet Vehicle"]] == [
+			"custom_ocr_section",
+			"custom_fleet_card_provider",
+			"custom_fleet_control_account",
+			"custom_column_break_ocr",
+			"custom_cost_center",
+		]
 
 
 class TestMigrationPatch:

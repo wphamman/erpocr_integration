@@ -91,7 +91,7 @@ class OCRFleetSlip(Document):
 		if vehicle.custom_cost_center:
 			self.cost_center = vehicle.custom_cost_center
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def create_purchase_invoice(self):
 		"""Create a Purchase Invoice draft for a Direct Expense slip.
 
@@ -246,7 +246,7 @@ class OCRFleetSlip(Document):
 
 		return pi.name
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def unlink_document(self):
 		"""Unlink and delete the draft PI, resetting for re-use."""
 		if not frappe.has_permission("OCR Fleet Slip", "write", self.name):
@@ -305,7 +305,7 @@ class OCRFleetSlip(Document):
 				indicator="blue",
 			)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def mark_recorded(self):
 		"""Fleet Card terminal disposition — close the slip as a control record (no PI).
 
@@ -345,7 +345,7 @@ class OCRFleetSlip(Document):
 			indicator="green",
 		)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def mark_no_action(self, reason):
 		"""Mark this fleet slip as No Action Required."""
 		if not frappe.has_permission("OCR Fleet Slip", "write", self.name):

@@ -7,7 +7,7 @@ from frappe.model.document import Document
 
 
 class OCRStatement(Document):
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def mark_reviewed(self):
 		"""Mark this statement as reviewed by the user."""
 		if not frappe.has_permission("OCR Statement", "write", self.name):

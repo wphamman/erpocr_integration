@@ -116,7 +116,7 @@ External consumers read these DocTypes; **their field names are the de-facto con
 ## 4. Custom-Field integration contract (the real cross-app coupling)
 All bidirectional, **feature-detected**, install-order-independent.
 
-**4a — We PLANT on `Fleet Vehicle`** (`fixtures/custom_field.json`; read when matching a vehicle):
+**4a — We PLANT on `Fleet Vehicle`** (gated `install.setup_optional_custom_fields()` — NOT fixtures; a Custom Field fixture parented on an optional-app doctype breaks standalone install. Read when matching a vehicle):
 | Field | Type → Options |
 |---|---|
 | `custom_fleet_card_provider` | Link → Supplier |

@@ -203,11 +203,43 @@ def _build_taxes_from_template(ocr_import) -> tuple[str, list[dict]] | tuple[Non
 			"rate": tax_row.rate,
 			"cost_center": tax_row.cost_center,
 			"account_currency": tax_row.account_currency,
-			"included_in_print_rate": 1 if rates_include_tax else tax_row.included_in_print_rate,
+			# Never force included_in_print_rate onto an Actual row — ERPNext's
+			# validate_inclusive_tax rejects Actual + inclusive at insert time.
+			"included_in_print_rate": (
+				1
+				if (rates_include_tax and tax_row.charge_type != "Actual")
+				else tax_row.included_in_print_rate
+			),
 			"included_in_paid_amount": tax_row.included_in_paid_amount,
 		}
 		for tax_row in template.taxes
 	]
+
+	# Actual-charge templates (customs/import VAT — e.g. "9 - Import with Std VAT")
+	# carry no percentage; the tax IS the extracted amount. Inject it into the
+	# template's first Actual row so the draft posts the real import VAT instead
+	# of 0 (previously the accountant re-keyed the tax table on every customs
+	# invoice). ONLY for pure-Actual templates: a mixed template (percentage rows
+	# plus an auxiliary Actual row, e.g. a freight line kept in a standard VAT
+	# template) must not get the extracted VAT injected on top of its computed
+	# percentage rows — that would silently double-tax ordinary invoices.
+	extracted_tax = flt(ocr_import.tax_amount, 2)
+	charge_rows = [t for t in taxes if t.get("account_head")]
+	actual_rows = [t for t in charge_rows if t.get("charge_type") == "Actual"]
+	if extracted_tax > 0 and charge_rows and len(actual_rows) == len(charge_rows):
+		actual_rows[0]["tax_amount"] = extracted_tax
+		if len(actual_rows) > 1:
+			# Multi-Actual-row template (e.g. import VAT + duty as separate
+			# Actual rows): the split can't be inferred — the full amount went
+			# to the first row. Same loud-warning treatment as the JE path.
+			frappe.msgprint(
+				_(
+					"Tax template '{0}' has multiple Actual rows but the split cannot "
+					"be inferred — the full tax amount was placed on '{1}'. "
+					"Review the tax table on the draft."
+				).format(ocr_import.tax_template, actual_rows[0].get("account_head")),
+				indicator="orange",
+			)
 
 	return ocr_import.tax_template, taxes
 
@@ -265,8 +297,27 @@ class OCRImport(Document):
 
 		default_item = (frappe.get_cached_doc("OCR Settings").get("default_item") or "").strip()
 
+		# Which item rows actually changed in THIS save? Confirmed persists on a
+		# row forever, so without this an unrelated later re-save (link a PO,
+		# edit a cost center) would re-fire alias learning from stale rows and
+		# silently revert a newer curated alias. Defensive: if the previous
+		# state isn't available (fresh insert, mocked tests), treat as changed.
+		prev_rows = {}
+		try:
+			doc_before = self.get_doc_before_save()
+			if doc_before:
+				prev_rows = {
+					row.name: (row.item_code or "", row.match_status or "") for row in doc_before.items
+				}
+		except Exception:
+			prev_rows = {}
+
 		for item in self.items:
 			if item.item_code and item.description_ocr and item.match_status == "Confirmed":
+				row_changed = not prev_rows or prev_rows.get(item.name) != (
+					item.item_code or "",
+					item.match_status or "",
+				)
 				if item.item_code == default_item:
 					# Catch-all item: a description→item alias is useless (the item is
 					# always the default) and Item-Supplier learning would point a product
@@ -278,7 +329,7 @@ class OCRImport(Document):
 						self._save_service_mapping(item)
 					continue
 
-				self._save_item_alias(item)
+				self._save_item_alias(item, allow_update=row_changed)
 
 				# Only save service mapping alongside explicit item confirmation
 				if item.expense_account:
@@ -332,12 +383,24 @@ class OCRImport(Document):
 			frappe.log_error(title="OCR: failed to enqueue Item Supplier learning")
 
 	def _save_supplier_alias(self):
-		"""Save supplier alias for future auto-matching."""
+		"""Save (or correct) the supplier alias for future auto-matching.
+
+		Upserts: a later confirmation with a different supplier UPDATES the
+		existing alias instead of being silently dropped — otherwise the first
+		mapping wins forever and a wrong alias keeps auto-matching at
+		tier-1 confidence (high enough to auto-draft). Alias controllers are
+		pass-only, so db.set_value (one round-trip) is safe for the update.
+		Guarded by on_update's has_value_changed("supplier") check, so only a
+		deliberate change in THIS save can rewrite an existing alias.
+		"""
 		ocr_text = self.supplier_name_ocr.strip()
 		if not ocr_text:
 			return
 
-		if not frappe.db.exists("OCR Supplier Alias", ocr_text):
+		# One read answers both "exists?" (None = no row; supplier is required
+		# so a row never carries NULL) and "changed?".
+		existing_supplier = frappe.db.get_value("OCR Supplier Alias", ocr_text, "supplier")
+		if existing_supplier is None:
 			frappe.get_doc(
 				{
 					"doctype": "OCR Supplier Alias",
@@ -346,14 +409,25 @@ class OCRImport(Document):
 					"source": "Auto",
 				}
 			).insert(ignore_permissions=True)
+		elif existing_supplier != self.supplier:
+			frappe.db.set_value("OCR Supplier Alias", ocr_text, {"supplier": self.supplier, "source": "Auto"})
 
-	def _save_item_alias(self, item):
-		"""Save item alias for future auto-matching."""
+	def _save_item_alias(self, item, allow_update=True):
+		"""Save (or correct) the item alias for future auto-matching.
+
+		Upserts for the same reason as _save_supplier_alias — a user correcting
+		a description→item mapping must take effect on the next invoice.
+		`allow_update=False` (a re-save where this row did NOT change) still
+		inserts a missing alias but never rewrites an existing one — otherwise
+		any later save of a stale still-Confirmed record would silently revert
+		a newer curated alias.
+		"""
 		ocr_text = item.description_ocr.strip()
 		if not ocr_text:
 			return
 
-		if not frappe.db.exists("OCR Item Alias", ocr_text):
+		existing_item = frappe.db.get_value("OCR Item Alias", ocr_text, "item_code")
+		if existing_item is None:
 			frappe.get_doc(
 				{
 					"doctype": "OCR Item Alias",
@@ -362,6 +436,8 @@ class OCRImport(Document):
 					"source": "Auto",
 				}
 			).insert(ignore_permissions=True)
+		elif allow_update and existing_item != item.item_code:
+			frappe.db.set_value("OCR Item Alias", ocr_text, {"item_code": item.item_code, "source": "Auto"})
 
 	def _save_service_mapping(self, item):
 		"""
@@ -422,7 +498,7 @@ class OCRImport(Document):
 				}
 			).insert(ignore_permissions=True)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def create_purchase_invoice(self):
 		"""Create a Purchase Invoice draft from this OCR Import record."""
 		# Explicit source-doc write guard: frappe.client.run_doc_method only checks
@@ -608,6 +684,11 @@ class OCRImport(Document):
 		if fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle"):
 			pi_dict["custom_fleet_vehicle"] = fleet_vehicle
 
+		# Back-link to this OCR Import (custom field installed by setup_custom_fields;
+		# has_field guard covers a site that hasn't migrated yet).
+		if frappe.get_meta("Purchase Invoice").has_field("custom_ocr_import"):
+			pi_dict["custom_ocr_import"] = self.name
+
 		# Only set due_date if it's on or after the posting_date
 		posting_date = pi_dict["posting_date"]
 		if self.due_date and str(self.due_date) >= str(posting_date):
@@ -661,7 +742,7 @@ class OCRImport(Document):
 
 		return pi.name
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def create_purchase_receipt(self):
 		"""Create a Purchase Receipt draft from this OCR Import record."""
 		# Explicit source-doc write guard — see create_purchase_invoice for rationale.
@@ -778,6 +859,10 @@ class OCRImport(Document):
 			"items": pr_items,
 		}
 
+		# Back-link to this OCR Import (see create_purchase_invoice)
+		if frappe.get_meta("Purchase Receipt").has_field("custom_ocr_import"):
+			pr_dict["custom_ocr_import"] = self.name
+
 		# Apply tax template from OCR Import
 		tax_template, taxes = _build_taxes_from_template(self)
 		if tax_template:
@@ -827,7 +912,7 @@ class OCRImport(Document):
 
 		return pr.name
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def create_journal_entry(self):
 		"""Create a Journal Entry draft from this OCR Import record."""
 		# Explicit source-doc write guard — see create_purchase_invoice for rationale.
@@ -934,27 +1019,65 @@ class OCRImport(Document):
 		if not accounts:
 			frappe.throw(_("No line items to create Journal Entry."))
 
-		# Tax line (if tax detected)
+		# Tax line(s) (if tax detected). A multi-row template (e.g. VAT input +
+		# a separate levy) must NOT collapse everything onto the first account —
+		# split the extracted tax_amount proportionally by the rows' rates.
 		if self.tax_template and flt(self.tax_amount) > 0:
 			template = frappe.get_cached_doc("Purchase Taxes and Charges Template", self.tax_template)
-			tax_account = None
-			for tax_row in template.taxes:
-				if tax_row.account_head:
-					tax_account = tax_row.account_head
-					break
+			tax_rows = [row for row in template.taxes if row.account_head]
 
-			if tax_account:
-				self._validate_account(tax_account, _("Tax Account"))
+			if tax_rows:
 				tax_amt = flt(self.tax_amount, 2)
-				total_debit += tax_amt
-				accounts.append(
-					{
-						"account": tax_account,
-						"debit_in_account_currency": tax_amt,
-						"credit_in_account_currency": 0,
-						"cost_center": self.cost_center or settings.get("default_cost_center"),
-					}
-				)
+				if len(tax_rows) == 1:
+					allocations = [(tax_rows[0], tax_amt)]
+				elif all(flt(row.rate) > 0 for row in tax_rows):
+					# Proportional by rate; last row takes the rounding remainder
+					# so the allocations sum exactly to tax_amt.
+					total_rate = sum(flt(row.rate) for row in tax_rows)
+					allocations = []
+					allocated = 0.0
+					for row in tax_rows[:-1]:
+						share = flt(tax_amt * flt(row.rate) / total_rate, 2)
+						allocations.append((row, share))
+						allocated = flt(allocated + share, 2)
+					remainder = flt(tax_amt - allocated, 2)
+					if remainder < 0:
+						# Rounding overshoot (possible with 3+ rows): a negative
+						# remainder would be dropped by the amount<=0 skip below
+						# and booked tax would exceed tax_amt. Absorb it into the
+						# largest earlier share so the sum stays exact.
+						biggest = max(range(len(allocations)), key=lambda i: allocations[i][1])
+						row_i, amt_i = allocations[biggest]
+						allocations[biggest] = (row_i, flt(amt_i + remainder, 2))
+						remainder = 0.0
+					allocations.append((tax_rows[-1], remainder))
+				else:
+					# Multi-row template with zero-rate (Actual) rows — allocation
+					# can't be inferred from rates. Book to the first account and
+					# warn loudly so the user reviews the draft's tax split.
+					allocations = [(tax_rows[0], tax_amt)]
+					frappe.msgprint(
+						_(
+							"Tax template '{0}' has multiple tax accounts but the split "
+							"cannot be inferred — the full tax amount was booked to '{1}'. "
+							"Review the tax lines on the draft."
+						).format(self.tax_template, tax_rows[0].account_head),
+						indicator="orange",
+					)
+
+				for tax_row, amount in allocations:
+					if amount <= 0:
+						continue
+					self._validate_account(tax_row.account_head, _("Tax Account"))
+					total_debit += amount
+					accounts.append(
+						{
+							"account": tax_row.account_head,
+							"debit_in_account_currency": amount,
+							"credit_in_account_currency": 0,
+							"cost_center": self.cost_center or settings.get("default_cost_center"),
+						}
+					)
 
 		# Credit line (balances total debits)
 		credit_line = {
@@ -992,6 +1115,9 @@ class OCRImport(Document):
 				"accounts": accounts,
 			}
 		)
+		# Back-link to this OCR Import (see create_purchase_invoice)
+		if frappe.get_meta("Journal Entry").has_field("custom_ocr_import"):
+			je.custom_ocr_import = self.name
 		je.flags.ignore_mandatory = True
 		je.insert()
 
@@ -1021,13 +1147,18 @@ class OCRImport(Document):
 
 		return je.name
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def unlink_document(self):
 		"""Unlink and delete the draft PI/PR/JE, resetting this OCR Import for re-use.
 
 		Only works when status is 'Draft Created' and the linked document is still a draft
 		(or cancelled — e.g. after the user cancelled the submitted document).
 		"""
+		# Explicit source-doc write guard — this method mutates the OCR Import via
+		# db_set (which bypasses permission checks). Same guard as its siblings.
+		if not frappe.has_permission("OCR Import", "write", self.name):
+			frappe.throw(_("You don't have permission to modify this OCR Import."))
+
 		if self.status != "Draft Created":
 			frappe.throw(_("Can only unlink documents when status is 'Draft Created'."))
 
@@ -1099,7 +1230,7 @@ class OCRImport(Document):
 				indicator="blue",
 			)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def mark_no_action(self, reason):
 		"""Mark this OCR Import as No Action Required with a reason."""
 		if not frappe.has_permission("OCR Import", "write", self.name):

@@ -37,9 +37,30 @@ from erpocr_integration.fleet_api import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-# A valid 2-byte JPEG magic header + filler (validate_file_magic_bytes checks
-# the first two bytes for image/jpeg).
-_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 200
+
+# A REAL, decodable JPEG — the upload path now decode-verifies image uploads, so
+# a header-only stub would be (correctly) rejected. Built with PIL (ships with
+# Frappe) so the image tests exercise the real second gate.
+def _encode_jpeg() -> bytes:
+	from io import BytesIO
+
+	from PIL import Image
+
+	buf = BytesIO()
+	Image.new("RGB", (4, 4), (120, 80, 200)).save(buf, format="JPEG")
+	return buf.getvalue()
+
+
+_JPEG = _encode_jpeg()
+
+# A file with a VALID JPEG magic header but a truncated/garbage body: passes the
+# magic-byte gate yet is undecodable — the class of file that used to 500 in PIL
+# downstream. The decode-verify gate must reject it cleanly before any File.
+_CORRUPT_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 200
+
+# A minimal valid PDF — slips may legitimately be PDFs, which PIL does not raster
+# (the gate is image-only), so this must still pass validation untouched.
+_PDF = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 
 
 class _NS(SimpleNamespace):
@@ -220,6 +241,33 @@ class TestUploadFileValidation:
 		_wire_upload(mock_frappe, file=bad)
 		with pytest.raises(Exception):
 			upload_fleet_slip(client_request_id="k1")
+
+	def test_corrupt_but_magic_valid_image_rejected_before_file(self, mock_frappe):
+		"""A JPEG with a valid magic header but an undecodable body passes the
+		magic-byte gate yet must be rejected by the decode-verify gate — cleanly,
+		before any File/slip is created (no 500, no orphan)."""
+		corrupt = _file_obj(filename="slip.jpg", content=_CORRUPT_JPEG)
+		_wire_upload(mock_frappe, file=corrupt)
+		with pytest.raises(Exception):
+			upload_fleet_slip(client_request_id="k1")
+		assert "couldn't be read" in mock_frappe.throw.call_args[0][0]
+		# No slip and no File were built (validation precedes both).
+		file_dicts = [
+			c.args[0]
+			for c in mock_frappe.get_doc.call_args_list
+			if c.args and isinstance(c.args[0], dict) and c.args[0].get("doctype") == "File"
+		]
+		assert file_dicts == []
+		mock_frappe.enqueue.assert_not_called()
+
+	def test_pdf_slip_skips_decode_verify(self, mock_frappe):
+		"""Slips may be PDFs; PIL does not raster a PDF, so the image-only gate
+		must NOT touch it — a valid PDF still uploads (regression: the gate is
+		additive and image-scoped, it does not reject legitimate PDF slips)."""
+		pdf = _file_obj(filename="slip.pdf", content=_PDF)
+		_wire_upload(mock_frappe, file=pdf)
+		result = upload_fleet_slip(client_request_id="k1")
+		assert result["duplicate"] is False
 
 	def test_missing_default_company_rejected(self, mock_frappe):
 		_wire_upload(mock_frappe, settings=_settings(default_company=""))

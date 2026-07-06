@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from erpocr_integration.api import _populate_ocr_import, check_duplicates
+from erpocr_integration.api import _populate_ocr_import, _select_tax_template, check_duplicates
 
 # ---------------------------------------------------------------------------
 # _populate_ocr_import
@@ -348,3 +348,78 @@ class TestCheckDuplicates:
 
 		with pytest.raises(Exception):
 			check_duplicates("OCR-IMP-00001")
+
+
+# ---------------------------------------------------------------------------
+# _select_tax_template — customs/import Actual-VAT detection (live-review V1)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectTaxTemplate:
+	def _settings(self, **overrides):
+		base = dict(
+			default_tax_template="1 - Standard VAT",
+			non_vat_tax_template="Non-VAT",
+			import_tax_template="9 - Import with Std VAT",
+		)
+		base.update(overrides)
+		return SimpleNamespace(**base)
+
+	def _mock_default_template(self, mock_frappe, rates=(15.0,)):
+		rows = [SimpleNamespace(rate=r, add_deduct_tax="Add") for r in rates]
+		mock_frappe.get_cached_doc.return_value = SimpleNamespace(taxes=rows)
+
+	def test_no_tax_selects_non_vat(self, mock_frappe):
+		assert _select_tax_template(self._settings(), 1000.0, 0.0) == "Non-VAT"
+
+	def test_percentage_looking_tax_selects_default(self, mock_frappe):
+		"""Tax ≈ 15% of subtotal → normal percentage template."""
+		self._mock_default_template(mock_frappe)
+		assert _select_tax_template(self._settings(), 1000.0, 150.0) == "1 - Standard VAT"
+
+	def test_ocr_noise_stays_on_default(self, mock_frappe):
+		"""Small deviation (mis-OCR'd digit) must not flip to the import template."""
+		self._mock_default_template(mock_frappe)
+		assert _select_tax_template(self._settings(), 1000.0, 160.0) == "1 - Standard VAT"
+
+	def test_cargo_compass_ji279503_selects_import_template(self, mock_frappe):
+		"""The prod-confirmed case: subtotal R57,614.30, customs VAT R64,038.90
+		(111% of subtotal vs expected 15%) → Actual import template."""
+		self._mock_default_template(mock_frappe)
+		assert _select_tax_template(self._settings(), 57614.30, 64038.90) == "9 - Import with Std VAT"
+
+	def test_small_subtotal_large_vat_selects_import_template(self, mock_frappe):
+		"""OCR-IMP-01597 shape: R1,440 services carrying R10,912.95 customs VAT."""
+		self._mock_default_template(mock_frappe)
+		assert _select_tax_template(self._settings(), 1440.0, 10912.95) == "9 - Import with Std VAT"
+
+	def test_no_import_template_configured_falls_back(self, mock_frappe):
+		"""Backward compatible: sites without the setting keep old behavior."""
+		self._mock_default_template(mock_frappe)
+		settings = self._settings(import_tax_template=None)
+		assert _select_tax_template(settings, 57614.30, 64038.90) == "1 - Standard VAT"
+
+	def test_zero_subtotal_falls_back_to_default(self, mock_frappe):
+		self._mock_default_template(mock_frappe)
+		assert _select_tax_template(self._settings(), 0.0, 5000.0) == "1 - Standard VAT"
+
+	def test_template_lookup_failure_falls_back(self, mock_frappe):
+		"""Any lookup/shape problem → default template (pre-existing behavior)."""
+		mock_frappe.get_cached_doc.side_effect = Exception("boom")
+		assert _select_tax_template(self._settings(), 1000.0, 9999.0) == "1 - Standard VAT"
+
+	def test_zero_rate_default_template_falls_back(self, mock_frappe):
+		"""A default template with no percentage rows can't anchor the ratio test."""
+		self._mock_default_template(mock_frappe, rates=(0.0,))
+		assert _select_tax_template(self._settings(), 1000.0, 9999.0) == "1 - Standard VAT"
+
+	def test_deduct_rows_subtract_from_anchor(self, mock_frappe):
+		"""A default template with VAT 15% Add + withholding 15% Deduct nets
+		0% — the anchor must not become 30% and misroute ordinary invoices."""
+		rows = [
+			SimpleNamespace(rate=15.0, add_deduct_tax="Add"),
+			SimpleNamespace(rate=15.0, add_deduct_tax="Deduct"),
+		]
+		mock_frappe.get_cached_doc.return_value = SimpleNamespace(taxes=rows)
+		# Net anchor 0 → can't classify → default template (never import)
+		assert _select_tax_template(self._settings(), 1000.0, 150.0) == "1 - Standard VAT"

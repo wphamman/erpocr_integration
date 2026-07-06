@@ -90,7 +90,7 @@ class OCRDeliveryNote(Document):
 	# Stale field clearing: when supplier changes, clear PO and item-level refs
 	# (handled client-side in ocr_delivery_note.js — same pattern as OCR Import)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def create_purchase_order(self):
 		"""Create a draft Purchase Order from this OCR Delivery Note."""
 		# Explicit source-doc write guard — run_doc_method only checks read by default.
@@ -184,7 +184,7 @@ class OCRDeliveryNote(Document):
 
 		return po.name
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def create_purchase_receipt(self):
 		"""Create a Purchase Receipt draft from this OCR Delivery Note."""
 		# Explicit source-doc write guard — run_doc_method only checks read by default.
@@ -357,7 +357,7 @@ class OCRDeliveryNote(Document):
 				f"<small>Archive path: {safe_path}</small>",
 			)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def unlink_document(self):
 		"""Unlink and delete the draft PO/PR, resetting this OCR DN for re-use."""
 		if not frappe.has_permission("OCR Delivery Note", "write", self.name):
@@ -420,7 +420,7 @@ class OCRDeliveryNote(Document):
 				indicator="blue",
 			)
 
-	@frappe.whitelist()
+	@frappe.whitelist(methods=["POST"])
 	def mark_no_action(self, reason):
 		"""Mark this OCR Delivery Note as No Action Required with a reason."""
 		if not frappe.has_permission("OCR Delivery Note", "write", self.name):
