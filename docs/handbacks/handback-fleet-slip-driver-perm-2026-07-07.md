@@ -102,7 +102,7 @@ Expected outcome: a Driver-only user gets the success envelope (no 403); replay 
 - **Cross-app surface delta (kickoff §6.9):** `CROSS_APP_SURFACE.md` updated in the same commit as the code (it carries no Baselined-at SHA — only an "authored against v1.2.0" note, left as-is with the §2c bullet version-stamped v1.6.0). **driver_ui_shell follow-up owed (shell session, not here):** its GAP 2 doc entry → closed-at-root, and its deploy checklist's `OCR Fleet Driver` grant line → demote to belt-and-braces.
 - **Prod sequencing reminder:** this must be merged, tagged, and live on prod **before driver-shell deploy #1** (runbook step, out of this session's scope).
 - Kickoff was accurate to the line number — zero discrepancies; no gating questions needed.
-- **Optional external second pass** (Codex CLI not on this machine) — paste into Codex in the repo root on branch `fix/fleet-slip-driver-perm`:
+- **Codex second pass RAN (2026-07-08, Willie-pasted): no FAILs.** 3 PASS on the security/correctness items (incl. Frappe-source-verified owner stamping); 1 CAUTION — Codex's environment lacked pytest so it couldn't execute the suite (run here: 764 green); 2 doc NITs — the `route_to_invoice_pipeline` guard row was under-specific and the CHANGELOG "replay untouched" wording — both fixed in `395e697`. **Merged to master after this gate.** The prompt used (kept for the fleet_management parity port):
 
 ```text
 You are reviewing a security-sensitive permission change in a Frappe v15 custom app (this repo, branch fix/fleet-slip-driver-perm, code commits 6b51afd + 7f829aa, diff range master..HEAD — ignore the docs/handbacks commits).
