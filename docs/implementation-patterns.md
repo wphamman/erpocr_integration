@@ -45,7 +45,8 @@ def process(raw_payload: str):
 - `tasks/auto_draft.py` — `attempt_auto_draft()` runs after matching in `gemini_process()` **only when `OCR Settings.enable_auto_draft` is on**.
 - Confidence gate (`_is_high_confidence`): supplier + every item must be alias/exact/service-mapping matched (NOT fuzzy/unmatched). Low-confidence records fall through to "Needs Review" unchanged.
 - Auto-links a PO if one exists (`_auto_link_purchase_order`), detects document type (`_auto_detect_document_type`, default PI), then calls the existing `create_purchase_invoice()`.
-- Audit fields on OCR Import: `auto_drafted`, `auto_draft_skipped_reason`.
+- **Invoice-date fiscal-year guard** (`_invoice_date_in_fiscal_year`): a Gemini date misread (e.g. 2001 for 2026) would fail deep in ERPNext's FY validation — the guard rejects it up front with a clean skip reason. It imports `get_fiscal_year` from **`erpnext.accounts.utils`** (NOT `frappe.utils` — v1.5.1 fixed a bug where the wrong import location AttributeError'd on every call and the blanket except skipped EVERY gate-passing invoice as "outside any active Fiscal Year"). ImportError fails open (guard passes; create surfaces any FY problem).
+- Audit fields on OCR Import: `auto_drafted`, `auto_draft_skipped_reason`. Diagnosing "auto-draft isn't firing" starts with a group-by on `auto_draft_skipped_reason` — it names the blocking tier per record.
 - `stats_api.get_ocr_stats` (role-gated: System Manager / Accounts Manager) backs the OCR Stats page (counts, auto-draft ratio, fallback reasons, per-supplier throughput).
 
 ### Purchase Order / Purchase Receipt Linking
