@@ -12,7 +12,8 @@
 - **Commits made this session:**
   - `6b51afd` fix(fleet_api): upload_fleet_slip accepts plain Driver role (D0, GAP 2)
   - `503cef0` docs(changelog): Driver role is portfolio-wide, not fleet_management-owned (review nit)
-  - (this handback committed on top)
+  - `9393be9` docs(handback): this doc
+  - `7f829aa` fix(fleet_api): owner-scope the idempotent replay (review finding; Willie-requested in-session)
 - **Push status:** pushed to `origin/fix/fleet-slip-driver-perm` (remote confirmed via `git ls-remote`). No PR opened, no merge — per kickoff §5.
 - **Working tree:** clean.
 
@@ -33,7 +34,7 @@ Session complete — all acceptance criteria met, including live HTTP verificati
 
 ## 3. Test / lint / build status
 
-- **Test suite:** **763 pass, 0 fail** (`pytest erpocr_integration/tests/`, CI-mirror venv: pytest + requests + google-api-python-client + google-auth + Pillow). New tests: 3. New failures: 0.
+- **Test suite:** **764 pass, 0 fail** (`pytest erpocr_integration/tests/`, CI-mirror venv: pytest + requests + google-api-python-client + google-auth + Pillow). New tests: 4 (3 posture + 1 cross-user replay rejection). New failures: 0.
 - **Baseline at start of session:** 760 pass, 0 fail — nothing pre-existing red.
 - **Lint:** `ruff check` + `ruff format --check` clean on all touched Python files.
 - **Build:** n/a (no frontend/bundle changes).
@@ -55,7 +56,8 @@ Session complete — all acceptance criteria met, including live HTTP verificati
 
 ## 5. Open questions for the architecture chat
 
-- **None blocking.** One observation to weigh (pre-existing, NOT introduced here): the idempotency replay returns the original slip's name+status without an owner check — a caller who knows another driver's `client_request_id` UUID could read that slip's name/status. UUID guessing is infeasible; flagged by the review pass as a NIT. Decide whether to add an owner check to the replay path in a future release, or accept.
+- **~~Replay owner check~~ — RESOLVED in-session** (Willie asked for the fix): commit `7f829aa` owner-scopes the replay — only the slip's owner receives the duplicate envelope; any other authenticated caller presenting the key gets a PermissionError. Cross-user rejection unit-tested; live same-user replay re-verified green through the new check.
+- **`fleet_management` parity follow-up (fleet repo, not here):** `submit_vehicle_inspection`'s replay path has the SAME missing owner check (verified in `fleet_management/api.py:2318-2324`). Decide whether to port the owner-scoped replay there.
 
 ## 6. Memory delta (durable code-side facts)
 
@@ -103,11 +105,13 @@ Expected outcome: a Driver-only user gets the success envelope (no 403); replay 
 - **Optional external second pass** (Codex CLI not on this machine) — paste into Codex in the repo root on branch `fix/fleet-slip-driver-perm`:
 
 ```text
-You are reviewing a security-sensitive permission change in a Frappe v15 custom app (this repo, branch fix/fleet-slip-driver-perm, commits 6b51afd + 503cef0, diff range master..HEAD).
+You are reviewing a security-sensitive permission change in a Frappe v15 custom app (this repo, branch fix/fleet-slip-driver-perm, code commits 6b51afd + 7f829aa, diff range master..HEAD — ignore the docs/handbacks commits).
 
 Change under review: the whitelisted endpoint erpocr_integration/fleet_api.py::upload_fleet_slip previously required frappe.has_permission("OCR Fleet Slip", "create"); it now passes on that OR "Driver" in frappe.get_roles() (gate at fleet_api.py:501). The subsequent insert runs ignore_permissions=True, so this check is the entire gate. Intent (architecture decision D0): possession-based driver writes accept the plain Driver role, matching fleet_management.api.submit_vehicle_inspection; doctype perms deliberately unchanged.
 
-Invariants that must NOT have moved: idempotent client_request_id replay (insert-and-catch + full rollback), captured_at tz normalization, recon-only (the endpoint must remain structurally incapable of creating/feeding a Purchase Invoice or OCR Import), vehicle_registration relief fallback, explicit Guest denial.
+Second change under review (7f829aa): the idempotent-replay path is now owner-scoped — after refetching the existing slip on a unique-key collision, `existing.owner != frappe.session.user` throws PermissionError instead of returning the duplicate envelope (slip name/status). Rationale: a legitimate replay is always same-user (the shell generates the UUID per capture on one device).
+
+Invariants that must NOT have moved: idempotent client_request_id replay for the SAME user (insert-and-catch + full rollback), captured_at tz normalization, recon-only (the endpoint must remain structurally incapable of creating/feeding a Purchase Invoice or OCR Import), vehicle_registration relief fallback, explicit Guest denial.
 
 Please review adversarially:
 1. Does the widened gate open ANY surface beyond slip upload for a plain-Driver session (other endpoints, field injection through the insert, information disclosure)?
