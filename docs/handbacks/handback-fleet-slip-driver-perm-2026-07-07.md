@@ -14,7 +14,7 @@
   - `503cef0` docs(changelog): Driver role is portfolio-wide, not fleet_management-owned (review nit)
   - `9393be9` docs(handback): this doc
   - `7f829aa` fix(fleet_api): owner-scope the idempotent replay (review finding; Willie-requested in-session)
-- **Push status:** pushed to `origin/fix/fleet-slip-driver-perm` (remote confirmed via `git ls-remote`). No PR opened, no merge — per kickoff §5.
+- **Push status:** pushed to `origin/fix/fleet-slip-driver-perm`; then (Willie-directed, post-Codex-gate) **merged to master `15e5c0a` via `--no-ff` on 2026-07-08** and pushed — CI green on the merge. NOT tagged (v1.6.0 tag/release awaiting go-ahead).
 - **Working tree:** clean.
 
 Session complete — all acceptance criteria met, including live HTTP verification.
@@ -61,7 +61,7 @@ Session complete — all acceptance criteria met, including live HTTP verificati
 
 ## 6. Memory delta (durable code-side facts)
 
-- erpocr_integration is at **v1.6.0** on `fix/fleet-slip-driver-perm` (not yet merged/tagged): `upload_fleet_slip` accepts the plain `Driver` role via an **endpoint-scoped** check at `fleet_api.py:501` — driver-shell GAP 2 is closed at root; NO site-level role provisioning needed for drivers.
+- erpocr_integration is at **v1.6.0 on master (`15e5c0a`, merged 2026-07-08, NOT tagged)**: `upload_fleet_slip` accepts the plain `Driver` role via an **endpoint-scoped** check at `fleet_api.py:501` — driver-shell GAP 2 is closed at root; NO site-level role provisioning needed for drivers. Replay is owner-scoped (`7f829aa`).
 - The `OCR Fleet Driver` role is demoted to belt-and-braces (still functional; also the way to give a driver `if_owner` Desk read of own slips).
 - The endpoint gate is deliberately immune to the prod Custom-DocPerm shadow on OCR Fleet Slip (that restore step is still owed for *read* posture, but no longer blocks driver uploads).
 - Posture tests live in `erpocr_integration/tests/test_fleet_upload_contract.py` (`TestUploadPermissionGuards`); conftest now ships a real-list `frappe.get_roles` mock (default `["All"]`).
@@ -72,7 +72,7 @@ Session complete — all acceptance criteria met, including live HTTP verificati
 
 - **Driver-role blast radius (accepted by D0):** any user holding the portfolio `Driver` persona role — current holders: 16 genuine Driver users on driver-dev restored from prod, incl. `wphamman@` — can create slips + ≤2MB private Files via this endpoint, with no rate limit, same as they already could via `submit_vehicle_inspection`. Not a new exposure class; noting for completeness.
 - **Review process flag:** the 3 CLAUDE.md hygiene rules rode along in the main commit (`6b51afd`) rather than a separate docs commit. Content was kickoff-mandated; bundling was a tidiness miss, left as-is to avoid rewriting pushed history.
-- **The Codex second-pass gate did NOT run** — Codex CLI is not installed on WPHSERVER. A ready-to-paste review prompt is embedded in §9; the in-session adversarial first pass (subagent, mutation-tested the gate both directions, bench-verified Frappe semantics) returned all-PASS.
+- ~~The Codex second-pass gate did NOT run~~ — **superseded: Codex RAN on 2026-07-08** (Willie pasted the §9 prompt): no FAILs; 2 doc NITs fixed in `395e697`. The in-session adversarial first pass (subagent, mutation-tested the gate both directions, bench-verified Frappe semantics) had returned all-PASS.
 
 ## 8. How to test/verify locally
 
