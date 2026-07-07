@@ -1,6 +1,7 @@
 # Handback from Claude Code — `upload_fleet_slip` accepts plain `Driver` (D0 / driver-shell GAP 2) — 2026-07-07
 
-> **For the operator (Willie):** Paste this whole doc into the .ai architecture chat. Frame as
+> **For the operator (Willie):** Paste this whole doc into the .ai chat that originated the
+> kickoff (the driver-shell/D0 chat — there is no separate erpocr architecture chat). Frame as
 > "Handback from Code session — D0 driver-perm widening."
 
 ---
