@@ -38,7 +38,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.dn_api.get_open_purchase_orders_for_dn` | GET | read | DN PO picker (UI) |
 | `erpocr_integration.dn_api.match_dn_po_items` | GET | per-doc read | DN PO item match (UI) |
 | `erpocr_integration.fleet_api.retry_fleet_extraction` | POST | OCR Fleet Slip perm | Retry fleet extraction |
-| `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip perm | Re-route mis-foldered slip to invoice pipeline |
+| `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip write (per-doc) + OCR Import create | Re-route mis-foldered slip to invoice pipeline |
 | `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create OR plain `Driver` role** (driver shell; D0) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
 | `erpocr_integration.tasks.drive_integration.test_drive_connection` | GET | System Manager | Config self-test |
 | `erpocr_integration.tasks.email_monitor.trigger_email_check` | POST | System Manager | Manual email poll |
