@@ -206,9 +206,13 @@ class TestUploadPermissionGuards:
 		"""The Driver-widened gate must not bypass the idempotency contract: a
 		replayed key from a plain-Driver caller returns the ORIGINAL slip with
 		duplicate: true, no second enqueue."""
+		mock_frappe.session.user = "driver-only@starpops.test"
 		mock_frappe.has_permission.return_value = False
 		mock_frappe.get_roles.return_value = ["All", "Driver"]
-		existing = _Slip({"status": "Pending", "client_request_id": "k-driver-dup"}, name="OCR-FS-00002")
+		existing = _Slip(
+			{"status": "Pending", "client_request_id": "k-driver-dup", "owner": "driver-only@starpops.test"},
+			name="OCR-FS-00002",
+		)
 		_wire_upload(
 			mock_frappe,
 			existing=existing,
@@ -525,7 +529,10 @@ class TestUploadVehicleFork:
 
 class TestUploadIdempotency:
 	def test_duplicate_returns_existing_no_second_enqueue(self, mock_frappe):
-		existing = _Slip({"status": "Matched", "client_request_id": "dup-key"}, name="OCR-FS-00001")
+		existing = _Slip(
+			{"status": "Matched", "client_request_id": "dup-key", "owner": "Administrator"},
+			name="OCR-FS-00001",
+		)
 		_wire_upload(
 			mock_frappe,
 			existing=existing,
@@ -542,7 +549,10 @@ class TestUploadIdempotency:
 		mock_frappe.enqueue.assert_not_called()
 
 	def test_duplicate_entry_error_also_caught(self, mock_frappe):
-		existing = _Slip({"status": "Needs Review", "client_request_id": "k"}, name="OCR-FS-7")
+		existing = _Slip(
+			{"status": "Needs Review", "client_request_id": "k", "owner": "Administrator"},
+			name="OCR-FS-7",
+		)
 		_wire_upload(
 			mock_frappe,
 			existing=existing,
@@ -552,6 +562,26 @@ class TestUploadIdempotency:
 		result = upload_fleet_slip(client_request_id="k")
 		assert result["duplicate"] is True
 		assert result["ocr_fleet_slip"] == "OCR-FS-7"
+
+	def test_replay_by_different_user_rejected(self, mock_frappe):
+		"""Owner-scoped replay: a caller presenting ANOTHER user's
+		client_request_id must not receive the duplicate envelope (slip
+		name/status) — permission error instead. Only the capturing driver's
+		device legitimately retries a key."""
+		mock_frappe.session.user = "driver-b@starpops.test"
+		existing = _Slip(
+			{"status": "Pending", "client_request_id": "k-stolen", "owner": "driver-a@starpops.test"},
+			name="OCR-FS-00003",
+		)
+		_wire_upload(
+			mock_frappe,
+			existing=existing,
+			insert_error=mock_frappe.UniqueValidationError("unique"),
+		)
+		with pytest.raises(Exception):
+			upload_fleet_slip(client_request_id="k-stolen")
+		assert "belongs to another user" in mock_frappe.throw.call_args[0][0]
+		mock_frappe.enqueue.assert_not_called()
 
 	def test_unexpected_unique_violation_reraises(self, mock_frappe):
 		"""A unique error with NO row carrying the key is a real error, not a replay.

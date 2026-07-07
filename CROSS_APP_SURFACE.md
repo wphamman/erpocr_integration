@@ -83,7 +83,10 @@ Returns (same shape fresh + idempotent replay):
   correctness) → a 3G retry returns the original slip with `duplicate: true`. Identical shape to
   `fleet_management.api.submit_vehicle_inspection` (P3) — see that repo's
   `handback-p3-inspection-contract-2026-06-11.md`. NULL for Drive/Desk slips (multiple NULLs
-  coexist), so the Drive pipeline is untouched.
+  coexist), so the Drive pipeline is untouched. **Replay is owner-scoped (v1.6.0):** only the
+  user who created the slip receives the duplicate envelope; any other authenticated caller
+  presenting the key gets a PermissionError (never the slip's name/status). The shell generates
+  the UUID per capture on one device, so a legitimate replay is always same-user.
 - **Fail-safe provider fork.** `posting_mode` derives from the vehicle's
   `custom_fleet_card_provider`. If the provider is missing the slip lands in **Needs Review**
   with a blank `posting_mode`/supplier (and the PI guard `posting_mode != "Direct Expense"`

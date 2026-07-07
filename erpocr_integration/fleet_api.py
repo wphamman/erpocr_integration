@@ -637,6 +637,14 @@ def upload_fleet_slip(
 			# No row carries this key → the violation was NOT the idempotency key
 			# (an unexpected unique constraint). Surface the real error.
 			raise exc from None
+		if existing.owner != frappe.session.user:
+			# Replay is owner-scoped: the shell generates the UUID per capture and
+			# only the capturing driver's device ever retries it. Any OTHER caller
+			# presenting the key must not learn the slip's name/status.
+			frappe.throw(
+				_("This upload reference belongs to another user."),
+				frappe.PermissionError,
+			)
 		return _shape_upload_response(existing, duplicate=True)
 
 	# ── Attach the image + queue extraction ATOMICALLY with the slip insert ──
