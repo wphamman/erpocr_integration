@@ -7,7 +7,7 @@ with no PI), and statement reconciliation (OCR Statement → match lines vs subm
 Ingest via manual upload, email forwarding, Google Drive folder polling, plus a driver-shell
 phone-upload contract for fleet slips (`upload_fleet_slip`, P4); opt-in auto-draft for
 high-confidence matches. ~$0.0001/doc. Installs via `bench get-app`; all config lives in
-the OCR Settings single DocType. Currently v1.5.1.
+the OCR Settings single DocType. Currently v1.6.0.
 
 ## Knowledge (always loaded)
 @docs/architecture.md
@@ -44,3 +44,9 @@ invariants. Reference it; do not duplicate its rules here.
 - **The wholesale frappe mock hides missing/misplaced framework functions** (v1.5.1): a MagicMock attribute never raises, so calling a NONEXISTENT function (e.g. `frappe.utils.get_fiscal_year` — real one: `erpnext.accounts.utils.get_fiscal_year`) passes every test and AttributeErrors on prod; inside a blanket `except` it masquerades as a domain failure (blocked ALL auto-drafts as "outside any active Fiscal Year"). Verify unfamiliar framework functions on a real bench (`docker exec starpops-test-backend-1 bash -lc 'cd /home/frappe/frappe-bench && ./env/bin/python -c ...'`); import ERPNext functions from `erpnext.*` with a separate ImportError path, and register the module in conftest so tests hit the real import location.
 - **Rate-limit stagger lives at the pollers** (`time.sleep(5)` between enqueues), not the processors.
 - **Link → optional-app doctype:** use a conditional Custom Field, never a doctype-JSON Link (breaks meta resolution on sites without that app). See [CROSS_APP_SURFACE.md §4](CROSS_APP_SURFACE.md).
+- **`upload_fleet_slip` permission posture is endpoint-scoped** (v1.6.0, D0): the gate passes on `OCR Fleet Slip` create OR the plain `Driver` role (possession-based, mirrors fleet's `submit_vehicle_inspection`). Do NOT "fix" driver 403s by granting roles or adding a Driver doctype-perm row — the in-code check is the contract, and it stays immune to the prod Custom-DocPerm shadow on OCR Fleet Slip.
+
+## Data & credential hygiene (standing rules, 2026-06-10)
+- **Never touch live** includes read-only API calls. If verification genuinely needs prod data and Willie authorizes it in-session: read-only scoped credentials only, and record the authorized deviation explicitly in the handback.
+- **No real personal data** (names, IDs, pay/cost figures, contact details) in any committed artefact — screenshots, fixtures, test data, docs. Synthesize or redact before committing. POPIA applies.
+- **Credentials:** per-project `.env` (gitignored — verify, don't assume), least-privilege key per consumer (dedicated ERPNext service user, not the master prod key). Never copy a shared prod credential into a new project's `.env`; reference the canonical secrets file instead.
