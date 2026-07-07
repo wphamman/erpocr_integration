@@ -39,7 +39,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.dn_api.match_dn_po_items` | GET | per-doc read | DN PO item match (UI) |
 | `erpocr_integration.fleet_api.retry_fleet_extraction` | POST | OCR Fleet Slip perm | Retry fleet extraction |
 | `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip perm | Re-route mis-foldered slip to invoice pipeline |
-| `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create only** (driver shell) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
+| `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create OR plain `Driver` role** (driver shell; D0) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
 | `erpocr_integration.tasks.drive_integration.test_drive_connection` | GET | System Manager | Config self-test |
 | `erpocr_integration.tasks.email_monitor.trigger_email_check` | POST | System Manager | Manual email poll |
 
@@ -69,9 +69,14 @@ Returns (same shape fresh + idempotent replay):
 
 - **Recon-only, never invoice.** Creates an OCR Fleet Slip with `purchase_invoice` NULL (the
   v1.2.0 invariant). The endpoint is structurally incapable of creating/feeding a Purchase
-  Invoice or an OCR Import — it gates on `OCR Fleet Slip` **create** and nothing else.
-- **Role:** `OCR Fleet Driver` (§5) — create on OCR Fleet Slip ONLY, reads `if_owner`-scoped
-  (a driver cannot read other drivers' slips). Guest denied explicitly.
+  Invoice or an OCR Import — its permission gate never consults OCR Import.
+- **Permission posture (v1.6.0; D0 2026-07-06): `OCR Fleet Slip` create OR the plain
+  `Driver` role.** Possession-based driver writes accept `Driver` — the same posture as
+  `fleet_management.api.submit_vehicle_inspection` — so real drivers need **no site-level
+  role provisioning**. The widening is endpoint-scoped (an in-code role check, not a
+  doctype-perm row): Desk posture is unchanged, and a Custom-DocPerm shadow on the doctype
+  cannot disable it. The `OCR Fleet Driver` role (§5) still passes via the doctype perm and
+  remains the belt-and-braces grant in deploy runbooks. Guest denied explicitly.
 - **Idempotency = the R-B house write-contract template, verbatim.** A client UUID
   (`client_request_id`) under a DB **nullable-unique** constraint; **insert-and-catch** the
   unique violation (not check-then-insert) + **full** `frappe.db.rollback()` (REPEATABLE-READ
@@ -144,8 +149,10 @@ on OCR-built fuel/toll PIs:
 - **OCR Manager** — operations: review imports, create documents.
 - **OCR Fleet Slip Reader** — read + write (no create/delete) on fleet slip data (Desk review).
 - **OCR Fleet Driver** (P4) — **create on OCR Fleet Slip ONLY**, reads `if_owner`-scoped, no
-  Desk access. The driver-shell upload identity (§2c). Assigned to driver users **in addition
-  to** `fleet_management`'s `Driver` role; deliberately NOT granted OCR Import create, so a
+  Desk access. Was the sole driver-shell upload identity until v1.6.0; **since D0 the §2c
+  endpoint also accepts the plain `Driver` role**, so this role is no longer required for
+  uploads — it remains the belt-and-braces grant (and the way to give a driver `if_owner`
+  Desk read of their own slips). Deliberately NOT granted OCR Import create, so a
   driver can never open the invoice surface. (Note: the existing `OCR Fleet Slip Reader` grants
   broad read+write on *all* slips — if a driver should be strictly own-slips-only, assign
   `OCR Fleet Driver` and NOT Reader; deployment/shell decision.)

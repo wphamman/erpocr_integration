@@ -68,6 +68,10 @@ def _build_frappe_mock():
 	mock.whitelist = MagicMock(side_effect=lambda *a, **kw: (lambda fn: fn) if not a else a[0])
 	# frappe.has_permission
 	mock.has_permission = MagicMock(return_value=True)
+	# frappe.get_roles — real list (upload_fleet_slip does `"Driver" in ...`);
+	# default deliberately has NO Driver / OCR role so role-widened gates only
+	# pass when a test opts in.
+	mock.get_roles = MagicMock(return_value=["All"])
 	# frappe.session
 	mock.session = MagicMock()
 	mock.session.user = "Administrator"
@@ -209,6 +213,7 @@ def reset_frappe_mock():
 	_frappe_mock.msgprint = MagicMock()
 	_frappe_mock.throw = MagicMock(side_effect=Exception)
 	_frappe_mock.has_permission = MagicMock(return_value=True)
+	_frappe_mock.get_roles = MagicMock(return_value=["All"])
 	_frappe_mock.session.user = "Administrator"
 	yield _frappe_mock
 

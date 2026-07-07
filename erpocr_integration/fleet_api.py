@@ -479,19 +479,26 @@ def upload_fleet_slip(
 		{"ocr_fleet_slip": <OCR-FS-…>, "status": <str>,
 		 "client_request_id": <uuid>, "duplicate": bool}
 
-	Raises: PermissionError for guests / callers without OCR Fleet Slip create;
+	Raises: PermissionError for guests / callers holding neither OCR Fleet Slip
+	create nor the plain ``Driver`` role (possession-based posture, D0);
 	ValidationError for a missing key, a missing/oversize/wrong-type file, or an
 	unknown vehicle.
 	"""
 	from erpocr_integration.api import SUPPORTED_FILE_TYPES, validate_file_magic_bytes
 
-	# ── Permission: create-on-OCR-Fleet-Slip ONLY ──────────────────────────
-	# Deliberately NOT gated on OCR Import create — the driver role grants
-	# create on OCR Fleet Slip and nothing else, so this endpoint can never open
+	# ── Permission: OCR-Fleet-Slip create OR plain Driver ──────────────────
+	# Deliberately NOT gated on OCR Import create — this endpoint can never open
 	# the invoice (OCR Import) surface. Guest is denied explicitly.
+	#
+	# Possession-based driver writes accept the plain `Driver` role (D0,
+	# 2026-07-06) — the same posture as fleet_management's
+	# submit_vehicle_inspection. Real drivers hold only `Driver`; requiring the
+	# site-provisioned `OCR Fleet Driver` role 403'd every shell slip. The gate
+	# lives HERE (not a doctype-perm row for Driver) so Desk posture stays
+	# unchanged and a Custom-DocPerm shadow on the doctype can't disable it.
 	if frappe.session.user == "Guest":
 		frappe.throw(_("You must be logged in to upload a fleet slip."), frappe.PermissionError)
-	if not frappe.has_permission("OCR Fleet Slip", "create"):
+	if not (frappe.has_permission("OCR Fleet Slip", "create") or "Driver" in frappe.get_roles()):
 		frappe.throw(_("You do not have permission to upload fleet slips."), frappe.PermissionError)
 
 	# ── Idempotency key (required) ─────────────────────────────────────────

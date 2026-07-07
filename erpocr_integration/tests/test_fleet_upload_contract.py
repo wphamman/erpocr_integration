@@ -187,6 +187,50 @@ class TestUploadPermissionGuards:
 		assert "OCR Import" not in checked
 		assert "OCR Fleet Slip" in checked
 
+	def test_plain_driver_role_can_upload(self, mock_frappe):
+		"""D0 posture: a user holding ONLY the plain `Driver` role (NO doctype
+		create perm — real drivers are never provisioned `OCR Fleet Driver`) can
+		submit a slip. The endpoint gate itself makes Driver sufficient."""
+		mock_frappe.session.user = "driver-only@starpops.test"
+		mock_frappe.has_permission.return_value = False  # no OCR Fleet Slip create
+		mock_frappe.get_roles.return_value = ["All", "Driver"]
+		holder = _wire_upload(mock_frappe)
+
+		result = upload_fleet_slip(client_request_id="k-driver-1")
+
+		assert holder["slip"].inserted is True
+		assert result["duplicate"] is False
+		assert result["ocr_fleet_slip"] == "OCR-FS-00040"
+
+	def test_plain_driver_idempotent_replay_still_works(self, mock_frappe):
+		"""The Driver-widened gate must not bypass the idempotency contract: a
+		replayed key from a plain-Driver caller returns the ORIGINAL slip with
+		duplicate: true, no second enqueue."""
+		mock_frappe.has_permission.return_value = False
+		mock_frappe.get_roles.return_value = ["All", "Driver"]
+		existing = _Slip({"status": "Pending", "client_request_id": "k-driver-dup"}, name="OCR-FS-00002")
+		_wire_upload(
+			mock_frappe,
+			existing=existing,
+			insert_error=mock_frappe.UniqueValidationError("unique"),
+		)
+
+		result = upload_fleet_slip(client_request_id="k-driver-dup")
+
+		assert result["duplicate"] is True
+		assert result["ocr_fleet_slip"] == "OCR-FS-00002"
+		mock_frappe.enqueue.assert_not_called()
+
+	def test_no_driver_and_no_ocr_role_rejected(self, mock_frappe):
+		"""Negative posture: neither `Driver` nor any create-granting OCR role →
+		still a permission error (the widening is Driver-scoped, not open)."""
+		mock_frappe.has_permission.return_value = False
+		mock_frappe.get_roles.return_value = ["All", "Employee"]
+		_wire_upload(mock_frappe)
+		with pytest.raises(Exception):
+			upload_fleet_slip(client_request_id="k1")
+		mock_frappe.enqueue.assert_not_called()
+
 	def test_missing_client_request_id_rejected(self, mock_frappe):
 		_wire_upload(mock_frappe)
 		with pytest.raises(Exception):
