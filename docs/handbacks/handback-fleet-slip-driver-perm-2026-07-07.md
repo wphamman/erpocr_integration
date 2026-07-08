@@ -15,7 +15,7 @@
   - `503cef0` docs(changelog): Driver role is portfolio-wide, not fleet_management-owned (review nit)
   - `9393be9` docs(handback): this doc
   - `7f829aa` fix(fleet_api): owner-scope the idempotent replay (review finding; Willie-requested in-session)
-- **Push status:** pushed to `origin/fix/fleet-slip-driver-perm`; then (Willie-directed, post-Codex-gate) **merged to master `15e5c0a` via `--no-ff` on 2026-07-08** and pushed — CI green on the merge. NOT tagged (v1.6.0 tag/release awaiting go-ahead).
+- **Push status:** pushed to `origin/fix/fleet-slip-driver-perm`; then (Willie-directed, post-Codex-gate) **merged to master `15e5c0a` via `--no-ff` on 2026-07-08** and pushed — CI green on the merge. **Tagged + released as v1.6.0** (2026-07-08, cumulative notes — prod jump 1.4.1→1.6.0 brings the never-deployed 1.5.x). Deploy to prod still owed (Starktail, on ask) — required before driver-shell deploy #1.
 - **Working tree:** clean.
 
 Session complete — all acceptance criteria met, including live HTTP verification.
@@ -62,7 +62,7 @@ Session complete — all acceptance criteria met, including live HTTP verificati
 
 ## 6. Memory delta (durable code-side facts)
 
-- erpocr_integration is at **v1.6.0 on master (`15e5c0a`, merged 2026-07-08, NOT tagged)**: `upload_fleet_slip` accepts the plain `Driver` role via an **endpoint-scoped** check at `fleet_api.py:501` — driver-shell GAP 2 is closed at root; NO site-level role provisioning needed for drivers. Replay is owner-scoped (`7f829aa`).
+- erpocr_integration is at **v1.6.0 (merged 2026-07-08, tagged + GitHub-released the same day; NOT deployed)**: `upload_fleet_slip` accepts the plain `Driver` role via an **endpoint-scoped** check at `fleet_api.py:501` — driver-shell GAP 2 is closed at root; NO site-level role provisioning needed for drivers. Replay is owner-scoped (`7f829aa`); the same fix was ported to fleet's `submit_vehicle_inspection` (merged `32d5721`, Codex 6/6).
 - The `OCR Fleet Driver` role is demoted to belt-and-braces (still functional; also the way to give a driver `if_owner` Desk read of own slips).
 - The endpoint gate is deliberately immune to the prod Custom-DocPerm shadow on OCR Fleet Slip (that restore step is still owed for *read* posture, but no longer blocks driver uploads).
 - Posture tests live in `erpocr_integration/tests/test_fleet_upload_contract.py` (`TestUploadPermissionGuards`); conftest now ships a real-list `frappe.get_roles` mock (default `["All"]`).
