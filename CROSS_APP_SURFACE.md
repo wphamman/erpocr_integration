@@ -10,9 +10,10 @@ owner-scoped idempotent replay. See ADR-0006/ADR-0007 in [docs/architecture/DECI
 
 **v1.7.0 fold-in (ADR-0010) — no new whitelisted surface.** The `starpops_accounts` read-only
 React dashboard now ships *inside* this app at `/accounts` (§3a). It adds a website route, an
-`/apps` tile, and a permission-hook gate (`erpocr_integration.dashboard.permission.has_app_permission`
-— a hook callback, **NOT** a `@frappe.whitelist` method), and reads OCR data via generic
-`frappe.client` `get_count`/`get_list` only. The §2 whitelisted count is unchanged (32).
+`/apps` tile whose visibility is gated by a `has_permission` callback
+(`erpocr_integration.dashboard.permission.has_app_permission` — **NOT** a `@frappe.whitelist`
+method), and reads OCR data via generic `frappe.client` `get_count`/`get_list` only. The §2
+whitelisted count is unchanged (32).
 *Re-baseline this SHA at merge (architect).*
 
 `erpocr_integration` is an **underlying app, not a shell** — it knows nothing of its
@@ -136,9 +137,10 @@ External consumers read these DocTypes; **their field names are the de-facto con
 **3a — In-app `/accounts` dashboard (v1.7.0, ADR-0010).** The folded-in React SPA reads **OCR
 Import / OCR Delivery Note / OCR Fleet Slip** counts + lists via generic `frappe.client`
 (`get_count`/`get_list`), as the logged-in user — **read-only, no write path, no new whitelisted
-method**. Tile + route gated by `erpocr_integration.dashboard.permission.has_app_permission`
-(Administrator / System Manager / read on any of the three). Not an external surface — a view
-onto this app's own data. Source: `frontend/`; built dist committed under `public/accounts/`.
+method**. The `/apps` **tile** is gated by `erpocr_integration.dashboard.permission.has_app_permission`
+(Administrator / System Manager / read on any of the three); the `/accounts` **route itself is a
+public www shell** — data is enforced per-user on every `frappe.client` call. Not an external
+surface — a view onto this app's own data. Source: `frontend/`; built dist committed under `public/accounts/`.
 
 ## 4. Custom-Field integration contract (the real cross-app coupling)
 All bidirectional, **feature-detected**, install-order-independent.

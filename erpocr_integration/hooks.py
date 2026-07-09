@@ -35,10 +35,19 @@ website_route_rules = [
 	{"from_route": "/accounts/<path:app_path>", "to_route": "accounts"},
 ]
 
-# App tile on /apps. Gated by has_app_permission so users without any OCR
-# read perm don't see it. Route is a plain /accounts (NOT /app/...) so
-# frappe.apps.get_route returns it verbatim (a Desk-page route would be
-# rewritten to a workspace). has_app_permission below also gates the SPA route.
+# App tile on /apps. `has_permission` hides the tile from users with no OCR
+# read perm (frappe/apps.py::get_apps calls it server-side, no args, expects a
+# bool; a raising callback is swallowed into a hidden tile). Route is a plain
+# /accounts (NOT /app/...) so frappe.apps.get_route returns it verbatim (a
+# Desk-page route would be rewritten to a workspace).
+#
+# This gates the TILE only. The /accounts www page is a bare PUBLIC shell (no
+# www/accounts.py get_context), so a Guest / unpermitted user can load it but
+# sees only the SPA's login/empty state — every data call is a frappe.client
+# get_list/get_count run AS the logged-in user and enforces per-doctype read
+# perms. That per-API check is the authoritative gate; the app is read-only, so
+# no server-side route gate or CSRF bridge is needed. (There is no top-level
+# `has_app_permission` hook — Frappe reads the tile's `has_permission` only.)
 add_to_apps_screen = [
 	{
 		"name": "erpocr_integration",
@@ -48,10 +57,6 @@ add_to_apps_screen = [
 		"has_permission": "erpocr_integration.dashboard.permission.has_app_permission",
 	},
 ]
-
-has_app_permission = {
-	"erpocr_integration": "erpocr_integration.dashboard.permission.has_app_permission",
-}
 
 # Home Pages
 # ----------
