@@ -2,7 +2,11 @@
 
 Canonical record of this app's external surface (portfolio rule **R3**: one documented
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
-contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0 line.
+contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
+
+**Current through v1.6.0** (baselined at `ba21ec1`): §2c/§2a/§5/§6 reflect the D0 driver-perm
+widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and the
+owner-scoped idempotent replay. See ADR-0006/ADR-0007 in [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
 
 `erpocr_integration` is an **underlying app, not a shell** — it knows nothing of its
 consumers. Its only cross-app coupling is a **soft, runtime feature-detected** integration

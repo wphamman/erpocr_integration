@@ -15,6 +15,7 @@ the OCR Settings single DocType. Currently v1.6.0.
 
 ## Reference (load on demand)
 - Cross-app API + integration contract (R3): [CROSS_APP_SURFACE.md](CROSS_APP_SURFACE.md)
+- Architecture decisions + open questions (ADRs · *why we chose X*): [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md), [docs/architecture/OPEN-QUESTIONS.md](docs/architecture/OPEN-QUESTIONS.md)
 - Version history: [CHANGELOG.md](CHANGELOG.md)
 - End-user usage: `OCR_Quick_Start_Guide.md`, `OCR_User_Guide.md`, `OCR_Delivery_Note_Guide.md`, `OCR_Fleet_Slip_Guide.md`, `OCR_Statement_Guide.md`
 - Fleet Dashboard data contract: [FLEET_DASHBOARD_DATA_SPEC.md](FLEET_DASHBOARD_DATA_SPEC.md)
