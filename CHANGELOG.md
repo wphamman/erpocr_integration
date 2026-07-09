@@ -2,6 +2,17 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-07-09
+
+### Added
+- **Folded the `starpops_accounts` read-only React dashboard into this app (ADR-0010 executed; OPEN-QUESTIONS Q5).** The standalone Mint-pattern SPA is now part of `erpocr_integration` — one `bench get-app`, one version, one CHANGELOG. It serves at the website route **`/accounts`** (`website_route_rules` catch-all → `www/accounts.html`; the standalone's already-shipped, UAT-passed serving model, preserved as-is) and appears as an **OCR Accounts** tile on `/apps`. Source lives in `frontend/` at the repo root (Vite + React 19 + TS + Tailwind 4 + frappe-react-sdk); the build emits to `erpocr_integration/public/accounts/` (base `/assets/erpocr_integration/accounts/`) and copies the shell to `erpocr_integration/www/accounts.html`. The dashboard is **read-only, zero writes** — it reads OCR Import / OCR Delivery Note / OCR Fleet Slip counts and lists via generic `frappe.client` (`get_count`/`get_list`) as the logged-in user; there is no write path and no new whitelisted method (data access rides the existing `frappe.client` read surface — CROSS_APP_SURFACE.md §3, unchanged).
+- **App-tile + SPA permission gate — 3-doctype read union.** `erpocr_integration.dashboard.permission.has_app_permission` (registered via the `add_to_apps_screen` tile and the `has_app_permission` hook) passes for Administrator, System Manager, or **read on any of** OCR Import / OCR Delivery Note / OCR Fleet Slip — so a user who can see any one queue gets the tile, and someone with none is denied cleanly. It is a UI gate only; the authoritative check is Frappe's per-doctype permission on every `get_list`/`get_count` (run as the logged-in user).
+- **`ocr-logo.svg`** tile icon (the launcher tile referenced a logo that never shipped).
+
+### Deploy note
+- **The built SPA dist is committed** (`erpocr_integration/public/accounts/*` + `www/accounts.html`), so the app installs and serves the dashboard with **zero Node/npm step at deploy** — the same managed-host pattern `fleet_management` uses for its dashboard. Rebuild after changing `frontend/`: `cd frontend && npm ci && npm run build` (writes the committed dist; no source map is emitted). This supersedes ADR-0010's "Starktail needs a Node build step" consequence — no Starktail image-build change is required for the SPA to serve.
+- Both Codex-review fixes from the standalone rolled forward: the 3-doctype permission union (above) and clear-password-on-failed-login in the SPA login form.
+
 ## [1.6.0] — 2026-07-07
 
 ### Changed

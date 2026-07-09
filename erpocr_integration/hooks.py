@@ -27,6 +27,32 @@ doctype_js = {
 # (erpnext_ocr/doctype/ocr_import/ocr_import_list.js) and is auto-loaded by
 # Frappe — no doctype_list_js hook needed.
 
+# Accounts dashboard (React SPA) — served at /accounts.
+# Build output (committed): erpocr_integration/public/accounts/ + www/accounts.html.
+# The catch-all route rule sends any /accounts/<...> URL to the accounts www
+# page so client-side react-router can take over (Mint/Raven pattern).
+website_route_rules = [
+	{"from_route": "/accounts/<path:app_path>", "to_route": "accounts"},
+]
+
+# App tile on /apps. Gated by has_app_permission so users without any OCR
+# read perm don't see it. Route is a plain /accounts (NOT /app/...) so
+# frappe.apps.get_route returns it verbatim (a Desk-page route would be
+# rewritten to a workspace). has_app_permission below also gates the SPA route.
+add_to_apps_screen = [
+	{
+		"name": "erpocr_integration",
+		"logo": "/assets/erpocr_integration/images/ocr-logo.svg",
+		"title": "OCR Accounts",
+		"route": "/accounts",
+		"has_permission": "erpocr_integration.dashboard.permission.has_app_permission",
+	},
+]
+
+has_app_permission = {
+	"erpocr_integration": "erpocr_integration.dashboard.permission.has_app_permission",
+}
+
 # Home Pages
 # ----------
 
