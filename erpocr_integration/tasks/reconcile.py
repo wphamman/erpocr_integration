@@ -73,7 +73,17 @@ def reconcile_statement(ocr_statement) -> None:
 		return abs((c["grand_total"] or 0) - amount) < 0.01
 
 	def _in_period(c):
-		return not ocr_statement.period_from or str(c.get("posting_date")) >= str(ocr_statement.period_from)
+		# getdate() both sides (v1.8.0 hardening): posting_date comes back as a
+		# date object, period_from as a Data/Date field value — raw str()
+		# comparison silently mis-orders on any format mismatch (and "None"
+		# compared as a string). A candidate without a posting_date is not
+		# provably in-period, so it is treated as brought-forward.
+		if not ocr_statement.period_from:
+			return True
+		posting_date = c.get("posting_date")
+		if not posting_date:
+			return False
+		return frappe.utils.getdate(posting_date) >= frappe.utils.getdate(ocr_statement.period_from)
 
 	# Forward reconciliation: match each statement line to a PI
 	for item in ocr_statement.items:
@@ -146,7 +156,9 @@ def reconcile_statement(ocr_statement) -> None:
 			if (item.reference or "").strip()
 		}
 		for pi in all_pis:
-			if str(pi.get("posting_date")) < str(ocr_statement.period_from):
+			# getdate() both sides (v1.8.0 hardening) — same rationale as
+			# _in_period above; submitted PIs always carry a posting_date.
+			if frappe.utils.getdate(pi.get("posting_date")) < frappe.utils.getdate(ocr_statement.period_from):
 				continue
 			if pi["name"] in matched_pi_names:
 				continue

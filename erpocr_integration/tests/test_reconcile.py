@@ -473,3 +473,116 @@ class TestDuplicateBillNo:
 
 		assert stmt.items[0].matched_invoice == "PI-100A"
 		assert stmt.items[1].matched_invoice == "PI-100A"  # re-reference, not PI-100B
+
+
+class TestDateCompareHardening:
+	"""v1.8.0 C(d): recon date compares run through getdate() on both sides.
+
+	get_all really returns datetime.date objects for posting_date while
+	period_from arrives as a string — the old str()-vs-str() comparison relied
+	on both sides happening to serialize identically. These tests feed the
+	REAL mixed types (ADR-0009: real values, not echo mocks).
+	"""
+
+	def test_in_period_preference_with_real_date_objects(self, mock_frappe):
+		"""In-period preference still works when posting_date is a datetime.date
+		(the real get_all return type) and period_from is a string."""
+		import datetime
+
+		stmt = _make_statement(
+			period_from="2026-06-01",
+			period_to="2026-06-30",
+			items=[_make_stmt_item(reference="RENT", debit=5000.0)],
+		)
+		mock_frappe.get_all.return_value = [
+			{
+				"name": "PI-RENT-MAY",
+				"bill_no": "RENT",
+				"grand_total": 5000.0,
+				"outstanding_amount": 0.0,
+				"posting_date": datetime.date(2026, 5, 1),
+			},
+			{
+				"name": "PI-RENT-JUNE",
+				"bill_no": "RENT",
+				"grand_total": 5000.0,
+				"outstanding_amount": 5000.0,
+				"posting_date": datetime.date(2026, 6, 1),
+			},
+		]
+
+		reconcile_statement(stmt)
+
+		assert stmt.items[0].matched_invoice == "PI-RENT-JUNE"
+		assert stmt.items[0].recon_status == "Matched"
+
+	def test_reverse_check_with_real_date_objects(self, mock_frappe):
+		"""Reverse check period-bounds correctly on datetime.date posting dates:
+		the prior-period PI is skipped, the in-period one is flagged."""
+		import datetime
+
+		stmt = _make_statement(
+			period_from="2026-02-01",
+			period_to="2026-02-28",
+			items=[_make_stmt_item(reference="INV-001", debit=1000.0)],
+		)
+		mock_frappe.get_all.return_value = [
+			{
+				"name": "PI-001",
+				"bill_no": "INV-001",
+				"grand_total": 1000.0,
+				"outstanding_amount": 0.0,
+				"posting_date": datetime.date(2026, 2, 10),
+			},
+			{
+				"name": "PI-PRIOR",
+				"bill_no": "INV-OLD",
+				"grand_total": 400.0,
+				"outstanding_amount": 400.0,
+				"posting_date": datetime.date(2026, 1, 20),  # before period → skip
+			},
+			{
+				"name": "PI-UNLISTED",
+				"bill_no": "INV-999",
+				"grand_total": 750.0,
+				"outstanding_amount": 750.0,
+				"posting_date": datetime.date(2026, 2, 15),  # in period → flag
+			},
+		]
+
+		reconcile_statement(stmt)
+
+		flagged = [i for i in stmt.items if i.recon_status == "Not in Statement"]
+		assert [i.matched_invoice for i in flagged] == ["PI-UNLISTED"]
+
+	def test_missing_posting_date_treated_as_brought_forward(self, mock_frappe):
+		"""A candidate without a posting_date is not provably in-period — the
+		in-period candidate must win the equal-evidence preference. (The old
+		str() compare ranked None as in-period: "None" > "2026-...".)"""
+		import datetime
+
+		stmt = _make_statement(
+			period_from="2026-06-01",
+			period_to="2026-06-30",
+			items=[_make_stmt_item(reference="INV-7", debit=880.0)],
+		)
+		mock_frappe.get_all.return_value = [
+			{
+				"name": "PI-NO-DATE",
+				"bill_no": "INV-7",
+				"grand_total": 880.5,  # 0.50 off — defeats the amount gate
+				"outstanding_amount": 880.5,
+				"posting_date": None,
+			},
+			{
+				"name": "PI-IN-PERIOD",
+				"bill_no": "INV-7",
+				"grand_total": 880.9,  # also off — equal evidence, period decides
+				"outstanding_amount": 880.9,
+				"posting_date": datetime.date(2026, 6, 12),
+			},
+		]
+
+		reconcile_statement(stmt)
+
+		assert stmt.items[0].matched_invoice == "PI-IN-PERIOD"
