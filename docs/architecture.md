@@ -75,7 +75,8 @@ Statement Pipeline: Drive scan → classifier routes to statement → Gemini API
 | `erpocr_integration/dn_api.py` | DN background processing (`dn_gemini_process`), PO matching, doc_event hooks, retry |
 | `erpocr_integration/erpnext_ocr/doctype/ocr_delivery_note/ocr_delivery_note.py` | OCR DN controller — create_purchase_order(), create_purchase_receipt(), unlink, no_action |
 | `erpocr_integration/public/js/ocr_delivery_note.js` | DN client: PO matching dialogs (qty-focused), Create dropdown (PO/PR), real-time status |
-| `erpocr_integration/fleet_api.py` | Fleet background processing (`fleet_gemini_process`), vehicle matching (exact + normalized + fuzzy `_fuzzy_match_vehicle`), doc_event hooks, retry, `route_to_invoice_pipeline` (re-route mis-folder slips to invoice pipeline), `upload_fleet_slip` (driver-shell idempotent phone-capture upload contract, P4 — see [CROSS_APP_SURFACE.md §2c](../CROSS_APP_SURFACE.md)) |
+| `erpocr_integration/fleet_api.py` | Fleet background processing (`fleet_gemini_process`), vehicle matching (exact + normalized + fuzzy `_fuzzy_match_vehicle`), doc_event hooks, retry, `route_to_invoice_pipeline` (re-route mis-folder slips to invoice pipeline), `upload_fleet_slip` (driver-shell idempotent phone-capture upload contract, P4 — see [CROSS_APP_SURFACE.md §2c](../CROSS_APP_SURFACE.md)), `bulk_mark_recorded` (list-action bulk close of Fleet Card slips, v1.8.0) |
+| `erpocr_integration/tasks/auto_record.py` | Q8 (v1.8.0): opt-in auto-record for high-confidence Fleet Card slips — confidence gate + skip-reason audit, completes via `mark_recorded()` |
 | `erpocr_integration/erpnext_ocr/doctype/ocr_fleet_slip/ocr_fleet_slip.py` | OCR Fleet Slip controller — create_purchase_invoice(), mark_recorded(), unlink, no_action, status workflow |
 | `erpocr_integration/public/js/ocr_fleet_slip.js` | Fleet client: Create PI button, vehicle config display, status intro, unauthorized warning |
 | `erpocr_integration/statement_api.py` | Statement background processing (`statement_gemini_process`), reconciliation orchestration, `rereconcile_statement` |
@@ -121,7 +122,7 @@ Pending → Needs Review → Matched → Draft Created → Completed / No Action
 Pending → Needs Review → Matched → Draft Created (Direct Expense) / Completed (Fleet Card) → Completed / No Action / Error
 
 - **Two disposition paths, branched by `posting_mode`** (v1.2.0+):
-  - **`posting_mode = "Fleet Card"`** → slip closes as a **control record**, no Purchase Invoice. The fleet card provider's monthly invoice (handled in `fleet_management`) books the cost; this slip captures litres / odometer / vehicle / date for cross-check. Reaches `Completed` via `mark_recorded()` (whitelisted, user-clicked **Mark Recorded** button). `purchase_invoice` stays NULL.
+  - **`posting_mode = "Fleet Card"`** → slip closes as a **control record**, no Purchase Invoice. The fleet card provider's monthly invoice (handled in `fleet_management`) books the cost; this slip captures litres / odometer / vehicle / date for cross-check. Reaches `Completed` via `mark_recorded()` — user-clicked **Mark Recorded**, the **bulk list action** (`fleet_api.bulk_mark_recorded`, v1.8.0 — server re-validates every row), or opt-in **auto-record** (v1.8.0, below). `purchase_invoice` stays NULL on all three.
   - **`posting_mode = "Direct Expense"`** → slip becomes the source document for an AP entry via `create_purchase_invoice()`. Standard PI draft → submit → Completed flow.
 - **`Completed` no longer implies `purchase_invoice IS NOT NULL`** (v1.2.0). A Fleet Card slip in `Completed` has the link NULL by design — the cost lives in the provider's invoice. Code that queries Fleet Slips for downstream document linkage must check both `posting_mode` and `purchase_invoice`, not just status.
 - **PI guard: `posting_mode != "Direct Expense"` raises.** Server-side enforcement in `create_purchase_invoice()` (defence in depth — UI also hides the button for Fleet Card mode). Prevents the v1.2.0 invariant from being bypassed by API call or stale client.
@@ -133,7 +134,8 @@ Pending → Needs Review → Matched → Draft Created (Direct Expense) / Comple
 - **Per-vehicle posting mode** auto-set from Fleet Vehicle custom fields (`custom_fleet_card_provider`, `custom_fleet_control_account`, `custom_cost_center`):
   - Fleet card provider set → **Fleet Card** mode (operator runs Mark Recorded once verified)
   - Fleet card provider blank → **Direct Expense** mode → PI supplier = `fleet_default_supplier` from OCR Settings, expense = `fleet_expense_account`
-- **Vestigial on Fleet Card path** (v1.2.0): `custom_fleet_control_account` is still captured on each slip (via `_apply_vehicle_config`) but no longer flows into a PI on Fleet Card slips since no PI is created. The expense_account field on the slip is informational only on this path; cleanup TBD in a future release.
+- **Auto-record (v1.8.0, Q8 — opt-in, off by default)**: with `OCR Settings.enable_fleet_auto_record` on, a Fleet Card slip that lands/updates to `Matched` with **high confidence** completes via the existing `mark_recorded()` path — no operator click. High confidence = confirmed vehicle match (`Auto Matched` exact or driver/operator `Confirmed`; NEVER a fuzzy `Suggested`) + recon payload present (Fuel: litres + total; Toll: total). `Other`-type slips never auto-record. Audit fields `auto_recorded` + `auto_record_skipped_reason` mirror auto-draft's; diagnosing "why didn't it auto-record" starts with a group-by on the skip reason. Triggers: `fleet_gemini_process` (after matching) and controller `on_update` (Desk saves reaching Matched). ADR-0003 holds: never on Direct Expense, `purchase_invoice` stays NULL.
+- **Control-account capture retired on the Fleet Card path** (v1.8.0, Q6): since no PI is created (v1.2.0), the per-slip copy of `custom_fleet_control_account` into `expense_account` flowed nowhere — both capture sites now leave it blank on the Fleet Card branch. Direct Expense capture is unchanged. The `Fleet Vehicle.custom_fleet_control_account` Custom Field itself remains part of the §4a cross-app surface.
 - **`fleet_management` reads OCR Fleet Slips** (`monthly_summary.py`) for `status in [Completed, Draft Created, Matched, Needs Review]` regardless of `posting_mode` — Fleet Card slips in `Completed` continue to feed LITRES_MISMATCH and the Fuel Efficiency Tracker.
 - **Supplier resolution**: fleet card provider (from vehicle) → `fleet_default_supplier` (from OCR Settings) → user fills manually
 - **Status readiness**: Matched requires data + `fleet_vehicle` link (not just registration string) + supplier (`fleet_card_supplier` must be set)
@@ -210,6 +212,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Fleet Default Supplier**: Default supplier for fleet slip PIs when vehicle has no fleet card provider
 - **Fleet Expense Account**: Default expense account for non-fleet-card vehicle PIs
 - **Enable Auto-Draft**: Opt-in (off by default) — auto-draft high-confidence matches (see [implementation-patterns.md](implementation-patterns.md))
+- **Enable Fleet Card Auto-Record**: Opt-in (off by default) — auto-complete high-confidence Fleet Card slips via `mark_recorded()` (v1.8.0; see *OCR Fleet Slip Workflow*). Never creates a Purchase Invoice.
 
 ## Deployment
 
