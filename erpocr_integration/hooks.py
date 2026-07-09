@@ -27,6 +27,37 @@ doctype_js = {
 # (erpnext_ocr/doctype/ocr_import/ocr_import_list.js) and is auto-loaded by
 # Frappe — no doctype_list_js hook needed.
 
+# Accounts dashboard (React SPA) — served at /accounts.
+# Build output (committed): erpocr_integration/public/accounts/ + www/accounts.html.
+# The catch-all route rule sends any /accounts/<...> URL to the accounts www
+# page so client-side react-router can take over (Mint/Raven pattern).
+website_route_rules = [
+	{"from_route": "/accounts/<path:app_path>", "to_route": "accounts"},
+]
+
+# App tile on /apps. `has_permission` hides the tile from users with no OCR
+# read perm (frappe/apps.py::get_apps calls it server-side, no args, expects a
+# bool; a raising callback is swallowed into a hidden tile). Route is a plain
+# /accounts (NOT /app/...) so frappe.apps.get_route returns it verbatim (a
+# Desk-page route would be rewritten to a workspace).
+#
+# This gates the TILE only. The /accounts www page is a bare PUBLIC shell (no
+# www/accounts.py get_context), so a Guest / unpermitted user can load it but
+# sees only the SPA's login/empty state — every data call is a frappe.client
+# get_list/get_count run AS the logged-in user and enforces per-doctype read
+# perms. That per-API check is the authoritative gate; the app is read-only, so
+# no server-side route gate or CSRF bridge is needed. (There is no top-level
+# `has_app_permission` hook — Frappe reads the tile's `has_permission` only.)
+add_to_apps_screen = [
+	{
+		"name": "erpocr_integration",
+		"logo": "/assets/erpocr_integration/images/ocr-logo.svg",
+		"title": "OCR Accounts",
+		"route": "/accounts",
+		"has_permission": "erpocr_integration.dashboard.permission.has_app_permission",
+	},
+]
+
 # Home Pages
 # ----------
 
