@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useFrappeAuth } from "frappe-react-sdk";
+import { ROUTER_BASENAME } from "@/lib/router";
 
 export default function Login() {
 	const { login, error } = useFrappeAuth();
@@ -16,8 +17,10 @@ export default function Login() {
 			// and lands on the dashboard. In-place state-refresh (updateCurrentUser)
 			// is unreliable here because the initial guest get_logged_user error
 			// stays cached in SWR. The reload is one extra second of a login flash
-			// but it's bulletproof; cookie persists across it.
-			window.location.assign("/");
+			// but it's bulletproof; cookie persists across it. Target MUST be the
+			// router basename (/accounts in prod) — assigning "/" dumps the user on
+			// the Desk root instead of the dashboard.
+			window.location.assign(ROUTER_BASENAME);
 		} catch {
 			setPassword("");
 			setBusy(false);

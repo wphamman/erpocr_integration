@@ -1,4 +1,4 @@
-import { Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { useFrappeGetDocList } from "frappe-react-sdk";
 import TopNav from "@/components/TopNav";
 import {
@@ -41,9 +41,9 @@ export default function QueueList() {
 				<div className="flex items-center justify-between">
 					<div className="flex flex-wrap items-center gap-2">
 						{ACTIONABLE_STATUSES.map((s) => (
-							<a
+							<Link
 								key={s}
-								href={`/q/${DESK_SLUG[doctype]}/${encodeURIComponent(s)}`}
+								to={`/q/${DESK_SLUG[doctype]}/${encodeURIComponent(s)}`}
 								className={`rounded-md border px-2 py-1 text-xs font-medium ${
 									s === status
 										? STATUS_STYLE[s]
@@ -51,7 +51,7 @@ export default function QueueList() {
 								}`}
 							>
 								{s}
-							</a>
+							</Link>
 						))}
 					</div>
 					<button

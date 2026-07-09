@@ -3,10 +3,7 @@ import { FrappeProvider, useFrappeAuth } from "frappe-react-sdk";
 import Login from "@/components/Login";
 import OutstandingWork from "@/pages/OutstandingWork";
 import QueueList from "@/pages/QueueList";
-
-// In dev the SPA is served at the host root (localhost:5174/). In production
-// Frappe serves it at /accounts (see website_route_rules in hooks.py).
-const ROUTER_BASENAME = import.meta.env.DEV ? "/" : "/accounts";
+import { ROUTER_BASENAME } from "@/lib/router";
 
 function Gate() {
 	const { currentUser, isLoading } = useFrappeAuth();
