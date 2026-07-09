@@ -8,6 +8,13 @@ contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0
 widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and the
 owner-scoped idempotent replay. See ADR-0006/ADR-0007 in [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
 
+**v1.7.0 fold-in (ADR-0010) — no new whitelisted surface.** The `starpops_accounts` read-only
+React dashboard now ships *inside* this app at `/accounts` (§3a). It adds a website route, an
+`/apps` tile, and a permission-hook gate (`erpocr_integration.dashboard.permission.has_app_permission`
+— a hook callback, **NOT** a `@frappe.whitelist` method), and reads OCR data via generic
+`frappe.client` `get_count`/`get_list` only. The §2 whitelisted count is unchanged (32).
+*Re-baseline this SHA at merge (architect).*
+
 `erpocr_integration` is an **underlying app, not a shell** — it knows nothing of its
 consumers. Its only cross-app coupling is a **soft, runtime feature-detected** integration
 with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required_apps`** in
@@ -19,8 +26,9 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 - **No hard dependency** on any sibling app (verified: no `required_apps`, no
   `import fleet_management`/`starpops*` in code).
 - **Consumers read-only, via REST** — `fleet_management` (`monthly_summary.py` reads OCR Fleet
-  Slips), the Fleet Dashboard (see [FLEET_DASHBOARD_DATA_SPEC.md](FLEET_DASHBOARD_DATA_SPEC.md)),
-  and the planned `starpops_accounts` fold-in. This app imports/references none of them.
+  Slips) and the Fleet Dashboard (see [FLEET_DASHBOARD_DATA_SPEC.md](FLEET_DASHBOARD_DATA_SPEC.md)).
+  (`starpops_accounts` was folded *into* this app at v1.7.0 — it is now an in-app read consumer,
+  §3a, not a separate app.) This app imports/references none of them.
 - Arrow direction is clean: consumers → erpocr_integration. Never the reverse.
 
 ## 2. Whitelisted RPC endpoints (32 total; **0 `allow_guest`**)
@@ -124,6 +132,13 @@ External consumers read these DocTypes; **their field names are the de-facto con
 - **OCR Fleet Slip** — read by `fleet_management` `monthly_summary.py` and the Fleet Dashboard. Field contract: [FLEET_DASHBOARD_DATA_SPEC.md](FLEET_DASHBOARD_DATA_SPEC.md).
 - **OCR Statement / OCR Statement Item** — reconciliation results (status, `recon_status`, `matched_invoice`, `difference`).
 - **OCR Import** — processing records / stats backing.
+
+**3a — In-app `/accounts` dashboard (v1.7.0, ADR-0010).** The folded-in React SPA reads **OCR
+Import / OCR Delivery Note / OCR Fleet Slip** counts + lists via generic `frappe.client`
+(`get_count`/`get_list`), as the logged-in user — **read-only, no write path, no new whitelisted
+method**. Tile + route gated by `erpocr_integration.dashboard.permission.has_app_permission`
+(Administrator / System Manager / read on any of the three). Not an external surface — a view
+onto this app's own data. Source: `frontend/`; built dist committed under `public/accounts/`.
 
 ## 4. Custom-Field integration contract (the real cross-app coupling)
 All bidirectional, **feature-detected**, install-order-independent.
