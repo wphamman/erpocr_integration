@@ -155,5 +155,13 @@
   persona-shell / canonical-datamodel-home rules favor folding a pure consumer view into its data owner.
 - **Rejected:** Keep `starpops_accounts` a standalone Frappe app — extra install/version/deploy surface
   for no isolation benefit (it holds no datamodel of its own).
-- **Consequence:** Starktail's image build needs a **Node step** added — must be flagged in the fold-in PR.
+- **Consequence:** originally implied a Starktail image-build **Node step** — **superseded by ADR-0011** (commit the built dist; no deploy-time build), which removes that cross-team dependency.
 - **Pointer:** worktree `../erpocr-foldin` (branch `feature/starpops-accounts-foldin`). See [[project_starpops_accounts_mvp]]. **Execution/rebase state → OPEN-QUESTIONS Q5.**
+
+## ADR-0011 — Commit the SPA's built dist; no deploy-time build step
+- **Status:** Accepted 2026-07-09 · lands with the v1.7.0 fold-in merge (builder `feature/starpops-accounts-foldin` @ `50fa1fb`)
+- **Decision:** The folded-in `starpops_accounts` SPA ships its **built assets committed to git** (`public/accounts/*.js+*.css` + `www/accounts.html`, excluding the ~1.76MB sourcemap; ~380KB hashed assets per release). The app installs + serves the SPA with **zero Node at deploy** — no `npm run build` step in Starktail's image.
+- **Why:** (a) matches how `fleet_management` already ships its dashboard to the **same Starktail host**; (b) preserves the app's stated goal of installing on **self-hosted AND Frappe Cloud** — Frappe Cloud won't run a custom Vite build, so a deploy-time build would break `/accounts` there; (c) eliminates a cross-team dependency (a Starktail image-build change) and its `/accounts`-404 failure mode.
+- **Rejected:** gitignore the dist + add `cd frontend && npm ci && npm run build` to Starktail's image (the fold-in kickoff's original assumption, inherited from the standalone-app era) — more operational surface, a new failure mode, and breaks Frappe-Cloud installability. **Supersedes ADR-0010's Node-step consequence.**
+- **Caveat (the one footgun of committing build output):** the release process must rebuild + re-commit the dist so the committed assets never drift from `frontend/src`. Enforce in the release checklist / a build script.
+- **Pointer:** OPEN-QUESTIONS Q5; builder handback (pending). Ratified by Willie 2026-07-09. See [[project_starpops_accounts_mvp]].
