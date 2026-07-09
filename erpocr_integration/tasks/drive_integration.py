@@ -496,7 +496,7 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 		return False
 
 	# Validate magic bytes before creating placeholder or enqueuing
-	from erpocr_integration.api import validate_file_magic_bytes
+	from erpocr_integration.api import is_image_decodable, validate_file_magic_bytes
 
 	if not validate_file_magic_bytes(pdf_content, file_mime_type):
 		_record_drive_scan_failure(
@@ -507,6 +507,20 @@ def _process_scan_file(service, file_info: dict, settings) -> bool:
 			settings=settings,
 			error_title="Drive Scan Error",
 			error_message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		)
+		return False
+
+	# Decode-verify images (v1.8.0, Q7b) — pre-download/validation failures
+	# count toward MAX_DRIVE_RETRIES via the same accounting, not around it.
+	if file_mime_type.startswith("image/") and not is_image_decodable(pdf_content):
+		_record_drive_scan_failure(
+			doctype="OCR Import",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Drive Scan Error",
+			error_message=f"File '{filename}' image content is not decodable. Skipping.",
 		)
 		return False
 
@@ -954,7 +968,7 @@ def _process_dn_scan_file(service, file_info: dict, settings) -> bool:
 		return False
 
 	# Validate magic bytes
-	from erpocr_integration.api import validate_file_magic_bytes
+	from erpocr_integration.api import is_image_decodable, validate_file_magic_bytes
 
 	if not validate_file_magic_bytes(file_content, file_mime_type):
 		_record_drive_scan_failure(
@@ -965,6 +979,20 @@ def _process_dn_scan_file(service, file_info: dict, settings) -> bool:
 			settings=settings,
 			error_title="DN Drive Scan Error",
 			error_message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		)
+		return False
+
+	# Decode-verify images (v1.8.0, Q7b) — counts toward MAX_DRIVE_RETRIES
+	# via the same accounting as every other pre-enqueue validation failure.
+	if file_mime_type.startswith("image/") and not is_image_decodable(file_content):
+		_record_drive_scan_failure(
+			doctype="OCR Delivery Note",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="DN Drive Scan Error",
+			error_message=f"File '{filename}' image content is not decodable. Skipping.",
 		)
 		return False
 
@@ -1147,7 +1175,7 @@ def _process_fleet_scan_file(service, file_info: dict, settings) -> bool:
 		return False
 
 	# Validate magic bytes
-	from erpocr_integration.api import validate_file_magic_bytes
+	from erpocr_integration.api import is_image_decodable, validate_file_magic_bytes
 
 	if not validate_file_magic_bytes(file_content, file_mime_type):
 		_record_drive_scan_failure(
@@ -1158,6 +1186,20 @@ def _process_fleet_scan_file(service, file_info: dict, settings) -> bool:
 			settings=settings,
 			error_title="Fleet Drive Scan Error",
 			error_message=f"File '{filename}' content does not match expected type ({file_mime_type}). Skipping.",
+		)
+		return False
+
+	# Decode-verify images (v1.8.0, Q7b) — counts toward MAX_DRIVE_RETRIES
+	# via the same accounting as every other pre-enqueue validation failure.
+	if file_mime_type.startswith("image/") and not is_image_decodable(file_content):
+		_record_drive_scan_failure(
+			doctype="OCR Fleet Slip",
+			drive_file_id=drive_file_id,
+			filename=filename,
+			retry_count=_next_retry_count,
+			settings=settings,
+			error_title="Fleet Drive Scan Error",
+			error_message=f"File '{filename}' image content is not decodable. Skipping.",
 		)
 		return False
 

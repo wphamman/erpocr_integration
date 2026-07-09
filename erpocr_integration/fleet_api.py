@@ -409,29 +409,14 @@ def _shape_upload_response(ocr_fleet, *, duplicate: bool) -> dict:
 def _verify_image_decodable(content: bytes) -> None:
 	"""Reject a genuinely-undecodable image with a clean 4xx (not a 500).
 
-	Magic bytes prove only the header. ``Image.verify()`` rejects a file that is
-	not a real image (a non-image body, or garbage past a faked header) — the
-	class that 500s inside PIL when Frappe later builds a thumbnail.
-
-	We deliberately do NOT force a full pixel decode (``Image.load()``): Frappe
-	globally sets ``ImageFile.LOAD_TRUNCATED_IMAGES = True``
-	(frappe/core/doctype/file/file.py), so the platform intentionally TOLERATES a
-	merely-truncated image — a photo that lost its tail in transit still attaches
-	and renders, and does not 500. verify() matches that posture: it passes a
-	truncated-but-openable image and rejects only the genuinely broken ones.
-	(A bare-Pillow probe shows load() rejecting truncation, but that flag is False
-	only outside the Frappe runtime — not in production.)
-
-	Pillow ships with Frappe — no new dependency. Images only — callers must NOT
-	pass PDFs (PIL won't raster them).
+	Throwing wrapper around the shared decode gate (``api.is_image_decodable``,
+	where the verify-vs-load rationale lives — v1.8.0 Q7b moved the check there
+	so every image ingest path shares it). Images only — callers must NOT pass
+	PDFs (PIL won't raster them).
 	"""
-	from io import BytesIO
+	from erpocr_integration.api import is_image_decodable
 
-	from PIL import Image
-
-	try:
-		Image.open(BytesIO(content)).verify()
-	except Exception:
+	if not is_image_decodable(content):
 		frappe.throw(
 			_("That image couldn't be read — please retake the photo."),
 			frappe.ValidationError,

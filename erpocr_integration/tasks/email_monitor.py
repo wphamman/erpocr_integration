@@ -328,7 +328,11 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 			ocr_import = None
 			try:
 				# Determine MIME type: prefer email Content-Type header, fall back to filename extension
-				from erpocr_integration.api import SUPPORTED_FILE_TYPES, validate_file_magic_bytes
+				from erpocr_integration.api import (
+					SUPPORTED_FILE_TYPES,
+					is_image_decodable,
+					validate_file_magic_bytes,
+				)
 
 				if attachment_content_type in _SUPPORTED_EMAIL_MIME_TYPES:
 					file_mime_type = attachment_content_type
@@ -341,6 +345,14 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 					frappe.logger().warning(
 						f"Email monitoring: Skipping '{filename}' — content does not match "
 						f"expected file type ({file_mime_type})"
+					)
+					continue
+
+				# Decode-verify images (v1.8.0, Q7b) — same gate as every other
+				# ingest path; an undecodable body 500s in PIL later otherwise.
+				if file_mime_type.startswith("image/") and not is_image_decodable(pdf_content):
+					frappe.logger().warning(
+						f"Email monitoring: Skipping '{filename}' — image content is not decodable"
 					)
 					continue
 

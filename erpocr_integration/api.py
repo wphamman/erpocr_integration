@@ -32,6 +32,36 @@ def validate_file_magic_bytes(content: bytes, mime_type: str) -> bool:
 	return content[:length] == magic
 
 
+def is_image_decodable(content: bytes) -> bool:
+	"""True if PIL can verify the image — the decode gate behind every image ingest.
+
+	Magic bytes prove only the header. ``Image.verify()`` rejects a file that is
+	not a real image (a non-image body, or garbage past a faked header) — the
+	class that 500s inside PIL when Frappe later builds a thumbnail.
+
+	We deliberately do NOT force a full pixel decode (``Image.load()``): Frappe
+	globally sets ``ImageFile.LOAD_TRUNCATED_IMAGES = True``
+	(frappe/core/doctype/file/file.py), so the platform intentionally TOLERATES a
+	merely-truncated image — a photo that lost its tail in transit still attaches
+	and renders, and does not 500. verify() matches that posture: it passes a
+	truncated-but-openable image and rejects only the genuinely broken ones.
+	(A bare-Pillow probe shows load() rejecting truncation, but that flag is False
+	only outside the Frappe runtime — not in production.)
+
+	Pillow ships with Frappe — no new dependency. Images only — callers must NOT
+	pass PDFs (PIL won't raster them).
+	"""
+	from io import BytesIO
+
+	from PIL import Image
+
+	try:
+		Image.open(BytesIO(content)).verify()
+		return True
+	except Exception:
+		return False
+
+
 @frappe.whitelist(methods=["POST"])
 def upload_pdf():
 	"""
@@ -97,6 +127,12 @@ def upload_pdf():
 	# Validate file magic bytes
 	if not validate_file_magic_bytes(file_content, mime_type):
 		frappe.throw(_("File content does not match its file type. The file may be corrupted."))
+
+	# Decode-verify images (v1.8.0, Q7b) — magic bytes prove only the header;
+	# an undecodable body would 500 later inside PIL. Same gate as
+	# upload_fleet_slip. PDFs are not raster-decoded by PIL, so they skip this.
+	if mime_type.startswith("image/") and not is_image_decodable(file_content):
+		frappe.throw(_("That image couldn't be read — it may be corrupted. Please re-scan or re-export it."))
 
 	# Get company from OCR Settings
 	settings = frappe.get_single("OCR Settings")
