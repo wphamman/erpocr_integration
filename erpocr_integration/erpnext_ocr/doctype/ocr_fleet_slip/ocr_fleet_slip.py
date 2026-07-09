@@ -38,6 +38,18 @@ class OCRFleetSlip(Document):
 			if self.vehicle_match_status == "Confirmed":
 				self._apply_vehicle_config_from_link()
 
+		# Q8 (v1.8.0): a Desk-side edit that brings a Fleet Card slip to
+		# "Matched" (e.g. operator confirms the vehicle) is an auto-record
+		# trigger — same gate as the pipeline path. Cheap pre-checks here so
+		# routine saves don't fetch settings; attempt_auto_record re-validates
+		# everything (opt-in setting, confidence, ADR-0003 guards). Recursion
+		# is bounded: mark_recorded's own save re-enters with status
+		# "Completed" and auto_recorded=1, which both fail the gate.
+		if self.status == "Matched" and self.posting_mode == "Fleet Card" and not self.auto_recorded:
+			from erpocr_integration.tasks.auto_record import attempt_auto_record
+
+			attempt_auto_record(self, frappe.get_cached_doc("OCR Settings"))
+
 	def _apply_vehicle_config_from_link(self):
 		"""Re-apply posting config when a Fleet Vehicle is (re-)linked on this slip.
 
@@ -340,13 +352,16 @@ class OCRFleetSlip(Document):
 		self.status = "Completed"
 		self.save()
 
-		frappe.msgprint(
-			_(
-				"Marked as Recorded. The cost is booked from the fleet card provider's "
-				"monthly invoice; this slip is the control record."
-			),
-			indicator="green",
-		)
+		# quiet_mark_recorded: auto-record (background) and the bulk list action
+		# suppress the per-slip toast — one message per slip is noise there.
+		if not self.flags.get("quiet_mark_recorded"):
+			frappe.msgprint(
+				_(
+					"Marked as Recorded. The cost is booked from the fleet card provider's "
+					"monthly invoice; this slip is the control record."
+				),
+				indicator="green",
+			)
 
 	@frappe.whitelist(methods=["POST"])
 	def mark_no_action(self, reason):

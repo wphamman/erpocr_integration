@@ -47,6 +47,8 @@
 		"section_break_result",
 		"document_type",
 		"purchase_invoice",
+		"auto_recorded",
+		"auto_record_skipped_reason",
 		"section_break_drive",
 		"drive_file_id",
 		"drive_retry_count",
@@ -324,6 +326,22 @@
 			"label": "Purchase Invoice",
 			"options": "Purchase Invoice",
 			"read_only": 1
+		},
+		{
+			"fieldname": "auto_recorded",
+			"fieldtype": "Check",
+			"label": "Auto-Recorded",
+			"read_only": 1,
+			"default": "0",
+			"description": "Set automatically when this Fleet Card slip was completed by auto-record without human intervention"
+		},
+		{
+			"fieldname": "auto_record_skipped_reason",
+			"fieldtype": "Small Text",
+			"label": "Auto-Record Skip Reason",
+			"read_only": 1,
+			"hidden": 1,
+			"description": "Why auto-record was not attempted or failed"
 		},
 		{
 			"fieldname": "section_break_drive",

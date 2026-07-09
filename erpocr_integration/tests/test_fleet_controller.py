@@ -19,6 +19,16 @@ class _MockSettings(SimpleNamespace):
 		return getattr(self, key, default)
 
 
+class _FlagsDict(dict):
+	"""frappe._dict-alike: doc.flags supports both attr-set and dict .get()."""
+
+	def __getattr__(self, key):
+		return self.get(key)
+
+	def __setattr__(self, key, value):
+		self[key] = value
+
+
 def _make_settings(**overrides):
 	defaults = dict(
 		default_company="Test Company",
@@ -75,6 +85,9 @@ def _make_fleet_slip(**overrides):
 	doc.drive_folder_path = None
 	doc.source_type = "Gemini Drive Scan"
 	doc.raw_payload = ""
+	doc.auto_recorded = 0
+	doc.auto_record_skipped_reason = ""
+	doc.flags = _FlagsDict()
 	doc.save = MagicMock()
 	doc.reload = MagicMock()
 	doc.db_set = MagicMock()

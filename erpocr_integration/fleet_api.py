@@ -76,6 +76,15 @@ def fleet_gemini_process(
 		ocr_fleet.save(ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
 
+		# Q8 (v1.8.0): opt-in auto-record for high-confidence Fleet Card slips
+		# (mirrors gemini_process → attempt_auto_draft). No-ops unless
+		# OCR Settings.enable_fleet_auto_record is on; never touches Direct
+		# Expense slips; purchase_invoice stays NULL (ADR-0003).
+		from erpocr_integration.tasks.auto_record import attempt_auto_record
+
+		if attempt_auto_record(ocr_fleet, settings):
+			frappe.db.commit()  # nosemgrep
+
 		# Move Drive file to archive after successful extraction
 		if ocr_fleet.drive_file_id:
 			try:
@@ -798,6 +807,77 @@ def retry_fleet_extraction(ocr_fleet_name: str):
 		frappe.throw(_("Failed to start retry. Please try again."))
 
 	frappe.msgprint(_("Retry extraction queued. Please wait a moment and refresh."), indicator="blue")
+
+
+@frappe.whitelist(methods=["POST"])
+def bulk_mark_recorded(names):
+	"""Bulk Mark Recorded for Fleet Card slips (Q8, v1.8.0).
+
+	Backs the OCR Fleet Slip list action. The list selection is UI sugar, not
+	the gate: EVERY row is re-validated server-side — status must be "Matched"
+	(stricter than single mark_recorded, which also accepts Needs Review: bulk
+	is for the verified backlog; Needs Review rows need eyes), posting_mode
+	must be "Fleet Card", and each row then runs the existing mark_recorded()
+	path, which re-enforces per-document write permission, posting_mode, and
+	the vehicle guard. A row that fails any check is skipped with a reason;
+	the rest proceed (ADR-0003: no path here can ever create or link a PI).
+
+	Args:
+		names: list of OCR Fleet Slip names (JSON string or list).
+
+	Returns:
+		{"recorded": [names...], "skipped": [{"name": ..., "reason": ...}, ...]}
+	"""
+	import json
+
+	if isinstance(names, str):
+		try:
+			names = json.loads(names)
+		except ValueError:
+			frappe.throw(_("Invalid selection."))
+	if not isinstance(names, list) or not names:
+		frappe.throw(_("No fleet slips selected."))
+	if len(names) > 200:
+		frappe.throw(_("Too many slips selected — process at most 200 at a time."))
+
+	if not frappe.has_permission("OCR Fleet Slip", "write"):
+		frappe.throw(_("You don't have permission to modify OCR Fleet Slips."))
+
+	recorded = []
+	skipped = []
+	for name in names:
+		try:
+			doc = frappe.get_doc("OCR Fleet Slip", name)
+
+			if doc.posting_mode != "Fleet Card":
+				skipped.append(
+					{
+						"name": name,
+						"reason": _("Not a Fleet Card slip (posting mode: {0})").format(
+							doc.posting_mode or _("unset")
+						),
+					}
+				)
+				continue
+			if doc.status != "Matched":
+				skipped.append(
+					{
+						"name": name,
+						"reason": _("Status is '{0}' (bulk action requires 'Matched')").format(doc.status),
+					}
+				)
+				continue
+
+			doc.flags.quiet_mark_recorded = True
+			doc.mark_recorded()
+			recorded.append(name)
+		except Exception as e:
+			# frappe.throw inside mark_recorded (permission, vehicle guard, …)
+			# lands here — skip the row with its reason, keep going.
+			frappe.clear_messages()
+			skipped.append({"name": name, "reason": str(e) or _("Validation failed")})
+
+	return {"recorded": recorded, "skipped": skipped}
 
 
 @frappe.whitelist(methods=["POST"])
