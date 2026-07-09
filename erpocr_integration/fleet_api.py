@@ -369,7 +369,11 @@ def _apply_vehicle_config(ocr_fleet, vehicle, settings, fail_safe=False):
 	if vehicle.get("custom_fleet_card_provider"):
 		ocr_fleet.posting_mode = "Fleet Card"
 		ocr_fleet.fleet_card_supplier = vehicle.custom_fleet_card_provider
-		ocr_fleet.expense_account = vehicle.get("custom_fleet_control_account") or ""
+		# Q6 (v1.8.0): no expense_account on the Fleet Card path — no PI is ever
+		# created from a Fleet Card slip (ADR-0003), so the control account copied
+		# here since v1.2.0 flowed nowhere. The Fleet Vehicle Custom Field itself
+		# stays (§4a cross-app surface); only the per-slip capture is retired.
+		ocr_fleet.expense_account = ""
 	elif fail_safe:
 		# Provider missing on an API slip → fail safe to review, never invoice path.
 		ocr_fleet.posting_mode = ""

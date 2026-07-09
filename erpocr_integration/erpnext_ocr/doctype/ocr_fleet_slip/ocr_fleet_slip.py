@@ -77,7 +77,10 @@ class OCRFleetSlip(Document):
 		if vehicle.custom_fleet_card_provider:
 			self.posting_mode = "Fleet Card"
 			self.fleet_card_supplier = vehicle.custom_fleet_card_provider
-			self.expense_account = vehicle.custom_fleet_control_account
+			# Q6 (v1.8.0): no expense_account on the Fleet Card path — no PI is
+			# ever created from a Fleet Card slip (ADR-0003), so the control
+			# account copied here since v1.2.0 flowed nowhere.
+			self.expense_account = ""
 		elif fail_safe:
 			# Provider missing on a shell slip → fail safe to review, never invoice.
 			self.posting_mode = ""
