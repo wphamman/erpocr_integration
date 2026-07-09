@@ -386,6 +386,117 @@ class TestCreatePurchaseInvoice:
 		assert pi_dict["taxes_and_charges"] == "SA VAT 15%"
 		assert len(pi_dict["taxes"]) == 1
 
+	def test_pi_actual_template_injects_vat(self, mock_frappe):
+		"""v1.8.0 Q7(a): an Actual-type (customs/import) template on a fleet
+		slip PI gets the extracted VAT injected into the Actual row — the
+		invoice pipeline's injection, now shared. Previously a 0-tax row."""
+		mock_tax = MagicMock()
+		mock_tax.company = "Test Company"
+		mock_tax.taxes = [
+			SimpleNamespace(
+				category="Total",
+				add_deduct_tax="Add",
+				charge_type="Actual",
+				row_id="",
+				account_head="2300 - VAT Input - TC",
+				description="Import VAT (actual)",
+				rate=0.0,
+				cost_center="",
+				account_currency="ZAR",
+				included_in_print_rate=0,
+				included_in_paid_amount=0,
+			)
+		]
+
+		mock_pi = MagicMock()
+		mock_pi.name = "PI-00001"
+		mock_pi.items = [MagicMock()]
+		mock_pi.items[0].item_name = "FUEL-001"
+
+		def get_cached_side_effect(doctype, name=None):
+			if doctype == "Purchase Taxes and Charges Template":
+				return mock_tax
+			return _make_settings()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_side_effect
+		mock_frappe.get_doc.return_value = mock_pi
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_all.return_value = []
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			tax_template="9 - Import with Std VAT",
+			vat_amount=146.74,
+		)
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["taxes_and_charges"] == "9 - Import with Std VAT"
+		assert pi_dict["taxes"][0]["tax_amount"] == 146.74
+
+	def test_pi_mixed_template_does_not_inject(self, mock_frappe):
+		"""v1.8.0 Q7(a): a MIXED template (percentage + auxiliary Actual row)
+		must NOT get the extracted VAT injected on top of its computed
+		percentage rows — that double-taxes (the pre-v1.5.0 invoice-side bug,
+		not to be reintroduced here)."""
+		mock_tax = MagicMock()
+		mock_tax.company = "Test Company"
+		mock_tax.taxes = [
+			SimpleNamespace(
+				category="Total",
+				add_deduct_tax="Add",
+				charge_type="On Net Total",
+				row_id="",
+				account_head="2300 - VAT Input - TC",
+				description="VAT 15%",
+				rate=15.0,
+				cost_center="",
+				account_currency="ZAR",
+				included_in_print_rate=0,
+				included_in_paid_amount=0,
+			),
+			SimpleNamespace(
+				category="Total",
+				add_deduct_tax="Add",
+				charge_type="Actual",
+				row_id="",
+				account_head="5500 - Freight - TC",
+				description="Freight (actual)",
+				rate=0.0,
+				cost_center="",
+				account_currency="ZAR",
+				included_in_print_rate=0,
+				included_in_paid_amount=0,
+			),
+		]
+
+		mock_pi = MagicMock()
+		mock_pi.name = "PI-00001"
+		mock_pi.items = [MagicMock()]
+		mock_pi.items[0].item_name = "FUEL-001"
+
+		def get_cached_side_effect(doctype, name=None):
+			if doctype == "Purchase Taxes and Charges Template":
+				return mock_tax
+			return _make_settings()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_side_effect
+		mock_frappe.get_doc.return_value = mock_pi
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_all.return_value = []
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			tax_template="SA VAT 15% + Freight",
+			vat_amount=146.74,
+		)
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert all("tax_amount" not in row for row in pi_dict["taxes"])
+
 	def test_pi_permission_check(self, mock_frappe):
 		"""Permission check blocks unauthorized PI creation."""
 		mock_frappe.has_permission.return_value = False

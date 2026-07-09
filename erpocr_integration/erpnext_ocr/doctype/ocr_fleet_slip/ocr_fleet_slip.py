@@ -194,34 +194,34 @@ class OCRFleetSlip(Document):
 		if self.fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle"):
 			pi_dict["custom_fleet_vehicle"] = self.fleet_vehicle
 
-		# Apply tax template
+		# Apply tax template via the shared invoice-side builder (v1.8.0, Q7a):
+		# an operator picking an Actual-type import template now gets the
+		# extracted VAT injected into the Actual row instead of a 0-tax draft —
+		# same pure-Actual-template scoping as the invoice path (a mixed template
+		# must not double-tax; that bug was caught on the invoice side pre-v1.5.0).
+		# The adapter maps the slip's flat fields onto the OCR Import shape the
+		# builder reads; subtotal=0 short-circuits the tax-inclusive detector
+		# (a slip is a single amount — no per-line rates to reclassify), so
+		# included_in_print_rate passes through unchanged, as before.
 		if self.tax_template:
-			template = frappe.get_cached_doc("Purchase Taxes and Charges Template", self.tax_template)
-			if template.company and template.company != self.company:
-				frappe.throw(
-					_("Tax Template '{0}' belongs to company '{1}', not '{2}'").format(
-						self.tax_template, template.company, self.company
-					)
-				)
+			from types import SimpleNamespace
 
-			pi_dict["taxes_and_charges"] = self.tax_template
-			pi_dict["taxes"] = []
-			for tax_row in template.taxes:
-				pi_dict["taxes"].append(
-					{
-						"category": tax_row.category,
-						"add_deduct_tax": tax_row.add_deduct_tax,
-						"charge_type": tax_row.charge_type,
-						"row_id": tax_row.row_id,
-						"account_head": tax_row.account_head,
-						"description": tax_row.description,
-						"rate": tax_row.rate,
-						"cost_center": tax_row.cost_center,
-						"account_currency": tax_row.account_currency,
-						"included_in_print_rate": tax_row.included_in_print_rate,
-						"included_in_paid_amount": tax_row.included_in_paid_amount,
-					}
-				)
+			from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+				_build_taxes_from_template,
+			)
+
+			tax_proxy = SimpleNamespace(
+				tax_template=self.tax_template,
+				company=self.company,
+				tax_amount=flt(self.vat_amount),
+				subtotal=0,
+				total_amount=flt(self.total_amount),
+				items=[],
+			)
+			tax_template, taxes = _build_taxes_from_template(tax_proxy)
+			if tax_template:
+				pi_dict["taxes_and_charges"] = tax_template
+				pi_dict["taxes"] = taxes
 
 		pi = frappe.get_doc(pi_dict)
 		pi.flags.ignore_mandatory = True
