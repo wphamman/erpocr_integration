@@ -63,6 +63,7 @@ A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 
 - **Confidence Scoring** — Gemini self-reports extraction confidence (displayed as colour-coded badge)
 - **Stats Dashboard** — Role-gated OCR Stats page: throughput, auto-draft ratio, fallback reasons, per-supplier counts
 - **Dashboard** — Workspace with KPI number cards, status chart, and quick links
+- **Accounts Dashboard** (v1.7.0) — Read-only React SPA at `/accounts` (apps-screen tile "OCR Accounts"): an Overview of actionable queues (Needs Review / Matched / Draft Created / Error × OCR Import / Delivery Note / Fleet Slip) with drill-down lists; rows open the record in Desk for actioning. Ships pre-built (no Node needed at install/deploy); every data call is permission-gated per doctype as the logged-in user.
 
 ## How It Works
 
