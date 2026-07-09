@@ -1,6 +1,6 @@
 {
 	"actions": [],
-	"autoname": "field:ocr_text",
+	"autoname": "hash",
 	"creation": "2025-01-01 00:00:00.000000",
 	"default_view": "List",
 	"doctype": "DocType",
@@ -8,6 +8,7 @@
 	"engine": "InnoDB",
 	"field_order": [
 		"ocr_text",
+		"supplier",
 		"item_code",
 		"source"
 	],
@@ -16,9 +17,18 @@
 			"fieldname": "ocr_text",
 			"fieldtype": "Data",
 			"in_list_view": 1,
+			"in_standard_filter": 1,
 			"label": "OCR Text",
-			"reqd": 1,
-			"unique": 1
+			"reqd": 1
+		},
+		{
+			"fieldname": "supplier",
+			"fieldtype": "Link",
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"label": "Supplier",
+			"options": "Supplier",
+			"description": "Optional (v1.8.0). A supplier-scoped alias beats the global one during matching; blank = global, applies to all suppliers."
 		},
 		{
 			"fieldname": "item_code",
@@ -44,7 +54,7 @@
 	"modified_by": "Administrator",
 	"module": "ERPNext OCR",
 	"name": "OCR Item Alias",
-	"naming_rule": "By fieldname",
+	"naming_rule": "Random",
 	"owner": "Administrator",
 	"permissions": [
 		{

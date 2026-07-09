@@ -536,9 +536,11 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 def _run_matching(ocr_import, header_fields: dict, settings):
 	"""Run supplier and item matching on an OCR Import record.
 
-	Item matching pipeline (precedence order):
+	Item matching pipeline (precedence order; v1.8.0 split the alias tier):
 	  1. `match_item_by_supplier_part` — Item Supplier lookup (supplier, product_code)
-	  2. `match_item` (alias / Item.item_name / Item.name exact match on description)
+	  2. `match_item` — supplier-scoped alias → global alias → Item.item_name /
+	     Item.name exact match on description (Q7c: a supplier-scoped alias
+	     beats the global one; every pre-v1.8.0 alias stays global)
 	  3. `match_service_item` — pattern-based service mapping
 	  4. `match_item_fuzzy` — difflib similarity on description
 	  5. `default_item` fallback — set in OCR Settings, status "Suggested"
@@ -593,9 +595,9 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 				matched_item = supplier_part_item
 				match_status = supplier_part_status  # "Auto Matched"
 
-		# Tier 2: alias / exact name / exact item_code (description-based, global)
+		# Tier 2: alias (supplier-scoped beats global) / exact name / exact item_code
 		if not matched_item and item.description_ocr:
-			matched_item, match_status = match_item(item.description_ocr)
+			matched_item, match_status = match_item(item.description_ocr, supplier=ocr_import.supplier)
 
 		# Tier 3: service mapping (pattern → item + name + GL + CC)
 		if not matched_item and item.description_ocr:

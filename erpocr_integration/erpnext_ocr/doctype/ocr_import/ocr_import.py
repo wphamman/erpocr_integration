@@ -421,23 +421,45 @@ class OCRImport(Document):
 		inserts a missing alias but never rewrites an existing one — otherwise
 		any later save of a stale still-Confirmed record would silently revert
 		a newer curated alias.
+
+		v1.8.0 (Q7c): learning is SUPPLIER-SCOPED when the parent supplier is
+		known — the new row (or correction) applies only to this supplier, so
+		confirming "Bracket 40mm" → ITEM-A for supplier A can no longer clobber
+		the mapping supplier B relies on. Global rows (all pre-v1.8.0 aliases,
+		plus confirms without a supplier) are never rewritten by a
+		supplier-scoped confirm — they stay the fallback tier.
 		"""
 		ocr_text = item.description_ocr.strip()
 		if not ocr_text:
 			return
 
-		existing_item = frappe.db.get_value("OCR Item Alias", ocr_text, "item_code")
-		if existing_item is None:
+		supplier = (self.supplier or "").strip()
+		if supplier:
+			filters = {"ocr_text": ocr_text, "supplier": supplier}
+		else:
+			filters = {"ocr_text": ocr_text, "supplier": ["is", "not set"]}
+
+		existing = frappe.get_all(
+			"OCR Item Alias",
+			filters=filters,
+			fields=["name", "item_code"],
+			limit_page_length=1,
+			ignore_permissions=True,
+		)
+		if not existing:
 			frappe.get_doc(
 				{
 					"doctype": "OCR Item Alias",
 					"ocr_text": ocr_text,
+					"supplier": supplier,
 					"item_code": item.item_code,
 					"source": "Auto",
 				}
 			).insert(ignore_permissions=True)
-		elif allow_update and existing_item != item.item_code:
-			frappe.db.set_value("OCR Item Alias", ocr_text, {"item_code": item.item_code, "source": "Auto"})
+		elif allow_update and existing[0].item_code != item.item_code:
+			frappe.db.set_value(
+				"OCR Item Alias", existing[0].name, {"item_code": item.item_code, "source": "Auto"}
+			)
 
 	def _save_service_mapping(self, item):
 		"""

@@ -64,14 +64,19 @@ def match_supplier(ocr_text: str) -> tuple[str | None, str]:
 	return None, "Unmatched"
 
 
-def match_item(ocr_text: str) -> tuple[str | None, str]:
+def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, str]:
 	"""
 	Attempt to match an OCR-extracted item description to an ERPNext Item.
 
-	Matching priority:
-	1. Exact match in OCR Item Alias table (learned from previous confirmations)
-	2. Exact match against Item.item_name
-	3. Exact match against Item.name (item_code)
+	Matching priority (v1.8.0, Q7c — supplier-scoped aliases):
+	1. Supplier-scoped OCR Item Alias (exact ocr_text + this supplier) — only
+	   when the caller passes the confirmed supplier. Beats the global alias so
+	   the same printed description can map to different items per supplier
+	   (the cross-supplier collision case).
+	2. Global OCR Item Alias (exact ocr_text, blank supplier) — every
+	   pre-v1.8.0 alias row lands here unchanged; the fallback tier.
+	3. Exact match against Item.item_name
+	4. Exact match against Item.name (item_code)
 
 	Returns:
 		tuple: (item_code or None, match_status)
@@ -80,15 +85,30 @@ def match_item(ocr_text: str) -> tuple[str | None, str]:
 		return None, "Unmatched"
 
 	ocr_text_stripped = ocr_text.strip()
+	supplier = (supplier or "").strip()
 
-	# 1. Check alias table (exact match)
-	alias = frappe.db.get_value(
+	# 1. Supplier-scoped alias (exact match) — highest description-tier precision
+	if supplier:
+		alias = frappe.db.get_value(
+			"OCR Item Alias",
+			{"ocr_text": ocr_text_stripped, "supplier": supplier},
+			"item_code",
+		)
+		if alias:
+			return alias, "Auto Matched"
+
+	# 2. Global alias (exact match, blank supplier). The "is not set" filter
+	# keeps a supplier-scoped row from shadowing other suppliers' lines —
+	# same NULL-filter pattern as match_service_item's generic tier.
+	rows = frappe.get_all(
 		"OCR Item Alias",
-		{"ocr_text": ocr_text_stripped},
-		"item_code",
+		filters={"ocr_text": ocr_text_stripped, "supplier": ["is", "not set"]},
+		fields=["item_code"],
+		limit_page_length=1,
+		ignore_permissions=True,
 	)
-	if alias:
-		return alias, "Auto Matched"
+	if rows:
+		return rows[0].item_code, "Auto Matched"
 
 	# 2. Check Item master (exact item_name match)
 	item = frappe.db.get_value(
