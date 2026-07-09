@@ -205,6 +205,7 @@ def reset_frappe_mock():
 	_frappe_mock.db.exists.side_effect = None
 	_frappe_mock.db.commit.reset_mock()
 	_frappe_mock.db.rollback.reset_mock()
+	_frappe_mock.db.savepoint.reset_mock()
 	_frappe_mock.clear_messages.reset_mock()
 	_frappe_mock.db.sql.reset_mock()
 	_frappe_mock.db.sql.return_value = []

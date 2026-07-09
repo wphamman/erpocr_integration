@@ -612,9 +612,11 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 				if service_match.get("item_name"):
 					item.item_name = service_match["item_name"]
 
-		# Tier 4: fuzzy on description
+		# Tier 4: fuzzy on description (alias pool scoped: global + this supplier)
 		if not matched_item and item.description_ocr:
-			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(item.description_ocr, fuzzy_threshold)
+			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(
+				item.description_ocr, fuzzy_threshold, supplier=ocr_import.supplier
+			)
 			if fuzzy_item:
 				matched_item = fuzzy_item
 				match_status = fuzzy_status  # "Suggested"

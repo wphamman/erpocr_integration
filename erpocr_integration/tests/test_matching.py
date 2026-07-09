@@ -189,6 +189,48 @@ class TestSupplierScopedItemAlias:
 		assert match_item("Bracket 40mm", supplier="Supplier C") == (None, "Unmatched")
 		assert match_item("Bracket 40mm") == (None, "Unmatched")
 
+	def test_fuzzy_tier_excludes_other_suppliers_scoped_aliases(self, mock_frappe):
+		"""The Q7c invariant holds one tier down: supplier A's scoped alias
+		must not become a fuzzy 'Suggested' candidate on supplier B's lines."""
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(ocr_text="Bracket 40mm", item_code="ITEM-A", supplier="Supplier A")]
+				if doctype == "OCR Item Alias"
+				else []
+			)
+		)
+		from erpocr_integration.tasks.matching import match_item_fuzzy
+
+		# Supplier B: A's scoped alias is not a candidate → no match
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80, supplier="Supplier B")
+		assert result is None
+		assert status == "Unmatched"
+
+		# Supplier A: its own scoped alias IS a candidate
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80, supplier="Supplier A")
+		assert result == "ITEM-A"
+		assert status == "Suggested"
+
+		# No supplier (e.g. unmatched-supplier invoice): scoped rows excluded
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80)
+		assert result is None
+
+	def test_fuzzy_tier_global_aliases_still_candidates(self, mock_frappe):
+		"""Global (blank-supplier) alias rows keep working in the fuzzy pool
+		for every supplier — the pre-v1.8.0 behavior."""
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(ocr_text="Bracket 40mm", item_code="ITEM-G", supplier=None)]
+				if doctype == "OCR Item Alias"
+				else []
+			)
+		)
+		from erpocr_integration.tasks.matching import match_item_fuzzy
+
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80, supplier="Supplier B")
+		assert result == "ITEM-G"
+		assert status == "Suggested"
+
 	def test_run_matching_passes_supplier_to_alias_tier(self, mock_frappe):
 		"""End-to-end through api._run_matching: the matched supplier flows
 		into the alias tier, so the supplier-scoped alias decides the line."""

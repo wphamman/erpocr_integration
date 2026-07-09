@@ -72,18 +72,22 @@ def reconcile_statement(ocr_statement) -> None:
 	def _amount_matches(c, amount):
 		return abs((c["grand_total"] or 0) - amount) < 0.01
 
+	# getdate() both sides (v1.8.0 hardening): posting_date comes back as a
+	# date object, period_from as a Data/Date field value — raw str()
+	# comparison silently mis-orders on any format mismatch (and "None"
+	# compared as a string). Parsed once here; used by _in_period and the
+	# reverse check below.
+	period_from_date = frappe.utils.getdate(ocr_statement.period_from) if ocr_statement.period_from else None
+
 	def _in_period(c):
-		# getdate() both sides (v1.8.0 hardening): posting_date comes back as a
-		# date object, period_from as a Data/Date field value — raw str()
-		# comparison silently mis-orders on any format mismatch (and "None"
-		# compared as a string). A candidate without a posting_date is not
-		# provably in-period, so it is treated as brought-forward.
-		if not ocr_statement.period_from:
+		# A candidate without a posting_date is not provably in-period, so it
+		# is treated as brought-forward.
+		if not period_from_date:
 			return True
 		posting_date = c.get("posting_date")
 		if not posting_date:
 			return False
-		return frappe.utils.getdate(posting_date) >= frappe.utils.getdate(ocr_statement.period_from)
+		return frappe.utils.getdate(posting_date) >= period_from_date
 
 	# Forward reconciliation: match each statement line to a PI
 	for item in ocr_statement.items:
@@ -156,9 +160,9 @@ def reconcile_statement(ocr_statement) -> None:
 			if (item.reference or "").strip()
 		}
 		for pi in all_pis:
-			# getdate() both sides (v1.8.0 hardening) — same rationale as
-			# _in_period above; submitted PIs always carry a posting_date.
-			if frappe.utils.getdate(pi.get("posting_date")) < frappe.utils.getdate(ocr_statement.period_from):
+			# getdate() (v1.8.0 hardening) — same rationale as period_from_date
+			# above; submitted PIs always carry a posting_date.
+			if frappe.utils.getdate(pi.get("posting_date")) < period_from_date:
 				continue
 			if pi["name"] in matched_pi_names:
 				continue

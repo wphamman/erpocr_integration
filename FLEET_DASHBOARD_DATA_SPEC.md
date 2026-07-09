@@ -50,7 +50,7 @@ Pending → Needs Review → Matched → Draft Created → Completed
 | `vehicle_match_status` | Select | `Auto Matched`, `Suggested`, `Unmatched`, `Confirmed` |
 | `posting_mode` | Select | `Fleet Card` or `Direct Expense` (auto-set from vehicle config) |
 | `fleet_card_supplier` | Link → Supplier | Supplier for the PI (fleet card provider or default supplier) |
-| `expense_account` | Link → Account | Control account (fleet card) or expense account (direct) |
+| `expense_account` | Link → Account | Expense account (Direct Expense slips). **Blank on Fleet Card slips since v1.8.0 (Q6)** — no PI is created on that path, so the control account is no longer captured per-slip; read it from `Fleet Vehicle.custom_fleet_control_account` if needed |
 | `cost_center` | Link → Cost Center | From vehicle config or manually set |
 
 #### Fuel-Specific (only populated when `slip_type = Fuel`)

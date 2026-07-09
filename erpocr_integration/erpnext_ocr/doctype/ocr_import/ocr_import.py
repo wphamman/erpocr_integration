@@ -439,10 +439,15 @@ class OCRImport(Document):
 		else:
 			filters = {"ocr_text": ocr_text, "supplier": ["is", "not set"]}
 
+		# order_by is load-bearing (R8): duplicates are possible now that the
+		# ocr_text unique index is gone. Corrections must target the SAME row
+		# match_item's read returns (most recently modified), or a correction
+		# could land on a row the matcher never surfaces.
 		existing = frappe.get_all(
 			"OCR Item Alias",
 			filters=filters,
 			fields=["name", "item_code"],
+			order_by="modified desc, name asc",
 			limit_page_length=1,
 			ignore_permissions=True,
 		)

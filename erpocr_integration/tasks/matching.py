@@ -100,10 +100,15 @@ def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, 
 	# 2. Global alias (exact match, blank supplier). The "is not set" filter
 	# keeps a supplier-scoped row from shadowing other suppliers' lines —
 	# same NULL-filter pattern as match_service_item's generic tier.
+	# order_by is load-bearing (R8): duplicates are possible now that the
+	# ocr_text unique index is gone — most-recently-curated row wins,
+	# deterministically on v15 AND v16 (same order as _save_item_alias's
+	# correction target, so reads and corrections hit the same row).
 	rows = frappe.get_all(
 		"OCR Item Alias",
 		filters={"ocr_text": ocr_text_stripped, "supplier": ["is", "not set"]},
 		fields=["item_code"],
+		order_by="modified desc, name asc",
 		limit_page_length=1,
 		ignore_permissions=True,
 	)
@@ -248,16 +253,24 @@ def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | No
 	return None, "Unmatched", 0
 
 
-def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, str, float]:
+def match_item_fuzzy(
+	ocr_text: str, threshold: float = 80, supplier: str | None = None
+) -> tuple[str | None, str, float]:
 	"""
 	Fuzzy fallback for item matching using difflib.SequenceMatcher.
 
 	Called only when exact matching (match_item) fails.
 	Compares OCR text against all active items and existing aliases.
 
+	The alias pool honours Q7c scoping (v1.8.0): global rows plus rows scoped
+	to the passed supplier — supplier A's scoped alias must not become a
+	fuzzy "Suggested" candidate on supplier B's lines (the cross-supplier
+	collision would otherwise re-enter one tier below the exact match).
+
 	Args:
 		ocr_text: OCR-extracted item description or product code
 		threshold: Minimum similarity score (0-100) to consider a match
+		supplier: confirmed supplier — includes that supplier's scoped aliases
 
 	Returns:
 		tuple: (item_code or None, "Suggested" or "Unmatched", confidence_score)
@@ -287,16 +300,21 @@ def match_item_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, 
 				best_score = score
 				best_match = i.name
 
-	# Also check alias table
+	# Also check alias table — global rows + this supplier's scoped rows only
+	# (Python-side filter: one query, and NULL/"" both count as global).
+	supplier = (supplier or "").strip()
 	aliases = frappe.get_all(
 		"OCR Item Alias",
-		fields=["ocr_text", "item_code"],
+		fields=["ocr_text", "item_code", "supplier"],
 		limit_page_length=0,
 		ignore_permissions=True,
 	)
 	for a in aliases:
 		if not a.ocr_text:
 			continue
+		alias_supplier = getattr(a, "supplier", None)
+		if alias_supplier and alias_supplier != supplier:
+			continue  # another supplier's scoped alias — not a candidate here
 		score = SequenceMatcher(None, ocr_lower, a.ocr_text.lower()).ratio() * 100
 		if score > best_score:
 			best_score = score

@@ -73,17 +73,14 @@ def fleet_gemini_process(
 			fail_safe = (ocr_fleet.source_type or "").startswith("Gemini Shell")
 			_run_fleet_matching(ocr_fleet, settings, fail_safe=fail_safe)
 
+		# Q8 (v1.8.0): this save is also the pipeline's auto-record trigger —
+		# on_update (fired inside save) runs attempt_auto_record for Matched
+		# Fleet Card slips when OCR Settings.enable_fleet_auto_record is on.
+		# The commit below persists the outcome (Completed + audit fields, or
+		# the skip reason). No explicit call here: it would re-evaluate the
+		# same gate a second time on the same save.
 		ocr_fleet.save(ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
-
-		# Q8 (v1.8.0): opt-in auto-record for high-confidence Fleet Card slips
-		# (mirrors gemini_process → attempt_auto_draft). No-ops unless
-		# OCR Settings.enable_fleet_auto_record is on; never touches Direct
-		# Expense slips; purchase_invoice stays NULL (ADR-0003).
-		from erpocr_integration.tasks.auto_record import attempt_auto_record
-
-		if attempt_auto_record(ocr_fleet, settings):
-			frappe.db.commit()  # nosemgrep
 
 		# Move Drive file to archive after successful extraction
 		if ocr_fleet.drive_file_id:
@@ -845,7 +842,14 @@ def bulk_mark_recorded(names):
 
 	recorded = []
 	skipped = []
-	for name in names:
+	for idx, name in enumerate(names):
+		# Per-row savepoint (bench-verified API): a row that fails mid-save
+		# must roll back ITS OWN partial writes — without this, a save that
+		# dies after db_update leaves status=Completed in the transaction
+		# while the row is reported "skipped", and request-end commit ships
+		# the contradiction. Same pattern as core bulk actions.
+		savepoint = f"bulk_mark_recorded_{idx}"
+		frappe.db.savepoint(savepoint)
 		try:
 			doc = frappe.get_doc("OCR Fleet Slip", name)
 
@@ -873,7 +877,9 @@ def bulk_mark_recorded(names):
 			recorded.append(name)
 		except Exception as e:
 			# frappe.throw inside mark_recorded (permission, vehicle guard, …)
-			# lands here — skip the row with its reason, keep going.
+			# lands here — roll back this row's partial writes, skip it with
+			# its reason, keep going.
+			frappe.db.rollback(save_point=savepoint)
 			frappe.clear_messages()
 			skipped.append({"name": name, "reason": str(e) or _("Validation failed")})
 

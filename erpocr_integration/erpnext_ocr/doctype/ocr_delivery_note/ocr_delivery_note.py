@@ -73,19 +73,31 @@ class OCRDeliveryNote(Document):
 			).insert(ignore_permissions=True)
 
 	def _save_item_alias(self, item):
-		"""Save item alias for future auto-matching."""
+		"""Save item alias for future auto-matching.
+
+		v1.8.0 (Q7c): OCR Item Alias is hash-named now, so existence MUST be
+		checked by ocr_text + supplier filters, never by document name (the
+		old name-based exists() would always miss post-v1.8.0 rows and insert
+		unbounded duplicates on every DN re-save). Supplier-scoped when the
+		DN's supplier is known — same learning semantics as the invoice side.
+		"""
 		ocr_text = item.description_ocr.strip()
 		if not ocr_text:
 			return
-		if not frappe.db.exists("OCR Item Alias", ocr_text):
-			frappe.get_doc(
-				{
-					"doctype": "OCR Item Alias",
-					"ocr_text": ocr_text,
-					"item_code": item.item_code,
-					"source": "Auto",
-				}
-			).insert(ignore_permissions=True)
+
+		supplier = (self.supplier or "").strip()
+		filters = {"ocr_text": ocr_text, "supplier": supplier or ["is", "not set"]}
+		if frappe.get_all("OCR Item Alias", filters=filters, limit_page_length=1, ignore_permissions=True):
+			return
+		frappe.get_doc(
+			{
+				"doctype": "OCR Item Alias",
+				"ocr_text": ocr_text,
+				"supplier": supplier,
+				"item_code": item.item_code,
+				"source": "Auto",
+			}
+		).insert(ignore_permissions=True)
 
 	# Stale field clearing: when supplier changes, clear PO and item-level refs
 	# (handled client-side in ocr_delivery_note.js — same pattern as OCR Import)

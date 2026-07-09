@@ -45,7 +45,11 @@ class OCRFleetSlip(Document):
 		# everything (opt-in setting, confidence, ADR-0003 guards). Recursion
 		# is bounded: mark_recorded's own save re-enters with status
 		# "Completed" and auto_recorded=1, which both fail the gate.
-		if self.status == "Matched" and self.posting_mode == "Fleet Card" and not self.auto_recorded:
+		# self.get() (not attribute access): auto_recorded is a v1.8.0 field —
+		# in the deploy-to-migrate window a doc loaded from a pre-migrate row
+		# lacks the attribute, and a hard AttributeError here would break
+		# EVERY slip save (incl. driver uploads) until migrate runs.
+		if self.status == "Matched" and self.posting_mode == "Fleet Card" and not self.get("auto_recorded"):
 			from erpocr_integration.tasks.auto_record import attempt_auto_record
 
 			attempt_auto_record(self, frappe.get_cached_doc("OCR Settings"))
@@ -179,8 +183,14 @@ class OCRFleetSlip(Document):
 			"description": self._build_description(),
 		}
 
-		if self.expense_account:
-			pi_item["expense_account"] = self.expense_account
+		# Q6 (v1.8.0): Fleet Card slips no longer carry an expense_account, so
+		# a slip flipped to Direct Expense during review (fleet-card vehicle
+		# filled on a business card) arrives here with it blank — fall back to
+		# the configured fleet expense account rather than silently letting
+		# ERPNext pick the item/company default.
+		expense_account = self.expense_account or settings.get("fleet_expense_account")
+		if expense_account:
+			pi_item["expense_account"] = expense_account
 
 		if self.cost_center:
 			pi_item["cost_center"] = self.cost_center

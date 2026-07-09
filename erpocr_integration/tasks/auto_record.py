@@ -28,6 +28,26 @@ from frappe.utils import flt
 _CONFIRMED_VEHICLE_STATUSES = frozenset({"Auto Matched", "Confirmed"})
 
 
+def _write_skip_reason(ocr_fleet, reason: str) -> None:
+	"""Persist the skip reason without touching `modified`.
+
+	This runs inside on_update — bumping `modified` here would make the
+	operator's just-saved form stale ("Document has been modified after you
+	opened it" on their next save). Skips the write when the reason is
+	already recorded (routine re-saves of a non-qualifying slip).
+	"""
+	if (getattr(ocr_fleet, "auto_record_skipped_reason", "") or "") == reason:
+		return
+	ocr_fleet.auto_record_skipped_reason = reason
+	frappe.db.set_value(
+		"OCR Fleet Slip",
+		ocr_fleet.name,
+		"auto_record_skipped_reason",
+		reason,
+		update_modified=False,
+	)
+
+
 def _is_high_confidence(ocr_fleet) -> tuple[bool, str]:
 	"""Check whether a Fleet Card slip is safe to auto-record.
 
@@ -78,7 +98,8 @@ def attempt_auto_record(ocr_fleet, settings) -> bool:
 	if ocr_fleet.posting_mode != "Fleet Card":
 		return False
 
-	if ocr_fleet.auto_recorded:
+	# .get(): tolerate pre-migrate rows that lack the v1.8.0 column.
+	if ocr_fleet.get("auto_recorded"):
 		return False
 
 	# Defence in depth (ADR-0003): a Fleet Card slip must never carry a PI.
@@ -86,17 +107,12 @@ def attempt_auto_record(ocr_fleet, settings) -> bool:
 		return False
 
 	if ocr_fleet.status != "Matched":
-		frappe.db.set_value(
-			"OCR Fleet Slip",
-			ocr_fleet.name,
-			"auto_record_skipped_reason",
-			f"Status is '{ocr_fleet.status}' (requires 'Matched')",
-		)
+		_write_skip_reason(ocr_fleet, f"Status is '{ocr_fleet.status}' (requires 'Matched')")
 		return False
 
 	is_high, reason = _is_high_confidence(ocr_fleet)
 	if not is_high:
-		frappe.db.set_value("OCR Fleet Slip", ocr_fleet.name, "auto_record_skipped_reason", reason)
+		_write_skip_reason(ocr_fleet, reason)
 		return False
 
 	try:
@@ -109,12 +125,20 @@ def attempt_auto_record(ocr_fleet, settings) -> bool:
 		ocr_fleet.mark_recorded()
 		return True
 	except Exception as e:
+		# mark_recorded's frappe.throw queued its message before raising —
+		# clear it, or the operator's (successful) outer save renders a red
+		# error dialog for a slip that simply parked for manual review.
+		frappe.clear_messages()
+		# Persist the flag rollback too — if mark_recorded threw AFTER its
+		# save, the DB would otherwise keep auto_recorded=1 alongside a skip
+		# reason, contradicting the audit contract.
 		ocr_fleet.auto_recorded = 0
+		ocr_fleet.auto_record_skipped_reason = f"Auto-record failed: {e}"
 		frappe.db.set_value(
 			"OCR Fleet Slip",
 			ocr_fleet.name,
-			"auto_record_skipped_reason",
-			f"Auto-record failed: {e}",
+			{"auto_recorded": 0, "auto_record_skipped_reason": ocr_fleet.auto_record_skipped_reason},
+			update_modified=False,
 		)
 		frappe.log_error(
 			title="Fleet Auto-Record Failed",

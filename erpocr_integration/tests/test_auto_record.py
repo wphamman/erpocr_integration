@@ -138,6 +138,27 @@ class TestAutoRecordGate:
 		assert attempt_auto_record(doc, _settings()) is False
 		mock_frappe.db.set_value.assert_not_called()
 
+	def test_skip_reason_write_never_bumps_modified(self, mock_frappe):
+		"""The skip-reason write runs inside on_update — bumping `modified`
+		would make the operator's just-saved form stale ('Document has been
+		modified') on their next save."""
+		doc = _fleet_card_slip(vehicle_match_status="Suggested")
+
+		attempt_auto_record(doc, _settings())
+
+		assert mock_frappe.db.set_value.call_args.kwargs["update_modified"] is False
+
+	def test_unchanged_skip_reason_not_rewritten(self, mock_frappe):
+		"""Routine re-saves of a non-qualifying slip must not rewrite the
+		identical reason on every save."""
+		doc = _fleet_card_slip(vehicle_match_status="Suggested")
+
+		attempt_auto_record(doc, _settings())
+		assert mock_frappe.db.set_value.call_count == 1
+
+		attempt_auto_record(doc, _settings())  # same doc, same reason
+		assert mock_frappe.db.set_value.call_count == 1  # no second write
+
 
 # ---------------------------------------------------------------------------
 # The happy path — and the ADR-0003 invariant
@@ -185,15 +206,22 @@ class TestAutoRecordHappyPath:
 		mock_frappe.msgprint.assert_not_called()
 
 	def test_mark_recorded_failure_falls_back(self, mock_frappe):
-		"""A save failure inside mark_recorded → flag reset, reason recorded,
-		error logged, slip left for manual handling."""
+		"""A save failure inside mark_recorded → flag reset PERSISTED (not just
+		in-memory), reason recorded, queued throw-message cleared, error
+		logged, slip left for manual handling."""
 		doc = _fleet_card_slip()
 		doc.save = MagicMock(side_effect=Exception("DB gone"))
 
 		assert attempt_auto_record(doc, _settings()) is False
 
 		assert doc.auto_recorded == 0
-		assert "Auto-record failed" in mock_frappe.db.set_value.call_args[0][3]
+		written = mock_frappe.db.set_value.call_args[0][2]
+		assert written["auto_recorded"] == 0
+		assert "Auto-record failed" in written["auto_record_skipped_reason"]
+		# modified must NOT be bumped (this can run inside on_update — a bump
+		# would make the operator's open form stale)
+		assert mock_frappe.db.set_value.call_args.kwargs["update_modified"] is False
+		assert mock_frappe.clear_messages.called
 		assert mock_frappe.log_error.called
 
 
@@ -302,6 +330,25 @@ class TestBulkMarkRecorded:
 		assert result["recorded"] == ["OCR-FS-ALLOWED"]
 		assert [s["name"] for s in result["skipped"]] == ["OCR-FS-DENIED"]
 		assert denied.status == "Matched"
+
+	def test_failed_row_rolls_back_to_savepoint(self, mock_frappe):
+		"""A row that throws mid-save must roll back its own partial writes —
+		without the savepoint, a save that dies after db_update would leave
+		status=Completed in the transaction while the row reports skipped."""
+		bad = _fleet_card_slip()
+		bad.name = "OCR-FS-BAD"
+		bad.save = MagicMock(side_effect=Exception("hook exploded"))
+		good = _fleet_card_slip()
+		good.name = "OCR-FS-GOOD"
+		mock_frappe.get_doc = MagicMock(side_effect=self._docs_by_name([bad, good]))
+
+		result = bulk_mark_recorded(["OCR-FS-BAD", "OCR-FS-GOOD"])
+
+		assert result["recorded"] == ["OCR-FS-GOOD"]
+		assert [s["name"] for s in result["skipped"]] == ["OCR-FS-BAD"]
+		# every row opened a savepoint; the failed row rolled back to ITS OWN
+		assert mock_frappe.db.savepoint.call_count == 2
+		mock_frappe.db.rollback.assert_called_once_with(save_point="bulk_mark_recorded_0")
 
 	def test_json_string_names_accepted(self, mock_frappe):
 		good = _fleet_card_slip()
