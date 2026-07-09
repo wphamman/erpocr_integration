@@ -145,7 +145,7 @@
 - **Pointer:** CLAUDE.md *Must-know gotchas*; [../implementation-patterns.md](../implementation-patterns.md) → *Auto-Draft*. See [[project_erpocr_phase78_verification]].
 
 ## ADR-0010 — Fold `starpops_accounts` into `erpocr_integration` as one app/install  **[Reconstructed]**
-- **Status:** Accepted (decision made) · **NOT yet executed** — gated on Danell UAT
+- **Status:** Accepted · **shipped v1.7.0** (merge `762301d`, 2026-07-09)
 - **Decision:** The `starpops_accounts` React SPA (read-only accounting-ops dashboard, Mint-pattern)
   will be folded **into** this app: `frontend/` at repo root, SPA-serving Python (`website_route_rules`
   + `add_to_apps_screen` + permission gating) into the OCR namespace, Vite base
@@ -159,7 +159,7 @@
 - **Pointer:** worktree `../erpocr-foldin` (branch `feature/starpops-accounts-foldin`). See [[project_starpops_accounts_mvp]]. **Execution/rebase state → OPEN-QUESTIONS Q5.**
 
 ## ADR-0011 — Commit the SPA's built dist; no deploy-time build step
-- **Status:** Accepted 2026-07-09 · lands with the v1.7.0 fold-in merge (builder `feature/starpops-accounts-foldin` @ `50fa1fb`)
+- **Status:** Accepted 2026-07-09 · **shipped v1.7.0** (merge `762301d`); dist committed under `public/accounts/`, verified fresh at merge
 - **Decision:** The folded-in `starpops_accounts` SPA ships its **built assets committed to git** (`public/accounts/*.js+*.css` + `www/accounts.html`, excluding the ~1.76MB sourcemap; ~380KB hashed assets per release). The app installs + serves the SPA with **zero Node at deploy** — no `npm run build` step in Starktail's image.
 - **Why:** (a) matches how `fleet_management` already ships its dashboard to the **same Starktail host**; (b) preserves the app's stated goal of installing on **self-hosted AND Frappe Cloud** — Frappe Cloud won't run a custom Vite build, so a deploy-time build would break `/accounts` there; (c) eliminates a cross-team dependency (a Starktail image-build change) and its `/accounts`-404 failure mode.
 - **Rejected:** gitignore the dist + add `cd frontend && npm ci && npm run build` to Starktail's image (the fold-in kickoff's original assumption, inherited from the standalone-app era) — more operational surface, a new failure mode, and breaks Frappe-Cloud installability. **Supersedes ADR-0010's Node-step consequence.**
