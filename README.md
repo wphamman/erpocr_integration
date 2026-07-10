@@ -58,7 +58,7 @@ A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 
 ### Shared Features
 - **Gemini AI Extraction** — Structured JSON output with confidence scoring
 - **Tax Template Mapping** — Auto-selects VAT or non-VAT template based on detected tax amounts
-- **Optional Auto-Draft** — Off by default; when enabled, high-confidence extractions (supplier + all items exact/alias matched) auto-create a draft document, skipping the manual review-and-click step. Low-confidence records still fall through to manual review.
+- **Optional Auto-Draft** — Off by default; when enabled, high-confidence extractions (supplier + all items exact/alias matched) auto-create a draft document, skipping the manual review-and-click step. Low-confidence records still fall through to manual review. Since v1.9.0 a totals-reconciliation gate also parks any invoice whose line totals don't reconcile with its stated subtotal/total (e.g. an unmodelled global discount) — with a skip reason naming both amounts.
 - **Google Drive Archiving** — Organises processed files into Year/Month/Supplier folders
 - **Confidence Scoring** — Gemini self-reports extraction confidence (displayed as colour-coded badge)
 - **Stats Dashboard** — Role-gated OCR Stats page: throughput, auto-draft ratio, fallback reasons, per-supplier counts
