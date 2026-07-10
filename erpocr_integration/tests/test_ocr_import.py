@@ -1831,14 +1831,20 @@ class TestAliasUpsert:
 		mock_frappe.db.set_value.assert_not_called()
 
 	def test_item_alias_corrected(self, mock_frappe):
-		doc = _make_ocr_import()
+		"""v1.8.0 (Q7c): with a supplier on the record, the correction targets
+		the SUPPLIER-SCOPED row (by name) — never a global row."""
+		doc = _make_ocr_import()  # supplier="Test Supplier"
 		item = _make_item(description_ocr="Widget", item_code="ITEM-B")
-		mock_frappe.db.get_value.return_value = "ITEM-A"
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(name="ALIAS-0001", item_code="ITEM-A")])
 
 		doc._save_item_alias(item)
 
+		assert mock_frappe.get_all.call_args.kwargs["filters"] == {
+			"ocr_text": "Widget",
+			"supplier": "Test Supplier",
+		}
 		mock_frappe.db.set_value.assert_called_once_with(
-			"OCR Item Alias", "Widget", {"item_code": "ITEM-B", "source": "Auto"}
+			"OCR Item Alias", "ALIAS-0001", {"item_code": "ITEM-B", "source": "Auto"}
 		)
 
 	def test_item_alias_stale_row_cannot_clobber(self, mock_frappe):
@@ -1847,18 +1853,72 @@ class TestAliasUpsert:
 		but may still insert a missing one."""
 		doc = _make_ocr_import()
 		item = _make_item(description_ocr="Widget", item_code="ITEM-B")
-		mock_frappe.db.get_value.return_value = "ITEM-A"
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(name="ALIAS-0001", item_code="ITEM-A")])
 
 		doc._save_item_alias(item, allow_update=False)
 
 		mock_frappe.db.set_value.assert_not_called()
+		mock_frappe.get_doc.assert_not_called()
 
 		# Missing alias still inserts even without allow_update
-		mock_frappe.db.get_value.return_value = None
+		mock_frappe.get_all = MagicMock(return_value=[])
 		new_doc = MagicMock()
 		mock_frappe.get_doc.return_value = new_doc
 		doc._save_item_alias(item, allow_update=False)
 		new_doc.insert.assert_called_once_with(ignore_permissions=True)
+
+	def test_item_alias_saved_supplier_scoped(self, mock_frappe):
+		"""v1.8.0 (Q7c): a confirm with a known parent supplier learns a
+		supplier-scoped alias — the inserted row carries the supplier."""
+		doc = _make_ocr_import(supplier="Supplier A")
+		item = _make_item(description_ocr="Bracket 40mm", item_code="ITEM-A")
+		mock_frappe.get_all = MagicMock(return_value=[])
+		new_doc = MagicMock()
+		mock_frappe.get_doc.return_value = new_doc
+
+		doc._save_item_alias(item)
+
+		inserted = mock_frappe.get_doc.call_args[0][0]
+		assert inserted["supplier"] == "Supplier A"
+		assert inserted["ocr_text"] == "Bracket 40mm"
+		assert inserted["item_code"] == "ITEM-A"
+		new_doc.insert.assert_called_once_with(ignore_permissions=True)
+
+	def test_item_alias_global_when_no_supplier(self, mock_frappe):
+		"""No parent supplier → the alias stays global (blank supplier), and the
+		existence check runs against global rows only."""
+		doc = _make_ocr_import(supplier="")
+		item = _make_item(description_ocr="Widget", item_code="ITEM-B")
+		mock_frappe.get_all = MagicMock(return_value=[])
+		new_doc = MagicMock()
+		mock_frappe.get_doc.return_value = new_doc
+
+		doc._save_item_alias(item)
+
+		assert mock_frappe.get_all.call_args.kwargs["filters"] == {
+			"ocr_text": "Widget",
+			"supplier": ["is", "not set"],
+		}
+		inserted = mock_frappe.get_doc.call_args[0][0]
+		assert inserted["supplier"] == ""
+
+	def test_item_alias_scoped_correction_leaves_global_untouched(self, mock_frappe):
+		"""The motivating bug: correcting a mapping for supplier A must not
+		rewrite the global row other suppliers rely on. With a supplier set and
+		no scoped row yet, the save INSERTS a scoped row — set_value (which
+		would hit an existing row) is never called."""
+		doc = _make_ocr_import(supplier="Supplier A")
+		item = _make_item(description_ocr="Widget", item_code="ITEM-A2")
+		# No supplier-scoped row exists (the global one is not in this filter's result)
+		mock_frappe.get_all = MagicMock(return_value=[])
+		new_doc = MagicMock()
+		mock_frappe.get_doc.return_value = new_doc
+
+		doc._save_item_alias(item)
+
+		mock_frappe.db.set_value.assert_not_called()
+		inserted = mock_frappe.get_doc.call_args[0][0]
+		assert inserted["supplier"] == "Supplier A"
 
 
 # ---------------------------------------------------------------------------

@@ -73,6 +73,12 @@ def fleet_gemini_process(
 			fail_safe = (ocr_fleet.source_type or "").startswith("Gemini Shell")
 			_run_fleet_matching(ocr_fleet, settings, fail_safe=fail_safe)
 
+		# Q8 (v1.8.0): this save is also the pipeline's auto-record trigger —
+		# on_update (fired inside save) runs attempt_auto_record for Matched
+		# Fleet Card slips when OCR Settings.enable_fleet_auto_record is on.
+		# The commit below persists the outcome (Completed + audit fields, or
+		# the skip reason). No explicit call here: it would re-evaluate the
+		# same gate a second time on the same save.
 		ocr_fleet.save(ignore_permissions=True)
 		frappe.db.commit()  # nosemgrep
 
@@ -369,7 +375,11 @@ def _apply_vehicle_config(ocr_fleet, vehicle, settings, fail_safe=False):
 	if vehicle.get("custom_fleet_card_provider"):
 		ocr_fleet.posting_mode = "Fleet Card"
 		ocr_fleet.fleet_card_supplier = vehicle.custom_fleet_card_provider
-		ocr_fleet.expense_account = vehicle.get("custom_fleet_control_account") or ""
+		# Q6 (v1.8.0): no expense_account on the Fleet Card path — no PI is ever
+		# created from a Fleet Card slip (ADR-0003), so the control account copied
+		# here since v1.2.0 flowed nowhere. The Fleet Vehicle Custom Field itself
+		# stays (§4a cross-app surface); only the per-slip capture is retired.
+		ocr_fleet.expense_account = ""
 	elif fail_safe:
 		# Provider missing on an API slip → fail safe to review, never invoice path.
 		ocr_fleet.posting_mode = ""
@@ -405,29 +415,14 @@ def _shape_upload_response(ocr_fleet, *, duplicate: bool) -> dict:
 def _verify_image_decodable(content: bytes) -> None:
 	"""Reject a genuinely-undecodable image with a clean 4xx (not a 500).
 
-	Magic bytes prove only the header. ``Image.verify()`` rejects a file that is
-	not a real image (a non-image body, or garbage past a faked header) — the
-	class that 500s inside PIL when Frappe later builds a thumbnail.
-
-	We deliberately do NOT force a full pixel decode (``Image.load()``): Frappe
-	globally sets ``ImageFile.LOAD_TRUNCATED_IMAGES = True``
-	(frappe/core/doctype/file/file.py), so the platform intentionally TOLERATES a
-	merely-truncated image — a photo that lost its tail in transit still attaches
-	and renders, and does not 500. verify() matches that posture: it passes a
-	truncated-but-openable image and rejects only the genuinely broken ones.
-	(A bare-Pillow probe shows load() rejecting truncation, but that flag is False
-	only outside the Frappe runtime — not in production.)
-
-	Pillow ships with Frappe — no new dependency. Images only — callers must NOT
-	pass PDFs (PIL won't raster them).
+	Throwing wrapper around the shared decode gate (``api.is_image_decodable``,
+	where the verify-vs-load rationale lives — v1.8.0 Q7b moved the check there
+	so every image ingest path shares it). Images only — callers must NOT pass
+	PDFs (PIL won't raster them).
 	"""
-	from io import BytesIO
+	from erpocr_integration.api import is_image_decodable
 
-	from PIL import Image
-
-	try:
-		Image.open(BytesIO(content)).verify()
-	except Exception:
+	if not is_image_decodable(content):
 		frappe.throw(
 			_("That image couldn't be read — please retake the photo."),
 			frappe.ValidationError,
@@ -809,6 +804,86 @@ def retry_fleet_extraction(ocr_fleet_name: str):
 		frappe.throw(_("Failed to start retry. Please try again."))
 
 	frappe.msgprint(_("Retry extraction queued. Please wait a moment and refresh."), indicator="blue")
+
+
+@frappe.whitelist(methods=["POST"])
+def bulk_mark_recorded(names):
+	"""Bulk Mark Recorded for Fleet Card slips (Q8, v1.8.0).
+
+	Backs the OCR Fleet Slip list action. The list selection is UI sugar, not
+	the gate: EVERY row is re-validated server-side — status must be "Matched"
+	(stricter than single mark_recorded, which also accepts Needs Review: bulk
+	is for the verified backlog; Needs Review rows need eyes), posting_mode
+	must be "Fleet Card", and each row then runs the existing mark_recorded()
+	path, which re-enforces per-document write permission, posting_mode, and
+	the vehicle guard. A row that fails any check is skipped with a reason;
+	the rest proceed (ADR-0003: no path here can ever create or link a PI).
+
+	Args:
+		names: list of OCR Fleet Slip names (JSON string or list).
+
+	Returns:
+		{"recorded": [names...], "skipped": [{"name": ..., "reason": ...}, ...]}
+	"""
+	import json
+
+	if isinstance(names, str):
+		try:
+			names = json.loads(names)
+		except ValueError:
+			frappe.throw(_("Invalid selection."))
+	if not isinstance(names, list) or not names:
+		frappe.throw(_("No fleet slips selected."))
+	if len(names) > 200:
+		frappe.throw(_("Too many slips selected — process at most 200 at a time."))
+
+	if not frappe.has_permission("OCR Fleet Slip", "write"):
+		frappe.throw(_("You don't have permission to modify OCR Fleet Slips."))
+
+	recorded = []
+	skipped = []
+	for idx, name in enumerate(names):
+		# Per-row savepoint (bench-verified API): a row that fails mid-save
+		# must roll back ITS OWN partial writes — without this, a save that
+		# dies after db_update leaves status=Completed in the transaction
+		# while the row is reported "skipped", and request-end commit ships
+		# the contradiction. Same pattern as core bulk actions.
+		savepoint = f"bulk_mark_recorded_{idx}"
+		frappe.db.savepoint(savepoint)
+		try:
+			doc = frappe.get_doc("OCR Fleet Slip", name)
+
+			if doc.posting_mode != "Fleet Card":
+				skipped.append(
+					{
+						"name": name,
+						"reason": _("Not a Fleet Card slip (posting mode: {0})").format(
+							doc.posting_mode or _("unset")
+						),
+					}
+				)
+				continue
+			if doc.status != "Matched":
+				skipped.append(
+					{
+						"name": name,
+						"reason": _("Status is '{0}' (bulk action requires 'Matched')").format(doc.status),
+					}
+				)
+				continue
+
+			doc.flags.quiet_mark_recorded = True
+			doc.mark_recorded()
+			recorded.append(name)
+		except Exception as e:
+			# frappe.throw inside mark_recorded (permission, vehicle guard, …)
+			# lands here — roll back this row's partial writes, skip it with
+			# its reason, keep going.
+			frappe.db.rollback(save_point=savepoint)
+			frappe.clear_messages()
+			skipped.append({"name": name, "reason": str(e) or _("Validation failed")})
+
+	return {"recorded": recorded, "skipped": skipped}
 
 
 @frappe.whitelist(methods=["POST"])

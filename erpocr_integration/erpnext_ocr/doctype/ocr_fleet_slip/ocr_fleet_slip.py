@@ -38,6 +38,22 @@ class OCRFleetSlip(Document):
 			if self.vehicle_match_status == "Confirmed":
 				self._apply_vehicle_config_from_link()
 
+		# Q8 (v1.8.0): a Desk-side edit that brings a Fleet Card slip to
+		# "Matched" (e.g. operator confirms the vehicle) is an auto-record
+		# trigger — same gate as the pipeline path. Cheap pre-checks here so
+		# routine saves don't fetch settings; attempt_auto_record re-validates
+		# everything (opt-in setting, confidence, ADR-0003 guards). Recursion
+		# is bounded: mark_recorded's own save re-enters with status
+		# "Completed" and auto_recorded=1, which both fail the gate.
+		# self.get() (not attribute access): auto_recorded is a v1.8.0 field —
+		# in the deploy-to-migrate window a doc loaded from a pre-migrate row
+		# lacks the attribute, and a hard AttributeError here would break
+		# EVERY slip save (incl. driver uploads) until migrate runs.
+		if self.status == "Matched" and self.posting_mode == "Fleet Card" and not self.get("auto_recorded"):
+			from erpocr_integration.tasks.auto_record import attempt_auto_record
+
+			attempt_auto_record(self, frappe.get_cached_doc("OCR Settings"))
+
 	def _apply_vehicle_config_from_link(self):
 		"""Re-apply posting config when a Fleet Vehicle is (re-)linked on this slip.
 
@@ -77,7 +93,10 @@ class OCRFleetSlip(Document):
 		if vehicle.custom_fleet_card_provider:
 			self.posting_mode = "Fleet Card"
 			self.fleet_card_supplier = vehicle.custom_fleet_card_provider
-			self.expense_account = vehicle.custom_fleet_control_account
+			# Q6 (v1.8.0): no expense_account on the Fleet Card path — no PI is
+			# ever created from a Fleet Card slip (ADR-0003), so the control
+			# account copied here since v1.2.0 flowed nowhere.
+			self.expense_account = ""
 		elif fail_safe:
 			# Provider missing on a shell slip → fail safe to review, never invoice.
 			self.posting_mode = ""
@@ -164,8 +183,22 @@ class OCRFleetSlip(Document):
 			"description": self._build_description(),
 		}
 
-		if self.expense_account:
-			pi_item["expense_account"] = self.expense_account
+		# Q6 (v1.8.0): Fleet Card slips no longer carry an expense_account, so
+		# a slip flipped to Direct Expense during review (fleet-card vehicle
+		# filled on a business card) arrives here with it blank — fall back to
+		# the configured fleet expense account. If BOTH are empty, throw now
+		# with an actionable message: ignore_mandatory would otherwise insert
+		# an account-less draft that only fails at submit with a generic
+		# ERPNext error (pre-Q6 the captured control account masked this path).
+		expense_account = self.expense_account or settings.get("fleet_expense_account")
+		if not expense_account:
+			frappe.throw(
+				_(
+					"No expense account available for this Purchase Invoice. "
+					"Set Fleet Expense Account in OCR Settings, or set an expense account on this slip."
+				)
+			)
+		pi_item["expense_account"] = expense_account
 
 		if self.cost_center:
 			pi_item["cost_center"] = self.cost_center
@@ -191,34 +224,34 @@ class OCRFleetSlip(Document):
 		if self.fleet_vehicle and frappe.get_meta("Purchase Invoice").has_field("custom_fleet_vehicle"):
 			pi_dict["custom_fleet_vehicle"] = self.fleet_vehicle
 
-		# Apply tax template
+		# Apply tax template via the shared invoice-side builder (v1.8.0, Q7a):
+		# an operator picking an Actual-type import template now gets the
+		# extracted VAT injected into the Actual row instead of a 0-tax draft —
+		# same pure-Actual-template scoping as the invoice path (a mixed template
+		# must not double-tax; that bug was caught on the invoice side pre-v1.5.0).
+		# The adapter maps the slip's flat fields onto the OCR Import shape the
+		# builder reads; subtotal=0 short-circuits the tax-inclusive detector
+		# (a slip is a single amount — no per-line rates to reclassify), so
+		# included_in_print_rate passes through unchanged, as before.
 		if self.tax_template:
-			template = frappe.get_cached_doc("Purchase Taxes and Charges Template", self.tax_template)
-			if template.company and template.company != self.company:
-				frappe.throw(
-					_("Tax Template '{0}' belongs to company '{1}', not '{2}'").format(
-						self.tax_template, template.company, self.company
-					)
-				)
+			from types import SimpleNamespace
 
-			pi_dict["taxes_and_charges"] = self.tax_template
-			pi_dict["taxes"] = []
-			for tax_row in template.taxes:
-				pi_dict["taxes"].append(
-					{
-						"category": tax_row.category,
-						"add_deduct_tax": tax_row.add_deduct_tax,
-						"charge_type": tax_row.charge_type,
-						"row_id": tax_row.row_id,
-						"account_head": tax_row.account_head,
-						"description": tax_row.description,
-						"rate": tax_row.rate,
-						"cost_center": tax_row.cost_center,
-						"account_currency": tax_row.account_currency,
-						"included_in_print_rate": tax_row.included_in_print_rate,
-						"included_in_paid_amount": tax_row.included_in_paid_amount,
-					}
-				)
+			from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+				_build_taxes_from_template,
+			)
+
+			tax_proxy = SimpleNamespace(
+				tax_template=self.tax_template,
+				company=self.company,
+				tax_amount=flt(self.vat_amount),
+				subtotal=0,
+				total_amount=flt(self.total_amount),
+				items=[],
+			)
+			tax_template, taxes = _build_taxes_from_template(tax_proxy)
+			if tax_template:
+				pi_dict["taxes_and_charges"] = tax_template
+				pi_dict["taxes"] = taxes
 
 		pi = frappe.get_doc(pi_dict)
 		pi.flags.ignore_mandatory = True
@@ -337,13 +370,16 @@ class OCRFleetSlip(Document):
 		self.status = "Completed"
 		self.save()
 
-		frappe.msgprint(
-			_(
-				"Marked as Recorded. The cost is booked from the fleet card provider's "
-				"monthly invoice; this slip is the control record."
-			),
-			indicator="green",
-		)
+		# quiet_mark_recorded: auto-record (background) and the bulk list action
+		# suppress the per-slip toast — one message per slip is noise there.
+		if not self.flags.get("quiet_mark_recorded"):
+			frappe.msgprint(
+				_(
+					"Marked as Recorded. The cost is booked from the fleet card provider's "
+					"monthly invoice; this slip is the control record."
+				),
+				indicator="green",
+			)
 
 	@frappe.whitelist(methods=["POST"])
 	def mark_no_action(self, reason):

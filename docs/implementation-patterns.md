@@ -38,7 +38,7 @@ def process(raw_payload: str):
 - Set `bill_date` from OCR invoice_date; only set `due_date` if >= posting_date
 - `default_item` in OCR Settings: when set, acts as the matching pipeline's tier 6 fallback (returns "Suggested") AND as the unmatched-line filler at PI creation time. Lets bulk-expense-invoice users skip per-row clicks. For rows matched to the default_item, the description→item **alias** and **Item Supplier** learning are skipped (useless when the item is always the catch-all), but **service-mapping learning IS kept** — for a catch-all item the `(supplier, pattern) → expense account + cost center` coding is the meaningful thing to learn, and it lets such lines auto-code (and auto-draft) next time.
 - **Tax template**: `_build_taxes_from_template()` shared helper handles template validation, company check, tax-inclusive detection, and taxes list building for both PI and PR creation. **Actual-row injection**: when the selected template has a `charge_type="Actual"` row and the OCR Import carries a `tax_amount`, that amount is injected into the first Actual row (customs/import VAT is a fixed amount, not a percentage — the Cargo Compass fix). Template *selection* (`api._select_tax_template`) picks `import_tax_template` over `default_tax_template` when the extracted tax deviates >25% (relative) from the default template's percentage of the subtotal.
-- **Alias learning upserts**: `_save_supplier_alias` / `_save_item_alias` UPDATE an existing alias when the user confirms a different target (first-mapping-wins-forever silently dropped corrections and kept auto-matching the wrong record at tier-1 confidence).
+- **Alias learning upserts**: `_save_supplier_alias` / `_save_item_alias` UPDATE an existing alias when the user confirms a different target (first-mapping-wins-forever silently dropped corrections and kept auto-matching the wrong record at tier-1 confidence). **Item-alias learning is supplier-scoped since v1.8.0 (Q7c)**: when the parent supplier is known, the insert/correction targets the supplier-scoped row only — a confirm for supplier A never rewrites the global row other suppliers rely on. Confirms without a supplier still write global rows.
 - **Cost Center precedence** (v1.1.3+): every PI line, PR line, JE debit line, JE tax line, and JE credit line resolves cost_center via **line override → doc-level parent (`OCR Import.cost_center`) → `OCR Settings.default_cost_center`**. The doc-level field is filtered by company on the client side. Service-mapping rows still populate line-level cost_center (which wins), so per-supplier cost centre splits keep working; the doc-level field is the bulk-review shortcut for everything else.
 
 ### Auto-Draft (opt-in; off by default)
@@ -48,6 +48,7 @@ def process(raw_payload: str):
 - **Invoice-date fiscal-year guard** (`_invoice_date_in_fiscal_year`): a Gemini date misread (e.g. 2001 for 2026) would fail deep in ERPNext's FY validation — the guard rejects it up front with a clean skip reason. It imports `get_fiscal_year` from **`erpnext.accounts.utils`** (NOT `frappe.utils` — v1.5.1 fixed a bug where the wrong import location AttributeError'd on every call and the blanket except skipped EVERY gate-passing invoice as "outside any active Fiscal Year"). ImportError fails open (guard passes; create surfaces any FY problem).
 - Audit fields on OCR Import: `auto_drafted`, `auto_draft_skipped_reason`. Diagnosing "auto-draft isn't firing" starts with a group-by on `auto_draft_skipped_reason` — it names the blocking tier per record.
 - `stats_api.get_ocr_stats` (role-gated: System Manager / Accounts Manager) backs the OCR Stats page (counts, auto-draft ratio, fallback reasons, per-supplier throughput).
+- **Sibling pattern — Fleet Card auto-record** (v1.8.0, Q8): `tasks/auto_record.py` applies the same opt-in + confidence-gate + skip-reason-audit shape to Fleet Card slips (`enable_fleet_auto_record`, `auto_recorded`, `auto_record_skipped_reason`), completing via `mark_recorded()` instead of creating anything. See [architecture.md](architecture.md) → *OCR Fleet Slip Workflow*.
 
 ### Purchase Order / Purchase Receipt Linking
 - Optional: user can link OCR Import to an existing PO via "Find Open POs" button
@@ -102,14 +103,15 @@ def process(raw_payload: str):
 3. **Fuzzy matching** (difflib SequenceMatcher, returns "Suggested" status)
 4. If no match → "Unmatched"
 
-**Item matching** runs in this order (highest specificity first; v1.1.0+):
-1. **`Item Supplier` lookup** (`(supplier, supplier_part_no=product_code) → item_code`) — supplier-scoped, deterministic. Multi-hit ambiguity is logged and skipped (falls through). Highest precision because supplier-scoped, runs before global description aliases.
-2. **`OCR Item Alias`** (exact on description — global, not supplier-scoped)
-3. **ERPNext Item** by `item_name` / `item_code` (exact)
-4. **Service mapping** (pattern-based: description substring → item + GL account + cost center). Priority within this tier: supplier-specific pattern → generic pattern → **supplier default** (a supplier-scoped row whose `description_pattern` is the literal `*` sentinel — codes ANY remaining line for that supplier; the last-resort tier for suppliers whose descriptions vary too much to learn per-pattern, e.g. a transport subcontractor where every line embeds route/driver/vehicle).
-5. **Fuzzy matching** (difflib SequenceMatcher, configurable threshold, returns "Suggested" status)
-6. **`default_item` fallback** (only if `OCR Settings.default_item` is configured) — returns "Suggested" so user still confirms and `auto_draft` skips
-7. If no match → "Unmatched"
+**Item matching** runs in this order (highest specificity first; alias tier split in v1.8.0/Q7c):
+1. **`Item Supplier` lookup** (`(supplier, supplier_part_no=product_code) → item_code`) — supplier-scoped, deterministic. Multi-hit ambiguity is logged and skipped (falls through). Highest precision because supplier-scoped, runs before description aliases.
+2. **Supplier-scoped `OCR Item Alias`** (exact on description + this supplier; v1.8.0) — beats the global alias, so the same printed description can map to different items per supplier (cross-supplier collision resolution).
+3. **Global `OCR Item Alias`** (exact on description, blank supplier) — every pre-v1.8.0 alias row lives here unchanged; the fallback alias tier. NOTE: `OCR Item Alias` is hash-named since v1.8.0 — always look rows up by `ocr_text` + `supplier` filters, never by document name.
+4. **ERPNext Item** by `item_name` / `item_code` (exact)
+5. **Service mapping** (pattern-based: description substring → item + GL account + cost center). Priority within this tier: supplier-specific pattern → generic pattern → **supplier default** (a supplier-scoped row whose `description_pattern` is the literal `*` sentinel — codes ANY remaining line for that supplier; the last-resort tier for suppliers whose descriptions vary too much to learn per-pattern, e.g. a transport subcontractor where every line embeds route/driver/vehicle).
+6. **Fuzzy matching** (difflib SequenceMatcher, configurable threshold, returns "Suggested" status)
+7. **`default_item` fallback** (only if `OCR Settings.default_item` is configured) — returns "Suggested" so user still confirms and `auto_draft` skips
+8. If no match → "Unmatched"
 
 **Item Supplier learning** (v1.1.0+): when a user confirms an OCR row with `item_code` + `product_code` + parent `supplier` set (and `item_code != default_item`), `OCRImport._enqueue_item_supplier_learning` enqueues `tasks/learn_item_supplier.py` on the `short` queue with `enqueue_after_commit=True`. The job:
 - Sets `frappe.set_user(originating_user)` and checks `has_permission("Item", "write")` — sites that don't grant Item write to OCR Manager get silent skip + log; matching still works without learning.

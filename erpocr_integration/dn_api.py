@@ -167,15 +167,20 @@ def _run_dn_matching(ocr_dn, settings):
 	for item in ocr_dn.items:
 		matched_item, match_status = None, "Unmatched"
 
-		# Try product_code first, then description
+		# Try product_code first, then description. Pass the DN's matched
+		# supplier (v1.8.0, Q7c) so supplier-scoped aliases learned on the
+		# invoice side keep auto-matching delivery notes too — without it,
+		# every new invoice-learned alias would be invisible to DN matching.
 		if item.item_name and item.item_name != item.description_ocr:
-			matched_item, match_status = match_item(item.item_name)
+			matched_item, match_status = match_item(item.item_name, supplier=ocr_dn.supplier)
 		if not matched_item and item.description_ocr:
-			matched_item, match_status = match_item(item.description_ocr)
+			matched_item, match_status = match_item(item.description_ocr, supplier=ocr_dn.supplier)
 
 		# Fuzzy fallback
 		if not matched_item and item.description_ocr:
-			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(item.description_ocr, fuzzy_threshold)
+			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(
+				item.description_ocr, fuzzy_threshold, supplier=ocr_dn.supplier
+			)
 			if fuzzy_item:
 				matched_item = fuzzy_item
 				match_status = fuzzy_status

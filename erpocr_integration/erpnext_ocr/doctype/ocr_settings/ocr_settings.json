@@ -40,7 +40,8 @@
 		"fleet_toll_item",
 		"column_break_fleet",
 		"fleet_default_supplier",
-		"fleet_expense_account"
+		"fleet_expense_account",
+		"enable_fleet_auto_record"
 	],
 	"fields": [
 		{
@@ -291,6 +292,13 @@
 			"label": "Fleet Expense Account",
 			"options": "Account",
 			"description": "Default expense account for fleet slip Purchase Invoices (non-fleet-card vehicles)"
+		},
+		{
+			"fieldname": "enable_fleet_auto_record",
+			"fieldtype": "Check",
+			"label": "Enable Fleet Card Auto-Record",
+			"default": "0",
+			"description": "Automatically Mark Recorded high-confidence Fleet Card slips (confirmed vehicle + complete recon data). Low-confidence slips stay in Matched for manual review. Never creates a Purchase Invoice."
 		}
 	],
 	"index_web_pages_for_search": 1,

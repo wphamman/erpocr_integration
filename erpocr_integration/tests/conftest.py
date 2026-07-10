@@ -126,8 +126,25 @@ def _mock_flt(value, precision=None):
 	return v
 
 
+# Real getdate semantics (ADR-0009: feed real values, not echo mocks) — the
+# statement-recon date compares call frappe.utils.getdate on both a date object
+# (posting_date from get_all) and a string (period_from); an echo mock would
+# hide exactly the type-mismatch class this hardening exists to catch.
+def _mock_getdate(value=None):
+	import datetime
+
+	if value is None:
+		return datetime.date(2025, 1, 15)  # matches the mocked today()
+	if isinstance(value, datetime.datetime):
+		return value.date()
+	if isinstance(value, datetime.date):
+		return value
+	return datetime.datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+
+
 _frappe_utils_mock = MagicMock()
 _frappe_utils_mock.flt = _mock_flt
+_frappe_utils_mock.getdate = _mock_getdate
 _frappe_utils_mock.today = MagicMock(return_value="2025-01-15")
 _frappe_utils_mock.escape_html = MagicMock(side_effect=lambda x: x)
 _frappe_utils_mock.get_link_to_form = MagicMock(side_effect=lambda dt, name: f"{dt}/{name}")
@@ -188,6 +205,7 @@ def reset_frappe_mock():
 	_frappe_mock.db.exists.side_effect = None
 	_frappe_mock.db.commit.reset_mock()
 	_frappe_mock.db.rollback.reset_mock()
+	_frappe_mock.db.savepoint.reset_mock()
 	_frappe_mock.clear_messages.reset_mock()
 	_frappe_mock.db.sql.reset_mock()
 	_frappe_mock.db.sql.return_value = []
@@ -211,6 +229,11 @@ def reset_frappe_mock():
 	_frappe_mock.delete_doc.reset_mock()
 	_frappe_mock.set_user.reset_mock()
 	_frappe_mock.msgprint = MagicMock()
+	# Default frappe.utils.getdate (attribute-style access) to REAL parse
+	# semantics (ADR-0009) — the recon date compares must be exercised against
+	# genuine date objects, not an echo mock. Tests may still override
+	# side_effect; this reset stops that leaking between tests.
+	_frappe_mock.utils.getdate = MagicMock(side_effect=_mock_getdate)
 	_frappe_mock.throw = MagicMock(side_effect=Exception)
 	_frappe_mock.has_permission = MagicMock(return_value=True)
 	_frappe_mock.get_roles = MagicMock(return_value=["All"])

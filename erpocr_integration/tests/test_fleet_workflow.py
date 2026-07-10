@@ -158,7 +158,9 @@ class TestFuelSlipFleetCardWorkflow:
 		assert doc.vehicle_match_status == "Auto Matched"
 		assert doc.posting_mode == "Fleet Card"
 		assert doc.fleet_card_supplier == "WesBank"
-		assert doc.expense_account == "3100 - Fleet Control - TC"
+		# Q6 (v1.8.0): Fleet Card slips never create a PI (ADR-0003), so the
+		# control account is no longer captured per-slip.
+		assert doc.expense_account == ""
 		assert doc.cost_center == "Transport - TC"
 
 	def test_pi_submit_completes_fleet_slip(self, mock_frappe):
@@ -756,8 +758,10 @@ class TestPostingModeFromVehicle:
 		assert doc.posting_mode == "Direct Expense"
 		assert doc.fleet_card_supplier == "Default Supplier"
 
-	def test_control_account_from_vehicle(self):
-		"""Fleet card mode uses vehicle's control account."""
+	def test_control_account_not_captured_on_fleet_card(self):
+		"""Q6 (v1.8.0): Fleet Card mode no longer captures the vehicle's control
+		account — no PI is ever created on this path (ADR-0003), so the value
+		flowed nowhere since v1.2.0."""
 		settings = _make_settings()
 		doc = MockFleetSlip()
 		vehicle = _NS(
@@ -767,7 +771,8 @@ class TestPostingModeFromVehicle:
 		)
 		_apply_vehicle_config(doc, vehicle, settings)
 
-		assert doc.expense_account == "3100 - WesBank Control - TC"
+		assert doc.posting_mode == "Fleet Card"
+		assert doc.expense_account == ""
 
 	def test_direct_expense_uses_settings_accounts(self):
 		"""Direct expense mode uses OCR Settings accounts and default supplier."""

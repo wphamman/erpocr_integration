@@ -82,9 +82,9 @@ class TestMatchItem:
 		assert status == "Unmatched"
 
 	def test_alias_match(self, mock_frappe):
-		mock_frappe.db.get_value = MagicMock(
-			side_effect=lambda doctype, filters, field: "ITEM-001" if doctype == "OCR Item Alias" else None
-		)
+		"""A global alias (blank supplier) matches via the get_all NULL-filter
+		lookup — every pre-v1.8.0 alias row keeps working through this tier."""
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(item_code="ITEM-001")])
 		from erpocr_integration.tasks.matching import match_item
 
 		result, status = match_item("Premium Lollipops")
@@ -118,6 +118,180 @@ class TestMatchItem:
 		result, status = match_item("Unknown Item")
 		assert result is None
 		assert status == "Unmatched"
+
+
+# ---------------------------------------------------------------------------
+# Supplier-scoped item aliases (v1.8.0, Q7c) — the three ruled scenarios:
+# existing-alias regression, supplier-scoped beats global, cross-supplier
+# collision resolution.
+# ---------------------------------------------------------------------------
+
+
+class TestSupplierScopedItemAlias:
+	def _wire_aliases(self, mock_frappe, scoped=None, global_rows=None):
+		"""scoped: {(ocr_text, supplier): item_code}; global_rows: {ocr_text: item_code}."""
+		scoped = scoped or {}
+		global_rows = global_rows or {}
+
+		def _get_value(doctype, filters=None, field=None, **kw):
+			if doctype == "OCR Item Alias" and isinstance(filters, dict) and filters.get("supplier"):
+				return scoped.get((filters["ocr_text"], filters["supplier"]))
+			return None  # Item.item_name lookups miss — aliases decide these tests
+
+		def _get_all(doctype, filters=None, **kw):
+			if doctype == "OCR Item Alias" and filters and filters.get("supplier") == ["is", "not set"]:
+				item = global_rows.get(filters["ocr_text"])
+				return [SimpleNamespace(item_code=item)] if item else []
+			return []
+
+		mock_frappe.db.get_value = MagicMock(side_effect=_get_value)
+		mock_frappe.get_all = MagicMock(side_effect=_get_all)
+		mock_frappe.db.exists = MagicMock(return_value=False)
+
+	def test_existing_global_alias_regression(self, mock_frappe):
+		"""Every pre-v1.8.0 alias (blank supplier) keeps working unchanged —
+		with AND without a supplier passed to match_item."""
+		self._wire_aliases(mock_frappe, global_rows={"Widget": "ITEM-G"})
+		from erpocr_integration.tasks.matching import match_item
+
+		assert match_item("Widget") == ("ITEM-G", "Auto Matched")
+		assert match_item("Widget", supplier="Supplier A") == ("ITEM-G", "Auto Matched")
+
+	def test_supplier_scoped_beats_global(self, mock_frappe):
+		"""A supplier-scoped alias wins over the global one for ITS supplier;
+		every other supplier still gets the global mapping."""
+		self._wire_aliases(
+			mock_frappe,
+			scoped={("Widget", "Supplier A"): "ITEM-A"},
+			global_rows={"Widget": "ITEM-G"},
+		)
+		from erpocr_integration.tasks.matching import match_item
+
+		assert match_item("Widget", supplier="Supplier A") == ("ITEM-A", "Auto Matched")
+		assert match_item("Widget", supplier="Supplier B") == ("ITEM-G", "Auto Matched")
+		assert match_item("Widget") == ("ITEM-G", "Auto Matched")
+
+	def test_cross_supplier_collision_resolution(self, mock_frappe):
+		"""The motivating case: the same printed description maps to DIFFERENT
+		items per supplier — each supplier resolves to its own item, and an
+		unknown supplier falls through (no false positive from either)."""
+		self._wire_aliases(
+			mock_frappe,
+			scoped={
+				("Bracket 40mm", "Supplier A"): "ITEM-A",
+				("Bracket 40mm", "Supplier B"): "ITEM-B",
+			},
+		)
+		from erpocr_integration.tasks.matching import match_item
+
+		assert match_item("Bracket 40mm", supplier="Supplier A") == ("ITEM-A", "Auto Matched")
+		assert match_item("Bracket 40mm", supplier="Supplier B") == ("ITEM-B", "Auto Matched")
+		assert match_item("Bracket 40mm", supplier="Supplier C") == (None, "Unmatched")
+		assert match_item("Bracket 40mm") == (None, "Unmatched")
+
+	def test_scoped_read_orders_by_modified_desc(self, mock_frappe):
+		"""Bounce rework 2: duplicates are legal now — the tier-1 scoped read
+		must carry the SAME order_by as the global tier and the correction
+		path, so reads deterministically hit the row corrections target
+		(most-recently-modified) on v15 AND v16."""
+		mock_frappe.db.get_value = MagicMock(return_value="ITEM-A")
+		from erpocr_integration.tasks.matching import match_item
+
+		result, _status = match_item("Widget", supplier="Supplier A")
+
+		assert result == "ITEM-A"
+		assert mock_frappe.db.get_value.call_args.kwargs["order_by"] == "modified desc, name asc"
+
+	def test_fuzzy_tier_excludes_other_suppliers_scoped_aliases(self, mock_frappe):
+		"""The Q7c invariant holds one tier down: supplier A's scoped alias
+		must not become a fuzzy 'Suggested' candidate on supplier B's lines."""
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(ocr_text="Bracket 40mm", item_code="ITEM-A", supplier="Supplier A")]
+				if doctype == "OCR Item Alias"
+				else []
+			)
+		)
+		from erpocr_integration.tasks.matching import match_item_fuzzy
+
+		# Supplier B: A's scoped alias is not a candidate → no match
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80, supplier="Supplier B")
+		assert result is None
+		assert status == "Unmatched"
+
+		# Supplier A: its own scoped alias IS a candidate
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80, supplier="Supplier A")
+		assert result == "ITEM-A"
+		assert status == "Suggested"
+
+		# No supplier (e.g. unmatched-supplier invoice): scoped rows excluded
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80)
+		assert result is None
+
+	def test_fuzzy_tier_global_aliases_still_candidates(self, mock_frappe):
+		"""Global (blank-supplier) alias rows keep working in the fuzzy pool
+		for every supplier — the pre-v1.8.0 behavior."""
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(ocr_text="Bracket 40mm", item_code="ITEM-G", supplier=None)]
+				if doctype == "OCR Item Alias"
+				else []
+			)
+		)
+		from erpocr_integration.tasks.matching import match_item_fuzzy
+
+		result, status, _ = match_item_fuzzy("BRACKET 40 MM", 80, supplier="Supplier B")
+		assert result == "ITEM-G"
+		assert status == "Suggested"
+
+	def test_run_matching_passes_supplier_to_alias_tier(self, mock_frappe):
+		"""End-to-end through api._run_matching: the matched supplier flows
+		into the alias tier, so the supplier-scoped alias decides the line."""
+		self._wire_aliases(
+			mock_frappe,
+			scoped={("Bracket 40mm", "Supplier A"): "ITEM-A"},
+			global_rows={"Bracket 40mm": "ITEM-G"},
+		)
+		# Supplier resolution: alias table hit → "Supplier A"
+		original_get_value = mock_frappe.db.get_value.side_effect
+
+		def _get_value(doctype, filters=None, field=None, **kw):
+			if doctype == "OCR Supplier Alias":
+				return "Supplier A"
+			return original_get_value(doctype, filters, field, **kw)
+
+		mock_frappe.db.get_value = MagicMock(side_effect=_get_value)
+
+		class _Settings(SimpleNamespace):
+			def get(self, key, default=None):
+				return getattr(self, key, default)
+
+		settings = _Settings(matching_threshold=80, default_item="")
+		ocr_import = SimpleNamespace(
+			supplier_name_ocr="ACME LTD",
+			supplier="",
+			supplier_match_status="",
+			company="Test Company",
+			items=[
+				SimpleNamespace(
+					description_ocr="Bracket 40mm",
+					product_code="",
+					item_code="",
+					item_name="",
+					match_status="",
+					expense_account="",
+					cost_center="",
+				)
+			],
+		)
+
+		from erpocr_integration.api import _run_matching
+
+		_run_matching(ocr_import, {}, settings)
+
+		assert ocr_import.supplier == "Supplier A"
+		assert ocr_import.items[0].item_code == "ITEM-A"  # scoped beats global
+		assert ocr_import.items[0].match_status == "Auto Matched"
 
 
 # ---------------------------------------------------------------------------

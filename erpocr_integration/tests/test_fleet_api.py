@@ -635,7 +635,9 @@ class TestApplyVehicleConfig:
 
 		assert doc.posting_mode == "Fleet Card"
 		assert doc.fleet_card_supplier == "WesBank"
-		assert doc.expense_account == "3100 - Fleet Control - TC"
+		# Q6 (v1.8.0): Fleet Card slips never create a PI (ADR-0003), so the
+		# control account is no longer captured per-slip.
+		assert doc.expense_account == ""
 		assert doc.cost_center == "Transport - TC"
 
 	def test_direct_expense_mode(self):

@@ -32,6 +32,36 @@ def validate_file_magic_bytes(content: bytes, mime_type: str) -> bool:
 	return content[:length] == magic
 
 
+def is_image_decodable(content: bytes) -> bool:
+	"""True if PIL can verify the image — the decode gate behind every image ingest.
+
+	Magic bytes prove only the header. ``Image.verify()`` rejects a file that is
+	not a real image (a non-image body, or garbage past a faked header) — the
+	class that 500s inside PIL when Frappe later builds a thumbnail.
+
+	We deliberately do NOT force a full pixel decode (``Image.load()``): Frappe
+	globally sets ``ImageFile.LOAD_TRUNCATED_IMAGES = True``
+	(frappe/core/doctype/file/file.py), so the platform intentionally TOLERATES a
+	merely-truncated image — a photo that lost its tail in transit still attaches
+	and renders, and does not 500. verify() matches that posture: it passes a
+	truncated-but-openable image and rejects only the genuinely broken ones.
+	(A bare-Pillow probe shows load() rejecting truncation, but that flag is False
+	only outside the Frappe runtime — not in production.)
+
+	Pillow ships with Frappe — no new dependency. Images only — callers must NOT
+	pass PDFs (PIL won't raster them).
+	"""
+	from io import BytesIO
+
+	from PIL import Image
+
+	try:
+		Image.open(BytesIO(content)).verify()
+		return True
+	except Exception:
+		return False
+
+
 @frappe.whitelist(methods=["POST"])
 def upload_pdf():
 	"""
@@ -97,6 +127,12 @@ def upload_pdf():
 	# Validate file magic bytes
 	if not validate_file_magic_bytes(file_content, mime_type):
 		frappe.throw(_("File content does not match its file type. The file may be corrupted."))
+
+	# Decode-verify images (v1.8.0, Q7b) — magic bytes prove only the header;
+	# an undecodable body would 500 later inside PIL. Same gate as
+	# upload_fleet_slip. PDFs are not raster-decoded by PIL, so they skip this.
+	if mime_type.startswith("image/") and not is_image_decodable(file_content):
+		frappe.throw(_("That image couldn't be read — it may be corrupted. Please re-scan or re-export it."))
 
 	# Get company from OCR Settings
 	settings = frappe.get_single("OCR Settings")
@@ -500,9 +536,11 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 def _run_matching(ocr_import, header_fields: dict, settings):
 	"""Run supplier and item matching on an OCR Import record.
 
-	Item matching pipeline (precedence order):
+	Item matching pipeline (precedence order; v1.8.0 split the alias tier):
 	  1. `match_item_by_supplier_part` — Item Supplier lookup (supplier, product_code)
-	  2. `match_item` (alias / Item.item_name / Item.name exact match on description)
+	  2. `match_item` — supplier-scoped alias → global alias → Item.item_name /
+	     Item.name exact match on description (Q7c: a supplier-scoped alias
+	     beats the global one; every pre-v1.8.0 alias stays global)
 	  3. `match_service_item` — pattern-based service mapping
 	  4. `match_item_fuzzy` — difflib similarity on description
 	  5. `default_item` fallback — set in OCR Settings, status "Suggested"
@@ -557,9 +595,9 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 				matched_item = supplier_part_item
 				match_status = supplier_part_status  # "Auto Matched"
 
-		# Tier 2: alias / exact name / exact item_code (description-based, global)
+		# Tier 2: alias (supplier-scoped beats global) / exact name / exact item_code
 		if not matched_item and item.description_ocr:
-			matched_item, match_status = match_item(item.description_ocr)
+			matched_item, match_status = match_item(item.description_ocr, supplier=ocr_import.supplier)
 
 		# Tier 3: service mapping (pattern → item + name + GL + CC)
 		if not matched_item and item.description_ocr:
@@ -574,9 +612,11 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 				if service_match.get("item_name"):
 					item.item_name = service_match["item_name"]
 
-		# Tier 4: fuzzy on description
+		# Tier 4: fuzzy on description (alias pool scoped: global + this supplier)
 		if not matched_item and item.description_ocr:
-			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(item.description_ocr, fuzzy_threshold)
+			fuzzy_item, fuzzy_status, _score = match_item_fuzzy(
+				item.description_ocr, fuzzy_threshold, supplier=ocr_import.supplier
+			)
 			if fuzzy_item:
 				matched_item = fuzzy_item
 				match_status = fuzzy_status  # "Suggested"

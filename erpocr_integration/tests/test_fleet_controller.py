@@ -19,6 +19,16 @@ class _MockSettings(SimpleNamespace):
 		return getattr(self, key, default)
 
 
+class _FlagsDict(dict):
+	"""frappe._dict-alike: doc.flags supports both attr-set and dict .get()."""
+
+	def __getattr__(self, key):
+		return self.get(key)
+
+	def __setattr__(self, key, value):
+		self[key] = value
+
+
 def _make_settings(**overrides):
 	defaults = dict(
 		default_company="Test Company",
@@ -75,6 +85,9 @@ def _make_fleet_slip(**overrides):
 	doc.drive_folder_path = None
 	doc.source_type = "Gemini Drive Scan"
 	doc.raw_payload = ""
+	doc.auto_recorded = 0
+	doc.auto_record_skipped_reason = ""
+	doc.flags = _FlagsDict()
 	doc.save = MagicMock()
 	doc.reload = MagicMock()
 	doc.db_set = MagicMock()
@@ -210,6 +223,51 @@ class TestCreatePurchaseInvoice:
 		assert doc.purchase_invoice == "PI-00001"
 		assert doc.status == "Draft Created"
 		mock_pi.insert.assert_called_once()
+
+	def test_blocks_when_no_expense_account_anywhere(self, mock_frappe):
+		"""Bounce rework 3 (Q6 follow-through): slip expense_account AND
+		OCR Settings.fleet_expense_account both empty → throw at create time
+		with an actionable message, instead of ignore_mandatory inserting an
+		account-less draft that only fails at submit."""
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_cached_doc.return_value = _make_settings(fleet_expense_account="")
+		mock_frappe.get_all.return_value = []
+		# Make the throw observable (conftest default raises a bare Exception)
+		mock_frappe.throw = MagicMock(side_effect=lambda msg, *a, **kw: (_ for _ in ()).throw(Exception(msg)))
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="Direct Expense",
+			expense_account="",
+		)
+		with pytest.raises(Exception, match="Fleet Expense Account"):
+			doc.create_purchase_invoice()
+		assert doc.purchase_invoice is None
+		mock_frappe.get_doc.assert_not_called()  # no draft was built
+
+	def test_expense_account_falls_back_to_settings(self, mock_frappe):
+		"""Q6 follow-through: a posting-mode-flipped slip (blank expense
+		account) still creates a PI using OCR Settings.fleet_expense_account."""
+		mock_pi = MagicMock()
+		mock_pi.name = "PI-00002"
+		mock_pi.items = [MagicMock()]
+		mock_pi.items[0].item_name = "FUEL-001"
+		mock_frappe.get_doc.return_value = mock_pi
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_cached_doc.return_value = _make_settings()
+		mock_frappe.get_all.return_value = []
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="Direct Expense",
+			expense_account="",
+		)
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["items"][0]["expense_account"] == "5000 - Fuel Expense - TC"
 
 	def test_blocks_fleet_card_mode(self, mock_frappe):
 		"""v1.2.0 invariant: Fleet Card slips MUST NOT spawn a Purchase Invoice.
@@ -385,6 +443,117 @@ class TestCreatePurchaseInvoice:
 		pi_dict = mock_frappe.get_doc.call_args[0][0]
 		assert pi_dict["taxes_and_charges"] == "SA VAT 15%"
 		assert len(pi_dict["taxes"]) == 1
+
+	def test_pi_actual_template_injects_vat(self, mock_frappe):
+		"""v1.8.0 Q7(a): an Actual-type (customs/import) template on a fleet
+		slip PI gets the extracted VAT injected into the Actual row — the
+		invoice pipeline's injection, now shared. Previously a 0-tax row."""
+		mock_tax = MagicMock()
+		mock_tax.company = "Test Company"
+		mock_tax.taxes = [
+			SimpleNamespace(
+				category="Total",
+				add_deduct_tax="Add",
+				charge_type="Actual",
+				row_id="",
+				account_head="2300 - VAT Input - TC",
+				description="Import VAT (actual)",
+				rate=0.0,
+				cost_center="",
+				account_currency="ZAR",
+				included_in_print_rate=0,
+				included_in_paid_amount=0,
+			)
+		]
+
+		mock_pi = MagicMock()
+		mock_pi.name = "PI-00001"
+		mock_pi.items = [MagicMock()]
+		mock_pi.items[0].item_name = "FUEL-001"
+
+		def get_cached_side_effect(doctype, name=None):
+			if doctype == "Purchase Taxes and Charges Template":
+				return mock_tax
+			return _make_settings()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_side_effect
+		mock_frappe.get_doc.return_value = mock_pi
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_all.return_value = []
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			tax_template="9 - Import with Std VAT",
+			vat_amount=146.74,
+		)
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["taxes_and_charges"] == "9 - Import with Std VAT"
+		assert pi_dict["taxes"][0]["tax_amount"] == 146.74
+
+	def test_pi_mixed_template_does_not_inject(self, mock_frappe):
+		"""v1.8.0 Q7(a): a MIXED template (percentage + auxiliary Actual row)
+		must NOT get the extracted VAT injected on top of its computed
+		percentage rows — that double-taxes (the pre-v1.5.0 invoice-side bug,
+		not to be reintroduced here)."""
+		mock_tax = MagicMock()
+		mock_tax.company = "Test Company"
+		mock_tax.taxes = [
+			SimpleNamespace(
+				category="Total",
+				add_deduct_tax="Add",
+				charge_type="On Net Total",
+				row_id="",
+				account_head="2300 - VAT Input - TC",
+				description="VAT 15%",
+				rate=15.0,
+				cost_center="",
+				account_currency="ZAR",
+				included_in_print_rate=0,
+				included_in_paid_amount=0,
+			),
+			SimpleNamespace(
+				category="Total",
+				add_deduct_tax="Add",
+				charge_type="Actual",
+				row_id="",
+				account_head="5500 - Freight - TC",
+				description="Freight (actual)",
+				rate=0.0,
+				cost_center="",
+				account_currency="ZAR",
+				included_in_print_rate=0,
+				included_in_paid_amount=0,
+			),
+		]
+
+		mock_pi = MagicMock()
+		mock_pi.name = "PI-00001"
+		mock_pi.items = [MagicMock()]
+		mock_pi.items[0].item_name = "FUEL-001"
+
+		def get_cached_side_effect(doctype, name=None):
+			if doctype == "Purchase Taxes and Charges Template":
+				return mock_tax
+			return _make_settings()
+
+		mock_frappe.get_cached_doc.side_effect = get_cached_side_effect
+		mock_frappe.get_doc.return_value = mock_pi
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_all.return_value = []
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			tax_template="SA VAT 15% + Freight",
+			vat_amount=146.74,
+		)
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert all("tax_amount" not in row for row in pi_dict["taxes"])
 
 	def test_pi_permission_check(self, mock_frappe):
 		"""Permission check blocks unauthorized PI creation."""

@@ -4,11 +4,14 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.7.0** (baselined at `762301d`): §2c/§2a/§5/§6 reflect the D0 driver-perm
-widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and the
-owner-scoped idempotent replay (ADR-0006/ADR-0007). §3a records the v1.7.0 `starpops_accounts`
-SPA fold-in — a read-only `/accounts` dashboard consuming OCR doctypes via generic
-`frappe.client` only, **no new whitelisted surface** (ADR-0010/ADR-0011). See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
+**Current through v1.8.0** (v1.7.0 baseline `762301d`; architect re-baselines the SHA at the
+v1.8.0 merge): §2c/§2a/§5/§6 reflect the D0 driver-perm widening (`upload_fleet_slip` accepts
+the plain `Driver` role, endpoint-scoped) and the owner-scoped idempotent replay
+(ADR-0006/ADR-0007). §3a records the v1.7.0 `starpops_accounts` SPA fold-in — a read-only
+`/accounts` dashboard consuming OCR doctypes via generic `frappe.client` only, **no new
+whitelisted surface** (ADR-0010/ADR-0011). **v1.8.0 delta: ONE new §2a method,
+`fleet_api.bulk_mark_recorded`** (32 → 33) — an own-Desk list-action helper, not a cross-app
+contract; no §3/§4 field changes. See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
 
 **v1.7.0 fold-in (ADR-0010) — no new whitelisted surface.** The `starpops_accounts` read-only
 React dashboard now ships *inside* this app at `/accounts` (§3a). It adds a website route, an
@@ -34,7 +37,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
   §3a, not a separate app.) This app imports/references none of them.
 - Arrow direction is clean: consumers → erpocr_integration. Never the reverse.
 
-## 2. Whitelisted RPC endpoints (32 total; **0 `allow_guest`**)
+## 2. Whitelisted RPC endpoints (33 total; **0 `allow_guest`**)
 
 ### 2a. Module-level endpoints (`frappe.call` method paths)
 | Method path | HTTP | Guard | Purpose |
@@ -53,6 +56,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.dn_api.get_open_purchase_orders_for_dn` | GET | read | DN PO picker (UI) |
 | `erpocr_integration.dn_api.match_dn_po_items` | GET | per-doc read | DN PO item match (UI) |
 | `erpocr_integration.fleet_api.retry_fleet_extraction` | POST | OCR Fleet Slip perm | Retry fleet extraction |
+| `erpocr_integration.fleet_api.bulk_mark_recorded` | POST | OCR Fleet Slip write (doctype) + per-row `mark_recorded()` guards | v1.8.0: bulk-close Matched Fleet Card slips (list action; server re-validates every row; ≤200/call; UI helper, not a cross-app contract) |
 | `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip write (per-doc) + OCR Import create | Re-route mis-foldered slip to invoice pipeline |
 | `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create OR plain `Driver` role** (driver shell; D0) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
 | `erpocr_integration.tasks.drive_integration.test_drive_connection` | GET | System Manager | Config self-test |
