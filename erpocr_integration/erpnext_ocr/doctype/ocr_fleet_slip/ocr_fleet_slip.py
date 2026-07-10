@@ -234,21 +234,16 @@ class OCRFleetSlip(Document):
 		# (a slip is a single amount — no per-line rates to reclassify), so
 		# included_in_print_rate passes through unchanged, as before.
 		if self.tax_template:
-			from types import SimpleNamespace
-
 			from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
 				_build_taxes_from_template,
 			)
 
-			tax_proxy = SimpleNamespace(
-				tax_template=self.tax_template,
-				company=self.company,
-				tax_amount=flt(self.vat_amount),
-				subtotal=0,
-				total_amount=flt(self.total_amount),
-				items=[],
+			# Q9 (v1.9.0): explicit args, no proxy. A slip is a single amount with
+			# no per-line rates, so rates_include_tax is always False (the old proxy
+			# set subtotal=0 to short-circuit the detector to the same result).
+			tax_template, taxes = _build_taxes_from_template(
+				self.tax_template, self.company, flt(self.vat_amount), rates_include_tax=False
 			)
-			tax_template, taxes = _build_taxes_from_template(tax_proxy)
 			if tax_template:
 				pi_dict["taxes_and_charges"] = tax_template
 				pi_dict["taxes"] = taxes
