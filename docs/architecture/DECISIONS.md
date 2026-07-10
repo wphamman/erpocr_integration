@@ -165,3 +165,46 @@
 - **Rejected:** gitignore the dist + add `cd frontend && npm ci && npm run build` to Starktail's image (the fold-in kickoff's original assumption, inherited from the standalone-app era) — more operational surface, a new failure mode, and breaks Frappe-Cloud installability. **Supersedes ADR-0010's Node-step consequence.**
 - **Caveat (the one footgun of committing build output):** the release process must rebuild + re-commit the dist so the committed assets never drift from `frontend/src`. Enforce in the release checklist / a build script.
 - **Pointer:** OPEN-QUESTIONS Q5; builder handback (pending). Ratified by Willie 2026-07-09. See [[project_starpops_accounts_mvp]].
+
+## ADR-0012 — Fleet Card auto-record: opt-in, confidence-gated, plus a bulk manual action
+- **Status:** Accepted (Willie's ruling 2026-07-09) · shipped v1.8.0 (merge `acdddc9`)
+- **Decision:** Two levers for the Mark-Recorded backlog (34+ slips at the 2026-07-06 review):
+  (1) **`OCR Settings.enable_fleet_auto_record`** (default OFF, ADR-0002 philosophy) — a Fleet Card
+  slip that lands/updates to `Matched` with **high confidence** auto-completes via the existing
+  `mark_recorded()` path, triggered from `OCRFleetSlip.on_update` only. High confidence =
+  confirmed vehicle (`Auto Matched`/`Confirmed`, never fuzzy `Suggested`) + recon payload present
+  (Fuel: litres+total; Toll: total); slip_type `Other` NEVER auto-records (Willie, in-build).
+  Audit: `auto_recorded` + `auto_record_skipped_reason` (skip-reason group-by = the diagnostic).
+  The completing call is savepointed — a post-save failure rolls back the status write, so the
+  audit trail can never contradict the persisted status. (2) **`fleet_api.bulk_mark_recorded`** —
+  a list action (≤200 rows, synchronous) that server-revalidates EVERY row (strict `Matched`,
+  Fleet Card, per-doc perms via `mark_recorded()`) with per-row savepoints.
+- **Why:** the per-slip click was pure toil on verified slips, and the monthly fleet-card invoice
+  reconciliation in `fleet_management` remains the downstream safety net; a slip is a control
+  record, not a financial document (ADR-0003).
+- **Rejected:** always-on auto-record (violates ADR-0002's opt-in automation posture); a new
+  terminal status (ADR-0003's reuse rule); background-queued bulk (accepted synchronous at ≤200 —
+  revisit trigger: a prod timeout on a bulk selection).
+- **Invariant preserved:** `purchase_invoice` stays NULL on every auto/bulk path; Direct Expense
+  slips are untouched; with the setting off, behavior is regression-tested identical to v1.7.0.
+- **Pointer:** `tasks/auto_record.py`; OPEN-QUESTIONS Q8 (resolved); CHANGELOG 1.8.0.
+
+## ADR-0013 — Item aliases: supplier-scoped tier over the global tier; hash-named rows
+- **Status:** Accepted (Willie ruled Q7c IN, 2026-07-09) · shipped v1.8.0 (merge `acdddc9`)
+- **Decision:** `OCR Item Alias` gains an optional `supplier` Link; matching order becomes
+  **Item Supplier lookup → supplier-scoped alias → global alias → exact → service mapping →
+  fuzzy → default_item**. Learning writes the supplier-scoped row when the parent supplier is
+  known; all pre-v1.8.0 rows stay global (blank supplier) and keep working as the fallback tier —
+  no destructive migration. Enabler: autoname `field:ocr_text` → `hash` and the unique index
+  dropped (same text may exist per supplier), so **every read/write is filter-based with
+  `order_by="modified desc, name asc"`** — rows are never addressed by document name.
+- **Why:** globally-keyed aliases let one supplier's confirmation silently rewrite the mapping
+  every other supplier relies on (cross-supplier description collisions). Supplier scoping makes
+  corrections local; the DN pipeline joined the same semantics (its old name-based existence
+  check would have inserted unbounded duplicates under hash naming).
+- **Rejected:** keeping the unique index with a composite key (breaks legacy rows / needs
+  migration); waiting for a collision to bite (Willie ruled include-now, 2026-07-09).
+- **Accepted costs:** duplicate rows possible under a benign check-then-insert race (reads and
+  corrections deterministically target the most-recently-modified row; periodic cleanup is a
+  future nit); up to two queries per line on a scoped miss.
+- **Pointer:** `tasks/matching.py`, `ocr_item_alias.json`; OPEN-QUESTIONS Q7 (resolved); CLAUDE.md gotcha.

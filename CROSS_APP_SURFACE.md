@@ -4,14 +4,15 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.8.0** (v1.7.0 baseline `762301d`; architect re-baselines the SHA at the
-v1.8.0 merge): §2c/§2a/§5/§6 reflect the D0 driver-perm widening (`upload_fleet_slip` accepts
-the plain `Driver` role, endpoint-scoped) and the owner-scoped idempotent replay
-(ADR-0006/ADR-0007). §3a records the v1.7.0 `starpops_accounts` SPA fold-in — a read-only
-`/accounts` dashboard consuming OCR doctypes via generic `frappe.client` only, **no new
-whitelisted surface** (ADR-0010/ADR-0011). **v1.8.0 delta: ONE new §2a method,
-`fleet_api.bulk_mark_recorded`** (32 → 33) — an own-Desk list-action helper, not a cross-app
-contract; no §3/§4 field changes. See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
+**Current through v1.8.0** (baselined at merge `acdddc9`): §2c/§2a/§5/§6 reflect the D0
+driver-perm widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and
+the owner-scoped idempotent replay (ADR-0006/ADR-0007). §3a records the v1.7.0
+`starpops_accounts` SPA fold-in — a read-only `/accounts` dashboard consuming OCR doctypes via
+generic `frappe.client` only, **no new whitelisted surface** (ADR-0010/ADR-0011). **v1.8.0
+delta: ONE new §2a method, `fleet_api.bulk_mark_recorded`** (32 → 33) — an own-Desk list-action
+helper, not a cross-app contract; no §3/§4 field changes, but note the **§3 semantics change**:
+`OCR Fleet Slip.expense_account` is **blank on new Fleet Card slips** since v1.8.0 (Q6 — flag
+emitted to the fleet architect). See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
 
 **v1.7.0 fold-in (ADR-0010) — no new whitelisted surface.** The `starpops_accounts` read-only
 React dashboard now ships *inside* this app at `/accounts` (§3a). It adds a website route, an
@@ -19,7 +20,6 @@ React dashboard now ships *inside* this app at `/accounts` (§3a). It adds a web
 (`erpocr_integration.dashboard.permission.has_app_permission` — **NOT** a `@frappe.whitelist`
 method), and reads OCR data via generic `frappe.client` `get_count`/`get_list` only. The §2
 whitelisted count is unchanged (32).
-*Re-baseline this SHA at merge (architect).*
 
 `erpocr_integration` is an **underlying app, not a shell** — it knows nothing of its
 consumers. Its only cross-app coupling is a **soft, runtime feature-detected** integration
