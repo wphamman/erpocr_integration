@@ -4,7 +4,7 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.8.0** (baselined at merge `acdddc9`): §2c/§2a/§5/§6 reflect the D0
+**Current through v1.9.0** (baselined at merge `ec4910a`; **v1.9.0 delta: NONE** — all changes internal/_-prefixed, no new whitelisted method, no field/contract changes): §2c/§2a/§5/§6 reflect the D0
 driver-perm widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and
 the owner-scoped idempotent replay (ADR-0006/ADR-0007). §3a records the v1.7.0
 `starpops_accounts` SPA fold-in — a read-only `/accounts` dashboard consuming OCR doctypes via

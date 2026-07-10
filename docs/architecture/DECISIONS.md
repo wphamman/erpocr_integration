@@ -208,3 +208,29 @@
   corrections deterministically target the most-recently-modified row; periodic cleanup is a
   future nit); up to two queries per line on a scoped miss.
 - **Pointer:** `tasks/matching.py`, `ocr_item_alias.json`; OPEN-QUESTIONS Q7 (resolved); CLAUDE.md gotcha.
+
+## ADR-0014 — Auto-draft gates on totals reconciliation (tax-inclusivity-aware)
+- **Status:** Accepted 2026-07-10 · shipped v1.9.0 (merge `ec4910a`)
+- **Decision:** Auto-draft (never manual creation) skips when **Σ(qty×rate) across extracted
+  lines** deviates from the invoice's stated amount beyond **max(1%, R1.00)** (module constants,
+  not a setting), bidirectionally. **The reference is tax-inclusivity-aware** — decided by the
+  existing `_detect_tax_inclusive_rates`: exclusive rates reconcile against `subtotal` (falling
+  back to `total − tax` when subtotal is 0/absent); **inclusive rates reconcile against
+  `total_amount`**. Degenerate/unverifiable cases (no positive line sum, no usable reference)
+  **fail open** — the other confidence gates and human review still stand.
+- **Why:** the first organic auto-draft (Q4 probe, 2026-07-10: `OCR-IMP-01918` → `ACC-PINV-2026-00446`,
+  Cactus) **overdrafted R132.76** — a 5% invoice discount lived in the extracted subtotal but not
+  the line rates, and PI amounts build from qty×rate; the Gemini schema has no discount field, so
+  every globally-discounted invoice would systematically overdraft. The gate converts the whole
+  class into "parks for review with an amount-naming skip reason."
+- **The load-bearing subtlety (pin this):** comparing line sums against the tax-exclusive
+  subtotal **unconditionally** false-fails every legitimately tax-INCLUSIVE invoice by the full
+  tax amount — silently disabling auto-draft for that entire class while the mocked suite stays
+  green (the first cut had exactly this bug; three /code-review finders converged on it, fixed
+  pre-handback). The gate's arithmetic must also mirror the PI builder's defaults exactly
+  (`qty or 1`, `rate or 0`) — verified both sides at the merge gate.
+- **Rejected:** extracting discounts via a Gemini schema change (bigger design; the gate makes
+  the class safe first — revisit if discounted-invoice volume makes the skip pile annoying);
+  a tolerance setting in OCR Settings (no evidence a knob is needed); fail-closed on
+  unverifiable data (would silently disable auto-draft for sparse extractions).
+- **Pointer:** `tasks/auto_draft.py` `_totals_reconcile`; OPEN-QUESTIONS Q11 (resolved), Q4 (evidence); CHANGELOG 1.9.0.
