@@ -382,6 +382,225 @@ class TestMatchItemBySupplierPart:
 
 
 # ---------------------------------------------------------------------------
+# Q10 (v1.9.0): chained match confidence — supplier-keyed item tiers cap their
+# status to the MIN of the chain. A fuzzy "Suggested" supplier caps its
+# supplier-keyed item matches to "Suggested"; confirmed/exact suppliers don't.
+# ---------------------------------------------------------------------------
+
+
+class TestChainedConfidenceCap:
+	def test_cap_helper(self):
+		from erpocr_integration.tasks.matching import _cap_to_supplier
+
+		# Only a Suggested supplier + an Auto Matched item caps.
+		assert _cap_to_supplier("Auto Matched", "Suggested") == "Suggested"
+		assert _cap_to_supplier("Auto Matched", "Auto Matched") == "Auto Matched"
+		assert _cap_to_supplier("Auto Matched", "Confirmed") == "Auto Matched"
+		assert _cap_to_supplier("Auto Matched", None) == "Auto Matched"
+		# A non-high item status (already Suggested/Unmatched) is unchanged.
+		assert _cap_to_supplier("Suggested", "Suggested") == "Suggested"
+		assert _cap_to_supplier("Unmatched", "Suggested") == "Unmatched"
+
+	def test_supplier_part_capped_under_suggested_supplier(self, mock_frappe):
+		"""Tier 1 (Item Supplier lookup) under a fuzzy supplier → Suggested."""
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(parent="ITEM-001")])
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		result, status = match_item_by_supplier_part("Acme", "P-001", supplier_status="Suggested")
+		assert result == "ITEM-001"
+		assert status == "Suggested"  # capped
+
+	def test_supplier_part_uncapped_under_confirmed_supplier(self, mock_frappe):
+		"""Tier 1 under a Confirmed/Auto Matched supplier behaves as today."""
+		mock_frappe.get_all = MagicMock(return_value=[SimpleNamespace(parent="ITEM-001")])
+		from erpocr_integration.tasks.matching import match_item_by_supplier_part
+
+		for sup_status in ("Auto Matched", "Confirmed", None):
+			result, status = match_item_by_supplier_part("Acme", "P-001", supplier_status=sup_status)
+			assert result == "ITEM-001"
+			assert status == "Auto Matched"
+
+	def test_scoped_alias_capped_under_suggested_supplier(self, mock_frappe):
+		"""Tier 2 (supplier-scoped alias) under a fuzzy supplier → Suggested."""
+		mock_frappe.db.get_value = MagicMock(return_value="ITEM-A")  # scoped alias hit
+		from erpocr_integration.tasks.matching import match_item
+
+		result, status = match_item("Widget", supplier="Supplier A", supplier_status="Suggested")
+		assert result == "ITEM-A"
+		assert status == "Suggested"  # capped to the supplier's confidence
+
+	def test_scoped_alias_uncapped_under_confirmed_supplier(self, mock_frappe):
+		mock_frappe.db.get_value = MagicMock(return_value="ITEM-A")
+		from erpocr_integration.tasks.matching import match_item
+
+		result, status = match_item("Widget", supplier="Supplier A", supplier_status="Confirmed")
+		assert result == "ITEM-A"
+		assert status == "Auto Matched"
+
+	def test_global_alias_not_capped(self, mock_frappe):
+		"""Tier 3 (global alias) is NOT supplier-keyed — a Suggested supplier must
+		not cap it (the mapping holds regardless of which supplier this is)."""
+
+		def _get_value(doctype, filters=None, field=None, **kw):
+			return None  # no scoped alias
+
+		def _get_all(doctype, filters=None, **kw):
+			if doctype == "OCR Item Alias" and filters and filters.get("supplier") == ["is", "not set"]:
+				return [SimpleNamespace(item_code="ITEM-G")]
+			return []
+
+		mock_frappe.db.get_value = MagicMock(side_effect=_get_value)
+		mock_frappe.get_all = MagicMock(side_effect=_get_all)
+		mock_frappe.db.exists = MagicMock(return_value=False)
+		from erpocr_integration.tasks.matching import match_item
+
+		result, status = match_item("Widget", supplier="Supplier A", supplier_status="Suggested")
+		assert result == "ITEM-G"
+		assert status == "Auto Matched"  # global tier is supplier-independent
+
+	def _wire_run_matching(self, mock_frappe, supplier_result):
+		"""supplier_result: (supplier, status) the supplier tiers should resolve to.
+		Item side: Item Supplier lookup hits ITEM-A (tier 1)."""
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(parent="ITEM-A")] if doctype == "Item Supplier" else []
+			)
+		)
+
+		def _get_value(doctype, filters=None, field=None, **kw):
+			if doctype == "OCR Supplier Alias":
+				return supplier_result[0] if supplier_result[1] == "Auto Matched" else None
+			return None
+
+		mock_frappe.db.get_value = MagicMock(side_effect=_get_value)
+		mock_frappe.db.exists = MagicMock(return_value=False)
+
+	def _make_import(self):
+		return SimpleNamespace(
+			supplier_name_ocr="ACME LTD",
+			supplier="",
+			supplier_match_status="",
+			company="Test Company",
+			items=[
+				SimpleNamespace(
+					description_ocr="Bracket 40mm",
+					product_code="P-001",
+					item_code="",
+					item_name="",
+					match_status="",
+					expense_account="",
+					cost_center="",
+				)
+			],
+		)
+
+	def test_run_matching_caps_item_under_suggested_supplier(self, mock_frappe):
+		"""Invoice path end-to-end: a fuzzy supplier caps the tier-1 item to Suggested."""
+		# Supplier: exact tiers miss, fuzzy resolves "Acme Ltd" as Suggested.
+		self._wire_run_matching(mock_frappe, ("Acme Ltd", "Suggested"))
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(parent="ITEM-A")]
+				if doctype == "Item Supplier"
+				else [SimpleNamespace(name="Acme Ltd", supplier_name="Acme Ltd")]
+				if doctype == "Supplier"
+				else []
+			)
+		)
+
+		class _Settings(SimpleNamespace):
+			def get(self, key, default=None):
+				return getattr(self, key, default)
+
+		ocr_import = self._make_import()
+		from erpocr_integration.api import _run_matching
+
+		_run_matching(ocr_import, {}, _Settings(matching_threshold=1, default_item=""))
+
+		assert ocr_import.supplier_match_status == "Suggested"
+		# Tier-1 item resolved off a guessed supplier → capped, NOT "Auto Matched"
+		assert ocr_import.items[0].item_code == "ITEM-A"
+		assert ocr_import.items[0].match_status == "Suggested"
+
+	def test_run_matching_uncapped_under_exact_supplier(self, mock_frappe):
+		"""Confirmed/exact supplier → tier-1 item stays Auto Matched (today's behavior)."""
+		self._wire_run_matching(mock_frappe, ("Acme Ltd", "Auto Matched"))
+
+		class _Settings(SimpleNamespace):
+			def get(self, key, default=None):
+				return getattr(self, key, default)
+
+		ocr_import = self._make_import()
+		from erpocr_integration.api import _run_matching
+
+		_run_matching(ocr_import, {}, _Settings(matching_threshold=80, default_item=""))
+
+		assert ocr_import.supplier_match_status == "Auto Matched"
+		assert ocr_import.items[0].item_code == "ITEM-A"
+		assert ocr_import.items[0].match_status == "Auto Matched"
+
+	def test_capped_item_keeps_auto_draft_blocked(self, mock_frappe):
+		"""Safety assertion: the capped item statuses must not accidentally unblock
+		auto-draft. A Suggested supplier already blocks it — confirm the whole
+		record fails _is_high_confidence even though the item pre-fill is kept."""
+		from erpocr_integration.tasks.auto_draft import _is_high_confidence
+
+		doc = SimpleNamespace(
+			supplier="Acme Ltd",
+			supplier_match_status="Suggested",
+			items=[SimpleNamespace(item_code="ITEM-A", match_status="Suggested", description_ocr="Bracket")],
+		)
+		is_high, reason = _is_high_confidence(doc)
+		assert is_high is False
+		assert "Suggested" in reason
+
+	def test_dn_path_caps_item_under_suggested_supplier(self, mock_frappe):
+		"""DN path consistency: a fuzzy DN supplier caps the supplier-scoped alias
+		tier to Suggested, same as the invoice path."""
+
+		# Supplier fuzzy-resolves to Suggested; scoped alias hits ITEM-A.
+		def _get_value(doctype, filters=None, field=None, **kw):
+			if doctype == "OCR Supplier Alias":
+				return None
+			if doctype == "OCR Item Alias" and isinstance(filters, dict) and filters.get("supplier"):
+				return "ITEM-A"
+			return None
+
+		mock_frappe.db.get_value = MagicMock(side_effect=_get_value)
+		mock_frappe.db.exists = MagicMock(return_value=False)
+		mock_frappe.get_all = MagicMock(
+			side_effect=lambda doctype, **kw: (
+				[SimpleNamespace(name="Acme Ltd", supplier_name="Acme Ltd")] if doctype == "Supplier" else []
+			)
+		)
+
+		class _Settings(SimpleNamespace):
+			def get(self, key, default=None):
+				return getattr(self, key, default)
+
+		ocr_dn = SimpleNamespace(
+			supplier_name_ocr="ACME LTD",
+			supplier="",
+			supplier_match_status="",
+			items=[
+				SimpleNamespace(
+					description_ocr="Widget",
+					item_name="Widget",
+					item_code="",
+					match_status="",
+				)
+			],
+		)
+		from erpocr_integration.dn_api import _run_dn_matching
+
+		_run_dn_matching(ocr_dn, _Settings(matching_threshold=1))
+
+		assert ocr_dn.supplier_match_status == "Suggested"
+		assert ocr_dn.items[0].item_code == "ITEM-A"
+		assert ocr_dn.items[0].match_status == "Suggested"  # capped
+
+
+# ---------------------------------------------------------------------------
 # match_supplier_fuzzy
 # ---------------------------------------------------------------------------
 

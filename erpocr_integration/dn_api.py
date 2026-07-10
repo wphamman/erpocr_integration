@@ -171,10 +171,18 @@ def _run_dn_matching(ocr_dn, settings):
 		# supplier (v1.8.0, Q7c) so supplier-scoped aliases learned on the
 		# invoice side keep auto-matching delivery notes too — without it,
 		# every new invoice-learned alias would be invisible to DN matching.
+		# supplier_status threads the DN's supplier confidence into the
+		# supplier-keyed alias tier (Q10, v1.9.0): a supplier-scoped alias resolved
+		# under a fuzzy "Suggested" supplier caps to "Suggested", same as the
+		# invoice path — the two pipelines must display confidence consistently.
 		if item.item_name and item.item_name != item.description_ocr:
-			matched_item, match_status = match_item(item.item_name, supplier=ocr_dn.supplier)
+			matched_item, match_status = match_item(
+				item.item_name, supplier=ocr_dn.supplier, supplier_status=ocr_dn.supplier_match_status
+			)
 		if not matched_item and item.description_ocr:
-			matched_item, match_status = match_item(item.description_ocr, supplier=ocr_dn.supplier)
+			matched_item, match_status = match_item(
+				item.description_ocr, supplier=ocr_dn.supplier, supplier_status=ocr_dn.supplier_match_status
+			)
 
 		# Fuzzy fallback
 		if not matched_item and item.description_ocr:

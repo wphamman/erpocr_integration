@@ -23,6 +23,22 @@ def normalize_for_matching(text: str) -> str:
 	return re.sub(r"\s+", " ", text).strip()
 
 
+def _cap_to_supplier(status: str, supplier_status: str | None) -> str:
+	"""Cap a supplier-keyed item match to the confidence of the supplier it's keyed on.
+
+	Q10 (v1.9.0, Willie's ruling — cap, don't skip): the supplier-keyed tiers
+	(Item Supplier lookup, supplier-scoped alias) are only as trustworthy as the
+	supplier match they hang off. When the parent supplier was a fuzzy
+	"Suggested" guess, an item those tiers resolve can't honestly be "Auto
+	Matched" — display the MIN of the chain instead. A Confirmed / Auto Matched /
+	manually-set supplier is high confidence, so the item status passes through
+	unchanged (today's behavior). Only a Suggested supplier caps.
+	"""
+	if supplier_status == "Suggested" and status == "Auto Matched":
+		return "Suggested"
+	return status
+
+
 def match_supplier(ocr_text: str) -> tuple[str | None, str]:
 	"""
 	Attempt to match an OCR-extracted supplier name to an ERPNext Supplier.
@@ -64,7 +80,9 @@ def match_supplier(ocr_text: str) -> tuple[str | None, str]:
 	return None, "Unmatched"
 
 
-def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, str]:
+def match_item(
+	ocr_text: str, supplier: str | None = None, supplier_status: str | None = None
+) -> tuple[str | None, str]:
 	"""
 	Attempt to match an OCR-extracted item description to an ERPNext Item.
 
@@ -72,11 +90,20 @@ def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, 
 	1. Supplier-scoped OCR Item Alias (exact ocr_text + this supplier) — only
 	   when the caller passes the confirmed supplier. Beats the global alias so
 	   the same printed description can map to different items per supplier
-	   (the cross-supplier collision case).
+	   (the cross-supplier collision case). SUPPLIER-KEYED, so Q10 caps it to a
+	   Suggested supplier's confidence.
 	2. Global OCR Item Alias (exact ocr_text, blank supplier) — every
 	   pre-v1.8.0 alias row lands here unchanged; the fallback tier.
 	3. Exact match against Item.item_name
 	4. Exact match against Item.name (item_code)
+
+	Tiers 2-4 are NOT supplier-keyed — they resolve regardless of whether the
+	supplier guess was right — so `supplier_status` never caps them.
+
+	Args:
+		supplier_status: the parent supplier's match status ("Auto Matched",
+			"Confirmed", "Suggested", ...). Only the supplier-scoped alias tier is
+			capped, and only when this is "Suggested" (see _cap_to_supplier).
 
 	Returns:
 		tuple: (item_code or None, match_status)
@@ -99,7 +126,7 @@ def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, 
 			order_by="modified desc, name asc",
 		)
 		if alias:
-			return alias, "Auto Matched"
+			return alias, _cap_to_supplier("Auto Matched", supplier_status)
 
 	# 2. Global alias (exact match, blank supplier). The "is not set" filter
 	# keeps a supplier-scoped row from shadowing other suppliers' lines —
@@ -135,13 +162,18 @@ def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, 
 	return None, "Unmatched"
 
 
-def match_item_by_supplier_part(supplier: str, product_code: str) -> tuple[str | None, str]:
+def match_item_by_supplier_part(
+	supplier: str, product_code: str, supplier_status: str | None = None
+) -> tuple[str | None, str]:
 	"""
 	Match using ERPNext's standard `Item Supplier` child table:
 	(supplier, supplier_part_no=product_code) → item_code.
 
 	This is the highest-precision matching tier — supplier-scoped, deterministic,
-	and uses the exact mapping ERPNext is designed to capture.
+	and uses the exact mapping ERPNext is designed to capture. Being supplier-keyed,
+	Q10 (v1.9.0) caps the returned status to a Suggested supplier's confidence:
+	an item resolved via a *guessed* supplier's part-number table is only as sure
+	as that guess.
 
 	Multi-hit policy: if the same (supplier, supplier_part_no) appears against
 	more than one parent Item, the data is ambiguous (ERPNext does not enforce
@@ -194,7 +226,7 @@ def match_item_by_supplier_part(supplier: str, product_code: str) -> tuple[str |
 		)
 		return None, "Unmatched"
 
-	return rows[0].parent, "Auto Matched"
+	return rows[0].parent, _cap_to_supplier("Auto Matched", supplier_status)
 
 
 def match_supplier_fuzzy(ocr_text: str, threshold: float = 80) -> tuple[str | None, str, float]:

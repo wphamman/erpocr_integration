@@ -7,6 +7,7 @@ import pytest
 
 from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
 	OCRImport,
+	_build_taxes_from_template,
 	_detect_tax_inclusive_rates,
 	_extract_service_pattern,
 	_resolve_ocr_description,
@@ -2155,3 +2156,121 @@ class TestJESplitExactness:
 			a["debit_in_account_currency"] for a in je_dict["accounts"] if a["account"].startswith("22")
 		]
 		assert round(sum(tax_debits), 2) == 1.00
+
+
+# ---------------------------------------------------------------------------
+# Q9 (v1.9.0): _build_taxes_from_template explicit-args contract.
+# The helper takes real values, not a doc-like proxy — both callers (invoice
+# PI/PR, fleet Direct-Expense PI) pass values directly. These tests exercise
+# the signature in isolation and prove the Actual-injection semantics (ADR-0008)
+# are unchanged: inject into a pure-Actual template, never into a mixed one.
+# ---------------------------------------------------------------------------
+class TestBuildTaxesExplicitArgs:
+	def _percentage_template(self):
+		row = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="On Net Total",
+			row_id=None,
+			account_head="2200 - VAT Input - TC",
+			description="VAT 15%",
+			rate=15.0,
+			cost_center="Main - TC",
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		return SimpleNamespace(company="Test Company", taxes=[row])
+
+	def _actual_template(self):
+		row = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="Actual",
+			row_id=None,
+			account_head="2201 - Import VAT - TC",
+			description="Import VAT",
+			rate=0.0,
+			cost_center="Main - TC",
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		return SimpleNamespace(company="Test Company", taxes=[row])
+
+	def _mixed_template(self):
+		pct = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="On Net Total",
+			row_id=None,
+			account_head="2200 - VAT Input - TC",
+			description="VAT 15%",
+			rate=15.0,
+			cost_center="Main - TC",
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		actual = SimpleNamespace(
+			category="Total",
+			add_deduct_tax="Add",
+			charge_type="Actual",
+			row_id=None,
+			account_head="5100 - Freight - TC",
+			description="Freight",
+			rate=0.0,
+			cost_center="Main - TC",
+			account_currency="ZAR",
+			included_in_print_rate=0,
+			included_in_paid_amount=0,
+		)
+		return SimpleNamespace(company="Test Company", taxes=[pct, actual])
+
+	def test_no_template_returns_none(self, mock_frappe):
+		assert _build_taxes_from_template(None, "Test Company", 0, False) == (None, None)
+		assert _build_taxes_from_template("", "Test Company", 0, False) == (None, None)
+
+	def test_company_mismatch_throws(self, mock_frappe):
+		mock_frappe.get_cached_doc.return_value = self._percentage_template()
+		mock_frappe.throw.side_effect = Exception("company mismatch")
+		with pytest.raises(Exception, match="company mismatch"):
+			_build_taxes_from_template("SA VAT 15%", "Other Company", 150.0, False)
+
+	def test_percentage_template_no_injection(self, mock_frappe):
+		"""A pure-percentage template is passed through; no tax_amount injected."""
+		mock_frappe.get_cached_doc.return_value = self._percentage_template()
+		name, taxes = _build_taxes_from_template("SA VAT 15%", "Test Company", 150.0, False)
+		assert name == "SA VAT 15%"
+		assert len(taxes) == 1
+		assert taxes[0]["rate"] == 15.0
+		assert "tax_amount" not in taxes[0]
+
+	def test_actual_template_injects_extracted_vat(self, mock_frappe):
+		"""ADR-0008: a pure-Actual (customs) template gets the extracted VAT
+		injected into the Actual row — the fleet + invoice import-VAT path."""
+		mock_frappe.get_cached_doc.return_value = self._actual_template()
+		name, taxes = _build_taxes_from_template("9 - Import with Std VAT", "Test Company", 146.74, False)
+		assert name == "9 - Import with Std VAT"
+		assert taxes[0]["tax_amount"] == 146.74
+
+	def test_mixed_template_not_injected(self, mock_frappe):
+		"""ADR-0008 guard: a mixed template (percentage + auxiliary Actual) must
+		NOT get the extracted VAT injected — that would double-tax ordinary invoices."""
+		mock_frappe.get_cached_doc.return_value = self._mixed_template()
+		mock_frappe.msgprint = MagicMock()
+		_name, taxes = _build_taxes_from_template("SA VAT 15% + Freight", "Test Company", 146.74, False)
+		assert all("tax_amount" not in t for t in taxes)
+
+	def test_rates_include_tax_sets_print_rate_on_percentage(self, mock_frappe):
+		"""rates_include_tax=True flips included_in_print_rate on percentage rows."""
+		mock_frappe.get_cached_doc.return_value = self._percentage_template()
+		_name, taxes = _build_taxes_from_template("SA VAT 15%", "Test Company", 150.0, True)
+		assert taxes[0]["included_in_print_rate"] == 1
+
+	def test_rates_include_tax_never_flags_actual_row(self, mock_frappe):
+		"""Even with rates_include_tax=True, an Actual row keeps its original flag
+		(ERPNext rejects Actual + inclusive at insert)."""
+		mock_frappe.get_cached_doc.return_value = self._actual_template()
+		_name, taxes = _build_taxes_from_template("9 - Import with Std VAT", "Test Company", 100.0, True)
+		assert taxes[0]["included_in_print_rate"] == 0

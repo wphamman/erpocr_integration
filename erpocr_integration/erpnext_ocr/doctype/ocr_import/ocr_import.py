@@ -172,25 +172,40 @@ def _detect_tax_inclusive_rates(ocr_import) -> bool:
 	return diff_to_total < diff_to_subtotal
 
 
-def _build_taxes_from_template(ocr_import) -> tuple[str, list[dict]] | tuple[None, None]:
-	"""Build taxes list from the tax template on the OCR Import.
+def _build_taxes_from_template(
+	tax_template: str | None,
+	company: str | None,
+	tax_amount,
+	rates_include_tax: bool,
+) -> tuple[str, list[dict]] | tuple[None, None]:
+	"""Build a taxes list from a Purchase Taxes and Charges Template.
 
-	Validates the template belongs to the same company, detects whether
-	OCR-extracted rates include tax, and returns the template name + taxes list
-	ready to assign to a PI/PR dict. Returns (None, None) if no template set.
+	Explicit-parameter contract (Q9, v1.9.0): the caller passes real values, not
+	a doc-like object. This replaced a `SimpleNamespace` proxy the fleet path used
+	to fake an OCR Import — a proxy that would AttributeError on prod the moment
+	this helper read a new attribute, while the mocked suite stayed green. Both
+	callers (invoice PI/PR and fleet Direct-Expense PI) now pass values directly.
+
+	The inclusive-rate signal is computed by the caller and passed in as
+	`rates_include_tax` (invoice: `_detect_tax_inclusive_rates(self)`; fleet: a
+	slip is a single amount with no per-line rates → False), so this helper no
+	longer needs the OCR Import's items/subtotal/total.
+
+	Validates the template belongs to `company`, and injects the extracted
+	`tax_amount` into a pure-Actual template's Actual row (customs/import VAT).
+	Returns the template name + taxes list ready to assign to a PI/PR dict, or
+	(None, None) if no template is set.
 	"""
-	if not ocr_import.tax_template:
+	if not tax_template:
 		return None, None
 
-	template = frappe.get_cached_doc("Purchase Taxes and Charges Template", ocr_import.tax_template)
-	if template.company and template.company != ocr_import.company:
+	template = frappe.get_cached_doc("Purchase Taxes and Charges Template", tax_template)
+	if template.company and template.company != company:
 		frappe.throw(
 			_("Tax Template '{0}' belongs to company '{1}', not '{2}'").format(
-				ocr_import.tax_template, template.company, ocr_import.company
+				tax_template, template.company, company
 			)
 		)
-
-	rates_include_tax = _detect_tax_inclusive_rates(ocr_import)
 
 	taxes = [
 		{
@@ -223,7 +238,7 @@ def _build_taxes_from_template(ocr_import) -> tuple[str, list[dict]] | tuple[Non
 	# plus an auxiliary Actual row, e.g. a freight line kept in a standard VAT
 	# template) must not get the extracted VAT injected on top of its computed
 	# percentage rows — that would silently double-tax ordinary invoices.
-	extracted_tax = flt(ocr_import.tax_amount, 2)
+	extracted_tax = flt(tax_amount, 2)
 	charge_rows = [t for t in taxes if t.get("account_head")]
 	actual_rows = [t for t in charge_rows if t.get("charge_type") == "Actual"]
 	if extracted_tax > 0 and charge_rows and len(actual_rows) == len(charge_rows):
@@ -237,11 +252,11 @@ def _build_taxes_from_template(ocr_import) -> tuple[str, list[dict]] | tuple[Non
 					"Tax template '{0}' has multiple Actual rows but the split cannot "
 					"be inferred — the full tax amount was placed on '{1}'. "
 					"Review the tax table on the draft."
-				).format(ocr_import.tax_template, actual_rows[0].get("account_head")),
+				).format(tax_template, actual_rows[0].get("account_head")),
 				indicator="orange",
 			)
 
-	return ocr_import.tax_template, taxes
+	return tax_template, taxes
 
 
 class OCRImport(Document):
@@ -721,8 +736,12 @@ class OCRImport(Document):
 		if self.due_date and str(self.due_date) >= str(posting_date):
 			pi_dict["due_date"] = self.due_date
 
-		# Apply tax template from OCR Import (user-editable, auto-set during extraction)
-		tax_template, taxes = _build_taxes_from_template(self)
+		# Apply tax template from OCR Import (user-editable, auto-set during extraction).
+		# Q9: the inclusive-rate detector reads the full doc (items/subtotal/total) and
+		# is computed here, at the invoice call site, then passed in explicitly.
+		tax_template, taxes = _build_taxes_from_template(
+			self.tax_template, self.company, self.tax_amount, _detect_tax_inclusive_rates(self)
+		)
 		if tax_template:
 			pi_dict["taxes_and_charges"] = tax_template
 			pi_dict["taxes"] = taxes
@@ -890,8 +909,10 @@ class OCRImport(Document):
 		if frappe.get_meta("Purchase Receipt").has_field("custom_ocr_import"):
 			pr_dict["custom_ocr_import"] = self.name
 
-		# Apply tax template from OCR Import
-		tax_template, taxes = _build_taxes_from_template(self)
+		# Apply tax template from OCR Import (Q9: explicit args; detector at call site)
+		tax_template, taxes = _build_taxes_from_template(
+			self.tax_template, self.company, self.tax_amount, _detect_tax_inclusive_rates(self)
+		)
 		if tax_template:
 			pr_dict["taxes_and_charges"] = tax_template
 			pr_dict["taxes"] = taxes

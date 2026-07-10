@@ -10,6 +10,7 @@ from erpocr_integration.tasks.auto_draft import (
 	_auto_link_purchase_order,
 	_invoice_date_in_fiscal_year,
 	_is_high_confidence,
+	_totals_reconcile,
 	attempt_auto_draft,
 )
 
@@ -21,6 +22,13 @@ def _make_ocr_import(**overrides):
 		supplier_match_status="Auto Matched",
 		items=[],
 		status="Matched",
+		# Totals fields a real OCR Import always carries (Q11 gate reads these).
+		# Defaults leave the gate a no-op (line sum 0 → unverifiable → pass); the
+		# Q11 tests set explicit values.
+		subtotal=0.0,
+		tax_amount=0.0,
+		total_amount=0.0,
+		currency="ZAR",
 	)
 	defaults.update(overrides)
 	return SimpleNamespace(**defaults)
@@ -31,6 +39,8 @@ def _make_item(**overrides):
 		item_code="ITEM-001",
 		match_status="Auto Matched",
 		description_ocr="Test item",
+		qty=1.0,
+		rate=0.0,
 	)
 	defaults.update(overrides)
 	return SimpleNamespace(**defaults)
@@ -499,3 +509,187 @@ class TestInvoiceDateFiscalYearGuard:
 		doc.create_purchase_invoice.assert_not_called()
 		mock_frappe.db.set_value.assert_called()
 		assert "Fiscal Year" in str(mock_frappe.db.set_value.call_args)
+
+
+# ---------------------------------------------------------------------------
+# Q11 (v1.9.0): totals-reconciliation gate — auto-draft skips a globally
+# discounted invoice whose line rates don't reconcile with the subtotal.
+# ---------------------------------------------------------------------------
+class TestTotalsReconcile:
+	def test_ocr_imp_01918_shape_fails(self):
+		"""Synthetic reproduction of the live OCR-IMP-01918 overdraft (Cactus):
+		a 5% invoice discount landed in the extracted subtotal but not the line
+		rates. Line gross 2308.68 vs extracted subtotal 2193.24 → must NOT reconcile."""
+		doc = _make_ocr_import(
+			subtotal=2193.24,
+			tax_amount=328.98,
+			total_amount=2522.22,
+			currency="ZAR",
+			items=[
+				_make_item(qty=1.0, rate=1508.68),
+				_make_item(qty=1.0, rate=800.00),
+			],
+		)
+		ok, reason = _totals_reconcile(doc)
+		assert ok is False
+		# Skip reason names BOTH amounts so a group-by on the reason is diagnostic.
+		assert "2,308.68" in reason
+		assert "2,193.24" in reason
+
+	def test_clean_invoice_reconciles(self):
+		"""No discount: line rates sum to the subtotal → passes."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=2.0, rate=300.00), _make_item(qty=1.0, rate=400.00)],
+		)
+		ok, reason = _totals_reconcile(doc)
+		assert ok is True
+		assert reason == ""
+
+	def test_tax_inclusive_rates_reconcile_against_total(self):
+		"""Regression (review catch): a legitimately tax-INCLUSIVE invoice — line
+		rates already include VAT, so Σ(qty*rate) matches the incl-tax TOTAL, not
+		the pre-tax subtotal. The gate must reconcile against the total and PASS,
+		not false-fail by the tax amount and block a whole invoice class."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,  # pre-tax
+			tax_amount=150.00,
+			total_amount=1150.00,
+			# single line priced inclusive of VAT → 1150, which equals the total
+			items=[_make_item(qty=1.0, rate=1150.00)],
+		)
+		ok, reason = _totals_reconcile(doc)
+		assert ok is True
+		assert reason == ""
+
+	def test_tax_inclusive_discount_still_caught(self):
+		"""A tax-inclusive invoice that ALSO overstates vs the total is still
+		caught (the inclusive branch reconciles against total_amount)."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1.0, rate=1300.00)],  # 1300 vs incl total 1150
+		)
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is False
+
+	def test_within_absolute_floor_reconciles(self):
+		"""Sub-R1 multi-line rounding drift is absorbed by the absolute floor."""
+		doc = _make_ocr_import(subtotal=1000.00, items=[_make_item(qty=1.0, rate=1000.40)])
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is True
+
+	def test_just_over_one_percent_fails(self):
+		"""1.5% deviation on a large subtotal exceeds max(1%, R1) → skips."""
+		doc = _make_ocr_import(subtotal=1000.00, items=[_make_item(qty=1.0, rate=1015.00)])
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is False
+
+	def test_underdraft_also_fails(self):
+		"""Gate is bidirectional — line sum well BELOW subtotal also skips."""
+		doc = _make_ocr_import(subtotal=1000.00, items=[_make_item(qty=1.0, rate=850.00)])
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is False
+
+	def test_absent_subtotal_falls_back_to_total_minus_tax(self):
+		"""subtotal 0 (Gemini 'not shown') → compare against total_amount - tax_amount."""
+		# line sum 900 vs (1035 - 135) = 900 → reconciles
+		doc = _make_ocr_import(
+			subtotal=0.0,
+			tax_amount=135.00,
+			total_amount=1035.00,
+			items=[_make_item(qty=1.0, rate=900.00)],
+		)
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is True
+
+	def test_absent_subtotal_fallback_detects_discount(self):
+		"""Fallback still catches a discount: line sum 1000 vs (1035-135)=900 → fails."""
+		doc = _make_ocr_import(
+			subtotal=0.0,
+			tax_amount=135.00,
+			total_amount=1035.00,
+			items=[_make_item(qty=1.0, rate=1000.00)],
+		)
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is False
+
+	def test_no_usable_reference_passes(self):
+		"""No subtotal and no positive (total - tax) → unverifiable → pass."""
+		doc = _make_ocr_import(
+			subtotal=0.0,
+			tax_amount=0.0,
+			total_amount=0.0,
+			items=[_make_item(qty=1.0, rate=500.00)],
+		)
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is True
+
+	def test_zero_line_sum_passes(self):
+		"""No positive line total (e.g. rates not extracted) → unverifiable → pass."""
+		doc = _make_ocr_import(subtotal=1000.00, items=[_make_item(qty=1.0, rate=0.0)])
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is True
+
+	def test_single_line_service_invoice_reconciles(self):
+		doc = _make_ocr_import(subtotal=1200.00, items=[_make_item(qty=1.0, rate=1200.00)])
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is True
+
+	def test_attempt_auto_draft_skips_on_totals_mismatch(self, mock_frappe):
+		"""End-to-end: a high-confidence, Matched, discounted invoice must NOT
+		auto-draft — the totals gate skips it to review with a named reason."""
+		doc = _make_ocr_import(
+			name="OCR-IMP-01918",
+			status="Matched",
+			document_type="",
+			purchase_order=None,
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			company="Test Co",
+			subtotal=2193.24,
+			tax_amount=328.98,
+			total_amount=2522.22,
+			items=[_make_item(qty=1.0, rate=2308.68)],
+		)
+		doc.create_purchase_invoice = MagicMock()
+		doc.save = MagicMock()
+		settings = _make_settings()
+		mock_frappe.get_list.return_value = []
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+		mock_frappe.db.set_value.assert_called()
+		assert "subtotal" in str(mock_frappe.db.set_value.call_args)
+
+	def test_attempt_auto_draft_proceeds_on_clean_totals(self, mock_frappe):
+		"""The gate must not block a clean invoice — reconciling totals still draft."""
+		doc = _make_ocr_import(
+			name="OCR-IMP-CLEAN",
+			status="Matched",
+			document_type="",
+			purchase_order=None,
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			company="Test Co",
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1.0, rate=1000.00)],
+		)
+		doc.create_purchase_invoice = MagicMock(return_value="PI-CLEAN")
+		doc.save = MagicMock()
+		settings = _make_settings()
+		mock_frappe.get_list.return_value = []
+
+		result = attempt_auto_draft(doc, settings)
+
+		assert result is True
+		doc.create_purchase_invoice.assert_called_once()
