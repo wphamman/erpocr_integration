@@ -115,6 +115,15 @@ def attempt_auto_record(ocr_fleet, settings) -> bool:
 		_write_skip_reason(ocr_fleet, reason)
 		return False
 
+	# Savepoint before the state change (same pattern as bulk_mark_recorded):
+	# frappe's save() writes the DB row BEFORE post-save hooks run, so an
+	# exception raised after that write would otherwise leave
+	# status="Completed" in the open transaction while the except clause
+	# resets only the audit fields — the outer commit would ship a slip that
+	# is Completed with a skip reason saying it failed.
+	savepoint = "fleet_auto_record"
+	frappe.db.savepoint(savepoint)
+	prior_status = ocr_fleet.status
 	try:
 		ocr_fleet.auto_recorded = 1
 		ocr_fleet.auto_record_skipped_reason = ""
@@ -125,13 +134,16 @@ def attempt_auto_record(ocr_fleet, settings) -> bool:
 		ocr_fleet.mark_recorded()
 		return True
 	except Exception as e:
+		# Revert the inner save's writes (incl. any persisted
+		# status="Completed") FIRST, then record the audit outcome.
+		frappe.db.rollback(save_point=savepoint)
 		# mark_recorded's frappe.throw queued its message before raising —
 		# clear it, or the operator's (successful) outer save renders a red
 		# error dialog for a slip that simply parked for manual review.
 		frappe.clear_messages()
-		# Persist the flag rollback too — if mark_recorded threw AFTER its
-		# save, the DB would otherwise keep auto_recorded=1 alongside a skip
-		# reason, contradicting the audit contract.
+		# Reset the in-memory doc too — mark_recorded may have mutated status
+		# before throwing, and the outer save's response serializes this doc.
+		ocr_fleet.status = prior_status
 		ocr_fleet.auto_recorded = 0
 		ocr_fleet.auto_record_skipped_reason = f"Auto-record failed: {e}"
 		frappe.db.set_value(

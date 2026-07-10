@@ -224,6 +224,27 @@ class TestAutoRecordHappyPath:
 		assert mock_frappe.clear_messages.called
 		assert mock_frappe.log_error.called
 
+	def test_failure_after_status_write_rolls_back_to_savepoint(self, mock_frappe):
+		"""Bounce rework 1: frappe's save() writes the row BEFORE post-save
+		hooks — a failure raised after that write must roll back to the
+		savepoint (reverting the persisted status="Completed"), and the
+		in-memory doc must revert to its prior status too (the outer save's
+		response serializes it)."""
+		doc = _fleet_card_slip()
+		# mark_recorded mutates status, its save persists it, THEN a post-save
+		# hook explodes — status="Completed" is already in the transaction.
+		doc.save = MagicMock(side_effect=Exception("doc_events hook exploded"))
+
+		assert attempt_auto_record(doc, _settings()) is False
+
+		# rollback to the savepoint taken BEFORE the state change
+		mock_frappe.db.savepoint.assert_called_once_with("fleet_auto_record")
+		mock_frappe.db.rollback.assert_called_once_with(save_point="fleet_auto_record")
+		# in-memory doc reverted: not Completed-with-a-failure-reason
+		assert doc.status == "Matched"
+		assert doc.auto_recorded == 0
+		assert "Auto-record failed" in doc.auto_record_skipped_reason
+
 
 # ---------------------------------------------------------------------------
 # Desk trigger — on_update when a slip reaches Matched

@@ -87,12 +87,16 @@ def match_item(ocr_text: str, supplier: str | None = None) -> tuple[str | None, 
 	ocr_text_stripped = ocr_text.strip()
 	supplier = (supplier or "").strip()
 
-	# 1. Supplier-scoped alias (exact match) — highest description-tier precision
+	# 1. Supplier-scoped alias (exact match) — highest description-tier
+	# precision. order_by matches the global tier and the correction path
+	# (R8): duplicates are legal now, and reads must deterministically hit
+	# the same most-recently-modified row corrections target.
 	if supplier:
 		alias = frappe.db.get_value(
 			"OCR Item Alias",
 			{"ocr_text": ocr_text_stripped, "supplier": supplier},
 			"item_code",
+			order_by="modified desc, name asc",
 		)
 		if alias:
 			return alias, "Auto Matched"

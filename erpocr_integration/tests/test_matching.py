@@ -189,6 +189,19 @@ class TestSupplierScopedItemAlias:
 		assert match_item("Bracket 40mm", supplier="Supplier C") == (None, "Unmatched")
 		assert match_item("Bracket 40mm") == (None, "Unmatched")
 
+	def test_scoped_read_orders_by_modified_desc(self, mock_frappe):
+		"""Bounce rework 2: duplicates are legal now — the tier-1 scoped read
+		must carry the SAME order_by as the global tier and the correction
+		path, so reads deterministically hit the row corrections target
+		(most-recently-modified) on v15 AND v16."""
+		mock_frappe.db.get_value = MagicMock(return_value="ITEM-A")
+		from erpocr_integration.tasks.matching import match_item
+
+		result, _status = match_item("Widget", supplier="Supplier A")
+
+		assert result == "ITEM-A"
+		assert mock_frappe.db.get_value.call_args.kwargs["order_by"] == "modified desc, name asc"
+
 	def test_fuzzy_tier_excludes_other_suppliers_scoped_aliases(self, mock_frappe):
 		"""The Q7c invariant holds one tier down: supplier A's scoped alias
 		must not become a fuzzy 'Suggested' candidate on supplier B's lines."""

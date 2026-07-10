@@ -224,6 +224,51 @@ class TestCreatePurchaseInvoice:
 		assert doc.status == "Draft Created"
 		mock_pi.insert.assert_called_once()
 
+	def test_blocks_when_no_expense_account_anywhere(self, mock_frappe):
+		"""Bounce rework 3 (Q6 follow-through): slip expense_account AND
+		OCR Settings.fleet_expense_account both empty → throw at create time
+		with an actionable message, instead of ignore_mandatory inserting an
+		account-less draft that only fails at submit."""
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_cached_doc.return_value = _make_settings(fleet_expense_account="")
+		mock_frappe.get_all.return_value = []
+		# Make the throw observable (conftest default raises a bare Exception)
+		mock_frappe.throw = MagicMock(side_effect=lambda msg, *a, **kw: (_ for _ in ()).throw(Exception(msg)))
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="Direct Expense",
+			expense_account="",
+		)
+		with pytest.raises(Exception, match="Fleet Expense Account"):
+			doc.create_purchase_invoice()
+		assert doc.purchase_invoice is None
+		mock_frappe.get_doc.assert_not_called()  # no draft was built
+
+	def test_expense_account_falls_back_to_settings(self, mock_frappe):
+		"""Q6 follow-through: a posting-mode-flipped slip (blank expense
+		account) still creates a PI using OCR Settings.fleet_expense_account."""
+		mock_pi = MagicMock()
+		mock_pi.name = "PI-00002"
+		mock_pi.items = [MagicMock()]
+		mock_pi.items[0].item_name = "FUEL-001"
+		mock_frappe.get_doc.return_value = mock_pi
+		mock_frappe.db.get_value.return_value = SimpleNamespace(purchase_invoice=None)
+		mock_frappe.get_cached_doc.return_value = _make_settings()
+		mock_frappe.get_all.return_value = []
+
+		doc = _make_fleet_slip(
+			status="Matched",
+			document_type="Purchase Invoice",
+			posting_mode="Direct Expense",
+			expense_account="",
+		)
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert pi_dict["items"][0]["expense_account"] == "5000 - Fuel Expense - TC"
+
 	def test_blocks_fleet_card_mode(self, mock_frappe):
 		"""v1.2.0 invariant: Fleet Card slips MUST NOT spawn a Purchase Invoice.
 		The provider's monthly invoice books the cost; a PI here would double-count."""

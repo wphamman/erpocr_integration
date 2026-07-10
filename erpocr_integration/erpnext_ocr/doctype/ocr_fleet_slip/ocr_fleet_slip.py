@@ -186,11 +186,19 @@ class OCRFleetSlip(Document):
 		# Q6 (v1.8.0): Fleet Card slips no longer carry an expense_account, so
 		# a slip flipped to Direct Expense during review (fleet-card vehicle
 		# filled on a business card) arrives here with it blank — fall back to
-		# the configured fleet expense account rather than silently letting
-		# ERPNext pick the item/company default.
+		# the configured fleet expense account. If BOTH are empty, throw now
+		# with an actionable message: ignore_mandatory would otherwise insert
+		# an account-less draft that only fails at submit with a generic
+		# ERPNext error (pre-Q6 the captured control account masked this path).
 		expense_account = self.expense_account or settings.get("fleet_expense_account")
-		if expense_account:
-			pi_item["expense_account"] = expense_account
+		if not expense_account:
+			frappe.throw(
+				_(
+					"No expense account available for this Purchase Invoice. "
+					"Set Fleet Expense Account in OCR Settings, or set an expense account on this slip."
+				)
+			)
+		pi_item["expense_account"] = expense_account
 
 		if self.cost_center:
 			pi_item["cost_center"] = self.cost_center
