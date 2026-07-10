@@ -6,9 +6,64 @@ not fuzzy), automatically creates the PI/PR draft — eliminating the manual
 """
 
 import frappe
+from frappe.utils import flt
 
 # High-confidence match statuses (NOT "Suggested" or "Unmatched")
 _HIGH_CONFIDENCE_STATUSES = frozenset({"Auto Matched", "Confirmed"})
+
+# Totals-reconciliation gate (Q11, v1.9.0). A PI's amounts build from qty x rate,
+# so a globally-discounted invoice — where Gemini captured the discount in the
+# extracted subtotal but NOT in the per-line rates (the schema has no discount
+# field) — systematically over-drafts (live specimen: OCR-IMP-01918 auto-drafted
+# R2,654.98 against a R2,522.22 invoice). Skip auto-draft when Σ(qty x rate)
+# deviates from the extracted subtotal beyond tolerance and route to human review.
+# Tolerance is max(relative %, absolute floor): the % catches ~1%+ discounts, the
+# absolute floor absorbs multi-line rounding noise. Module constants, not a
+# setting — no evidence a per-site knob is needed (revisit if one instance's
+# extractions prove noisier).
+_TOTALS_TOLERANCE_PCT = 0.01  # 1% of the effective subtotal
+_TOTALS_TOLERANCE_ABS = 1.00  # absolute floor (rounding), in document currency
+
+
+def _totals_reconcile(ocr_import) -> tuple[bool, str]:
+	"""Verify the extracted line rates reconcile with the extracted subtotal.
+
+	The PI draft posts Σ(qty x rate); if that disagrees with what the invoice
+	says its pre-tax subtotal is (an unmodelled global discount, or an extraction
+	error), the auto-draft would be numerically wrong. Compare the two and skip
+	auto-draft — bidirectionally (over- OR under-draft) — when they diverge past
+	tolerance. Manual creation is untouched: this gates AUTO-draft only.
+
+	Degenerate cases fall through as PASS (can't validate → don't block; the other
+	gates still apply and the human review path is unchanged):
+	  - extracted subtotal absent/0 → fall back to (total_amount - tax_amount);
+	  - that fallback also ≤ 0, or the line sum ≤ 0 → unverifiable, pass.
+
+	Returns:
+	    (reconciles, reason_if_not)
+	"""
+	line_sum = sum(flt(item.qty or 1) * flt(item.rate or 0) for item in ocr_import.items)
+	if line_sum <= 0:
+		return True, ""  # unverifiable — no positive line total to compare
+
+	subtotal = flt(ocr_import.subtotal)
+	if subtotal <= 0:
+		# Gemini emits subtotal "0 if not shown" — fall back to the pre-tax total.
+		subtotal = flt(ocr_import.total_amount) - flt(ocr_import.tax_amount)
+	if subtotal <= 0:
+		return True, ""  # no usable reference subtotal — can't validate
+
+	tolerance = max(_TOTALS_TOLERANCE_ABS, _TOTALS_TOLERANCE_PCT * subtotal)
+	if abs(line_sum - subtotal) <= tolerance:
+		return True, ""
+
+	currency = (getattr(ocr_import, "currency", None) or "").strip()
+	prefix = f"{currency} " if currency else ""
+	return (
+		False,
+		f"Line total {prefix}{line_sum:,.2f} ≠ extracted subtotal {prefix}{subtotal:,.2f} "
+		f"— possible invoice discount or extraction error; needs review",
+	)
 
 
 def _is_high_confidence(ocr_import) -> tuple[bool, str]:
@@ -184,6 +239,14 @@ def attempt_auto_draft(ocr_import, settings) -> bool:
 	date_ok, date_reason = _invoice_date_in_fiscal_year(ocr_import)
 	if not date_ok:
 		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", date_reason)
+		return False
+
+	# Totals-reconciliation gate (Q11): a PI builds from qty x rate, so a global
+	# discount that Gemini folded into the subtotal but not the line rates would
+	# auto-draft the wrong amount. Skip to human review when the two disagree.
+	totals_ok, totals_reason = _totals_reconcile(ocr_import)
+	if not totals_ok:
+		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", totals_reason)
 		return False
 
 	try:

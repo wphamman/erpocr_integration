@@ -21,6 +21,13 @@ def _make_ocr_import(**overrides):
 		supplier_match_status="Auto Matched",
 		items=[],
 		status="Matched",
+		# Totals fields a real OCR Import always carries (Q11 gate reads these).
+		# Defaults leave the gate a no-op (line sum 0 → unverifiable → pass); the
+		# Q11 tests set explicit values.
+		subtotal=0.0,
+		tax_amount=0.0,
+		total_amount=0.0,
+		currency="ZAR",
 	)
 	defaults.update(overrides)
 	return SimpleNamespace(**defaults)
@@ -31,6 +38,8 @@ def _make_item(**overrides):
 		item_code="ITEM-001",
 		match_status="Auto Matched",
 		description_ocr="Test item",
+		qty=1.0,
+		rate=0.0,
 	)
 	defaults.update(overrides)
 	return SimpleNamespace(**defaults)

@@ -589,15 +589,21 @@ def _run_matching(ocr_import, header_fields: dict, settings):
 		# Auto-populated as users confirm matches (see _enqueue_item_supplier_learning).
 		if ocr_import.supplier and item.product_code:
 			supplier_part_item, supplier_part_status = match_item_by_supplier_part(
-				ocr_import.supplier, item.product_code
+				ocr_import.supplier, item.product_code, supplier_status=ocr_import.supplier_match_status
 			)
 			if supplier_part_item:
 				matched_item = supplier_part_item
-				match_status = supplier_part_status  # "Auto Matched"
+				# "Auto Matched", or capped to "Suggested" if the supplier itself
+				# is a fuzzy guess (Q10 — confidence is the min of the chain).
+				match_status = supplier_part_status
 
 		# Tier 2: alias (supplier-scoped beats global) / exact name / exact item_code
 		if not matched_item and item.description_ocr:
-			matched_item, match_status = match_item(item.description_ocr, supplier=ocr_import.supplier)
+			matched_item, match_status = match_item(
+				item.description_ocr,
+				supplier=ocr_import.supplier,
+				supplier_status=ocr_import.supplier_match_status,
+			)
 
 		# Tier 3: service mapping (pattern → item + name + GL + CC)
 		if not matched_item and item.description_ocr:
