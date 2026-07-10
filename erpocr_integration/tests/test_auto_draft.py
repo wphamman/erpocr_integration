@@ -548,6 +548,34 @@ class TestTotalsReconcile:
 		assert ok is True
 		assert reason == ""
 
+	def test_tax_inclusive_rates_reconcile_against_total(self):
+		"""Regression (review catch): a legitimately tax-INCLUSIVE invoice — line
+		rates already include VAT, so Σ(qty*rate) matches the incl-tax TOTAL, not
+		the pre-tax subtotal. The gate must reconcile against the total and PASS,
+		not false-fail by the tax amount and block a whole invoice class."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,  # pre-tax
+			tax_amount=150.00,
+			total_amount=1150.00,
+			# single line priced inclusive of VAT → 1150, which equals the total
+			items=[_make_item(qty=1.0, rate=1150.00)],
+		)
+		ok, reason = _totals_reconcile(doc)
+		assert ok is True
+		assert reason == ""
+
+	def test_tax_inclusive_discount_still_caught(self):
+		"""A tax-inclusive invoice that ALSO overstates vs the total is still
+		caught (the inclusive branch reconciles against total_amount)."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1.0, rate=1300.00)],  # 1300 vs incl total 1150
+		)
+		ok, _reason = _totals_reconcile(doc)
+		assert ok is False
+
 	def test_within_absolute_floor_reconciles(self):
 		"""Sub-R1 multi-line rounding drift is absorbed by the absolute floor."""
 		doc = _make_ocr_import(subtotal=1000.00, items=[_make_item(qty=1.0, rate=1000.40)])

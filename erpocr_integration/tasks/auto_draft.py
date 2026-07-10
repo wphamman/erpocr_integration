@@ -34,9 +34,14 @@ def _totals_reconcile(ocr_import) -> tuple[bool, str]:
 	auto-draft — bidirectionally (over- OR under-draft) — when they diverge past
 	tolerance. Manual creation is untouched: this gates AUTO-draft only.
 
+	Tax-inclusive rates (a first-class path): when the extracted rates already
+	include tax, Σ(qty*rate) reconciles against the tax-INCLUSIVE total, so the
+	reference is `total_amount`, not `subtotal` — otherwise every inclusive invoice
+	false-fails by the tax amount.
+
 	Degenerate cases fall through as PASS (can't validate → don't block; the other
 	gates still apply and the human review path is unchanged):
-	  - extracted subtotal absent/0 → fall back to (total_amount - tax_amount);
+	  - extracted subtotal absent/0 (exclusive path) → fall back to (total - tax);
 	  - that fallback also ≤ 0, or the line sum ≤ 0 → unverifiable, pass.
 
 	Returns:
@@ -46,22 +51,39 @@ def _totals_reconcile(ocr_import) -> tuple[bool, str]:
 	if line_sum <= 0:
 		return True, ""  # unverifiable — no positive line total to compare
 
-	subtotal = flt(ocr_import.subtotal)
-	if subtotal <= 0:
-		# Gemini emits subtotal "0 if not shown" — fall back to the pre-tax total.
-		subtotal = flt(ocr_import.total_amount) - flt(ocr_import.tax_amount)
-	if subtotal <= 0:
-		return True, ""  # no usable reference subtotal — can't validate
+	# Pick the reference the line rates should reconcile against. If the rates
+	# already INCLUDE tax (a first-class path — see _detect_tax_inclusive_rates,
+	# which the PI builder honours via included_in_print_rate), Σ(qty*rate) matches
+	# the tax-INCLUSIVE total, not the pre-tax subtotal. Comparing an inclusive
+	# line sum against the subtotal would false-fail every inclusive invoice by
+	# the full tax amount and silently disable auto-draft for that whole class.
+	# For the discount specimen (OCR-IMP-01918) the detector returns False
+	# (exclusive), so the discount is still caught against the subtotal.
+	from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+		_detect_tax_inclusive_rates,
+	)
 
-	tolerance = max(_TOTALS_TOLERANCE_ABS, _TOTALS_TOLERANCE_PCT * subtotal)
-	if abs(line_sum - subtotal) <= tolerance:
+	if _detect_tax_inclusive_rates(ocr_import):
+		reference = flt(ocr_import.total_amount)
+		ref_label = "total"
+	else:
+		reference = flt(ocr_import.subtotal)
+		ref_label = "subtotal"
+		if reference <= 0:
+			# Gemini emits subtotal "0 if not shown" — fall back to the pre-tax total.
+			reference = flt(ocr_import.total_amount) - flt(ocr_import.tax_amount)
+	if reference <= 0:
+		return True, ""  # no usable reference — can't validate
+
+	tolerance = max(_TOTALS_TOLERANCE_ABS, _TOTALS_TOLERANCE_PCT * reference)
+	if abs(line_sum - reference) <= tolerance:
 		return True, ""
 
 	currency = (getattr(ocr_import, "currency", None) or "").strip()
 	prefix = f"{currency} " if currency else ""
 	return (
 		False,
-		f"Line total {prefix}{line_sum:,.2f} ≠ extracted subtotal {prefix}{subtotal:,.2f} "
+		f"Line total {prefix}{line_sum:,.2f} ≠ extracted {ref_label} {prefix}{reference:,.2f} "
 		f"— possible invoice discount or extraction error; needs review",
 	)
 
