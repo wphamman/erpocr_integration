@@ -11,7 +11,7 @@
 
 - **Branch:** `fix/p2a-l1-drive-connection-error`
 - **Frozen base:** v1.9.0 peeled commit `45f696a2b481a2773b994ffabcd82c4f14849204`
-- **HEAD:** recorded at push time in the push-status section below (branch tip)
+- **HEAD:** 17166d29c68df01335bf0b1a4f1cef3a04142c17
 - **Worktree:** `/home/willie/.codex/worktrees/grok-p2a-l1/erpocr_integration`
 
 ## Files changed
@@ -104,5 +104,5 @@ ruff format --check .
 
 Builder branch pushed to `origin/fix/p2a-l1-drive-connection-error` only.
 
-- **Pushed tip HEAD:** will match `git rev-parse origin/fix/p2a-l1-drive-connection-error` after push.
+- **Builder tip (pre-push):** 17166d29c68df01335bf0b1a4f1cef3a04142c17
 - Standing architect commissions fresh GPT review before adjudication/merge.
