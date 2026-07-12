@@ -874,8 +874,14 @@ def test_drive_connection():
 			"message": f"Connection successful! Archive folder: {folder.get('name')} (ID: {folder.get('id')})",
 		}
 
-	except Exception as e:
-		return {"success": False, "message": f"Connection failed: {e!s}"}
+	except Exception:
+		# Do not echo provider/request details to the client — they can include
+		# service-account or API diagnostics. Log the full traceback server-side.
+		frappe.log_error(title="Drive Connection Test Failed", message=frappe.get_traceback())
+		return {
+			"success": False,
+			"message": "Connection failed. Check Error Log for details.",
+		}
 
 
 # ── Delivery Note Drive Scan ──────────────────────────────────────────
