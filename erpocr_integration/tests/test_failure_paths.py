@@ -653,7 +653,7 @@ class TestDriveConnectionTest:
 		)
 
 	def test_exception_does_not_echo_secret_like_text(self, mock_frappe):
-		"""Upstream failure with a synthetic secret must not appear in the response."""
+		"""Synthetic secret must be absent from client response and Error Log message."""
 		secret = "sa-private-key-SYNTHETIC_SECRET_DO_NOT_ECHO_xyz789"
 		mock_frappe.get_single = MagicMock(return_value=self._enabled_settings())
 		mock_frappe.get_traceback = MagicMock(return_value=f"Traceback: {secret}")
@@ -672,12 +672,22 @@ class TestDriveConnectionTest:
 		# Stable generic message — not the old f"Connection failed: {e!s}" shape.
 		assert result["message"] == "Connection failed. Check Error Log for details."
 
+		# Diagnostic Error Log still occurs (title + stable context).
 		mock_frappe.log_error.assert_called_once()
 		kwargs = mock_frappe.log_error.call_args.kwargs
 		assert kwargs.get("title") == "Drive Connection Test Failed"
-		# Server-side log may carry diagnostics; client message must not.
-		assert kwargs.get("message") == mock_frappe.get_traceback.return_value
-		mock_frappe.get_traceback.assert_called()
+		logged = kwargs.get("message") or ""
+		assert secret not in logged
+		assert "operation=test_drive_connection" in logged
+		assert "exception_type=Exception" in logged
+		# Must not persist raw traceback (secret ride-along path).
+		mock_frappe.get_traceback.assert_not_called()
+		assert "Traceback" not in logged
+		# Capture every string arg/kwarg from the log call for secret absence.
+		for arg in mock_frappe.log_error.call_args.args:
+			assert secret not in str(arg)
+		for val in kwargs.values():
+			assert secret not in str(val)
 
 	def test_success_shape_unchanged(self, mock_frappe):
 		"""Happy path still returns success with folder name/id message."""
