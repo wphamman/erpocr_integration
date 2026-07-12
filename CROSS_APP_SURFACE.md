@@ -59,7 +59,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.fleet_api.bulk_mark_recorded` | POST | OCR Fleet Slip write (doctype) + per-row `mark_recorded()` guards | v1.8.0: bulk-close Matched Fleet Card slips (list action; server re-validates every row; ≤200/call; UI helper, not a cross-app contract) |
 | `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip write (per-doc) + OCR Import create | Re-route mis-foldered slip to invoice pipeline |
 | `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create OR plain `Driver` role** (driver shell; D0) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
-| `erpocr_integration.tasks.drive_integration.test_drive_connection` | GET | System Manager | Config self-test |
+| `erpocr_integration.tasks.drive_integration.test_drive_connection` | POST | System Manager | Config self-test |
 | `erpocr_integration.tasks.email_monitor.trigger_email_check` | POST | System Manager | Manual email poll |
 
 ### 2b. DocType controller methods (Desk-form actions — invoked via `run_doc_method`)
