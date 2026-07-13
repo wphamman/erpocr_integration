@@ -234,3 +234,86 @@
   a tolerance setting in OCR Settings (no evidence a knob is needed); fail-closed on
   unverifiable data (would silently disable auto-draft for sparse extractions).
 - **Pointer:** `tasks/auto_draft.py` `_totals_reconcile`; OPEN-QUESTIONS Q11 (resolved), Q4 (evidence); CHANGELOG 1.9.0.
+
+## ADR-0015 — Pass 2 is NO-GO; repair three bounded release blockers before re-freeze
+- **Status:** Accepted 2026-07-13 · implementation and Pass R pending
+- **Decision:** The full-flow Pass-2 handback against integrated candidate `b69f91c` is accepted as
+  **NO-GO**: ERP-P2-1 High (Delivery Note → Purchase Order cannot create a draft), ERP-P2-2 Medium
+  (first Website User upload can bypass CSRF comparison), and ERP-P2-3 Medium (supplier statements
+  are absent from the advertised complete Accounts queue) are all FIX-NOW. They are isolated into
+  separate backend-business, backend-security, and frontend-discovery units. No version bump, tag,
+  re-freeze, or deploy may occur until each unit passes independent GPT review and the combined
+  candidate passes serialized runtime/Pass R.
+- **Why:** The review proved most flows at E4/E5 but found one core path dead, one write without an
+  explicit anti-CSRF invariant, and one accounting queue reachable only by URL/Desk knowledge.
+  Portfolio ADR-017 explicitly favors complete, discoverable workflows with no URL typing.
+- **Rejected:** releasing with the High; fixing only the High while accepting hidden statement work;
+  combining all three into one opaque implementation/review delta.
+- **Pointer:** `docs/handbacks/ARCHITECT-CLOSE-ERP-P2-PASS2-2026-07-13.md`; OPEN-QUESTIONS Q12-Q14.
+
+## ADR-0016 — OCR Delivery Note PO schedule uses the reviewed delivery date, else today
+- **Status:** Accepted 2026-07-13 under portfolio ADR-017 · implementation pending
+- **Decision:** `OCR Delivery Note.create_purchase_order()` must set both Purchase Order header and
+  every included item `schedule_date` to `OCR Delivery Note.delivery_date` when present. If the
+  reviewed source has no delivery date, use site `today()` and leave the draft for operator review.
+  Keep the existing PO `transaction_date` rule aligned to the same value and preserve all duplicate,
+  status, document-type, permission, matched-item, and linkage guards.
+- **Why:** `delivery_date` already exists in the app-owned schema, is extracted from the source,
+  rendered for review, and already supplies the PO transaction date. Reusing it is the narrowest
+  reversible rule that preserves document intent and satisfies ERPNext v15's required-by invariant.
+  The fallback is explicit, deterministic, and non-financial: the output remains a zero-rate draft
+  requiring review. It does not promise payment, submit stock, or create a binding supplier order.
+- **Rejected:** a new setting/lead-time policy (larger and unsupported); leaving the action broken;
+  `ignore_mandatory` as a substitute for a valid schedule date; silently inventing a future lead time.
+- **Assumption for Willie to review:** when a historical delivery date is the only source date, it is
+  better provenance than an invented future date for this retrospective draft-PO workflow. Willie may
+  later replace the fallback with a configured procurement lead time without schema migration.
+- **Pointer:** ERP-P2-1; `ocr_delivery_note.py:create_purchase_order`.
+
+## ADR-0017 — Fleet-slip cookie writes fail closed unless the session CSRF token matches
+- **Status:** Accepted 2026-07-13 · implementation and consumer-runtime proof pending
+- **Decision:** `upload_fleet_slip` must enforce an initialized, matching Frappe CSRF token before any
+  permission, idempotency, file, or database work for cookie-authenticated requests. A missing server
+  token, missing header, or mismatch is denied with the normal CSRF error class. Do not mint a token
+  inside the mutation and then accept the same headerless request. Preserve POST-only, Driver/create
+  authorization, multipart shape, idempotency, ownership, and recon-only semantics.
+- **Why:** Pass 2 proved Frappe v15 can accept the first Website User mutation when its session token
+  has not yet been initialized. The driver shell's shared capture queue already sends
+  `X-Frappe-CSRF-Token` from Desk boot state when available, so fail-closed enforcement matches the
+  intended System-User shell path. This clarifies a consumed write contract and requires a routed flag
+  plus a real newly-logged-in negative/positive HTTP regression.
+- **Rejected:** relying only on SameSite/file-input friction; weakening cookie policy; accepting the
+  first mutation to initialize state; changing to API-key auth inside this bounded repair.
+- **Pointer:** ERP-P2-2; `fleet_api.upload_fleet_slip`; OPEN-QUESTIONS Q12.
+
+## ADR-0018 — Supplier statements are first-class `/accounts` work queues
+- **Status:** Accepted 2026-07-13 under portfolio ADR-017 · implementation pending
+- **Decision:** Add `OCR Statement` to `/accounts` with its own actionable states, counts, list fields,
+  error/empty/loading behavior, and direct Desk drill-through. Statement actionable states are
+  `Pending`, `Extracting`, `Reconciled`, and `Error`; `Reviewed` is terminal and excluded from
+  outstanding work. Refactor the SPA's current global status array into per-doctype configuration so
+  statement semantics do not distort Import/DN/Fleet queues. Rebuild and commit the dist.
+- **Why:** The landing page claims the accounting pipeline and is the daily work surface. Pass 2 proved
+  statement reconciliation itself works, but operators needed direct URL knowledge to find it. A
+  callable backend plus hidden Desk route is incomplete under portfolio ADR-017.
+- **Rejected:** changing the page copy to disclaim statements; a bare link without counts/list/error
+  states; treating `Reviewed` as outstanding.
+- **Pointer:** ERP-P2-3; `frontend/src/lib/doctypeMeta.tsx`; OPEN-QUESTIONS Q13.
+
+## ADR-0019 — Dependency advisories accepted for this release with explicit invalidation signals
+- **Status:** Accepted-for-release 2026-07-13 · non-blocking follow-up Q14
+- **Decision:** Do not fold dependency churn into the three Pass-2 repairs. The 2026-07-13 production
+  audit reports 2 High and 3 Moderate transitive advisories. The latest published
+  `frappe-react-sdk` 1.17.0 still pins vulnerable `socket.io-client` 4.7.1; npm's automatic proposal
+  is a regressive SDK change to 1.3.11, while overrides would replace pinned transitive networking
+  packages. The shipped Accounts page explicitly disables Socket.IO and Pass 2 observed no socket
+  request from it. Track a dedicated dependency unit with rebuild, byte-diff, auth/data/browser, and
+  disabled-socket regression coverage.
+- **Invalidation signals:** make this a release blocker if a Critical advisory appears; an advisory is
+  demonstrated reachable in the shipped browser/server path; the Accounts SPA enables Socket.IO; a
+  supported SDK release resolves the chain without regression; or policy requires a clean production
+  audit. The `form-data` chain must also be re-audited because it is Node-oriented transitive code and
+  may be removable/upgradable independently.
+- **Rejected:** npm's SDK downgrade; unreviewed `overrides`; broad dependency upgrades inside a
+  release-blocker repair train; claiming the advisories are harmless rather than currently unexploited.
+- **Pointer:** ERP-P2-4; OPEN-QUESTIONS Q14.
