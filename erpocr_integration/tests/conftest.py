@@ -44,9 +44,13 @@ def _build_frappe_mock():
 	class _MockDuplicateEntryError(Exception):
 		pass
 
+	class _MockCSRFTokenError(Exception):
+		pass
+
 	mock.DoesNotExistError = _MockDoesNotExistError
 	mock.UniqueValidationError = _MockUniqueValidationError
 	mock.DuplicateEntryError = _MockDuplicateEntryError
+	mock.CSRFTokenError = _MockCSRFTokenError
 	mock.PermissionError = PermissionError
 	# frappe.get_all returns empty list by default
 	mock.get_all = MagicMock(return_value=[])
@@ -72,9 +76,12 @@ def _build_frappe_mock():
 	# default deliberately has NO Driver / OCR role so role-widened gates only
 	# pass when a test opts in.
 	mock.get_roles = MagicMock(return_value=["All"])
+	mock.get_request_header = MagicMock(return_value=None)
 	# frappe.session
 	mock.session = MagicMock()
 	mock.session.user = "Administrator"
+	mock.session.sid = "test-cookie-session"
+	mock.session.data = SimpleNamespace(csrf_token="test-csrf-token")
 	return mock
 
 
@@ -238,6 +245,14 @@ def reset_frappe_mock():
 	_frappe_mock.has_permission = MagicMock(return_value=True)
 	_frappe_mock.get_roles = MagicMock(return_value=["All"])
 	_frappe_mock.session.user = "Administrator"
+	_frappe_mock.session.sid = "test-cookie-session"
+	_frappe_mock.session.data = SimpleNamespace(csrf_token="test-csrf-token")
+	_frappe_mock.get_request_header = MagicMock(
+		side_effect=lambda name, default=None: (
+			"test-csrf-token" if name.lower() == "x-frappe-csrf-token" else default
+		)
+	)
+	_frappe_mock.flags.disable_traceback = False
 	yield _frappe_mock
 
 

@@ -159,6 +159,89 @@ def _wire_upload(
 	return holder
 
 
+def _assert_no_upload_side_effects(mock_frappe, file):
+	"""A CSRF denial must happen before every upload-contract mutation seam."""
+	mock_frappe.has_permission.assert_not_called()
+	mock_frappe.get_roles.assert_not_called()
+	mock_frappe.get_cached_doc.assert_not_called()
+	mock_frappe.db.exists.assert_not_called()
+	mock_frappe.db.get_value.assert_not_called()
+	mock_frappe.get_doc.assert_not_called()
+	mock_frappe.db.rollback.assert_not_called()
+	mock_frappe.db.commit.assert_not_called()
+	mock_frappe.enqueue.assert_not_called()
+	file.seek.assert_not_called()
+	file.tell.assert_not_called()
+	file.read.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed CSRF guard (ADR-0017)
+# ---------------------------------------------------------------------------
+
+
+class TestUploadCSRFFailClosed:
+	def _deny(self, mock_frappe, *, saved_token="server-token", header="server-token"):
+		file = _file_obj()
+		_wire_upload(mock_frappe, file=file)
+		mock_frappe.session.data.csrf_token = saved_token
+		mock_frappe.get_request_header.side_effect = lambda name, default=None: (
+			header if name.lower() == "x-frappe-csrf-token" else default
+		)
+
+		with pytest.raises(Exception):
+			upload_fleet_slip(client_request_id="csrf-denied")
+
+		assert mock_frappe.throw.call_args.args == ("Invalid Request", mock_frappe.CSRFTokenError)
+		assert mock_frappe.flags.disable_traceback is True
+		_assert_no_upload_side_effects(mock_frappe, file)
+
+	def test_missing_server_session_token_denied_before_side_effects(self, mock_frappe):
+		self._deny(mock_frappe, saved_token=None)
+
+	def test_missing_header_denied_before_side_effects(self, mock_frappe):
+		self._deny(mock_frappe, header=None)
+
+	def test_mismatched_header_denied_before_side_effects(self, mock_frappe):
+		self._deny(mock_frappe, header="wrong-token")
+
+	def test_matching_header_uses_constant_time_compare_and_allows_upload(self, mock_frappe):
+		_wire_upload(mock_frappe)
+		with patch("erpocr_integration.fleet_api.hmac.compare_digest", return_value=True) as compare:
+			result = upload_fleet_slip(client_request_id="csrf-ok")
+
+		compare.assert_called_once_with("test-csrf-token", "test-csrf-token")
+		assert result["duplicate"] is False
+
+	def test_validated_token_auth_does_not_require_cookie_csrf(self, mock_frappe):
+		"""Frappe token auth stamps sid=user; the API client remains compatible."""
+		_wire_upload(mock_frappe)
+		mock_frappe.session.user = "api-client@starpops.test"
+		mock_frappe.session.sid = "api-client@starpops.test"
+		mock_frappe.session.data.csrf_token = None
+		mock_frappe.get_request_header.side_effect = lambda name, default=None: (
+			"token key:secret" if name.lower() == "authorization" else default
+		)
+
+		result = upload_fleet_slip(client_request_id="token-auth-ok")
+
+		assert result["duplicate"] is False
+
+	def test_bogus_authorization_header_does_not_bypass_cookie_guard(self, mock_frappe):
+		"""A cookie sid differs from user, so a header alone cannot exempt CSRF."""
+		file = _file_obj()
+		_wire_upload(mock_frappe, file=file)
+		mock_frappe.session.data.csrf_token = None
+		mock_frappe.get_request_header.side_effect = lambda name, default=None: (
+			"token bogus:bogus" if name.lower() == "authorization" else default
+		)
+
+		with pytest.raises(Exception):
+			upload_fleet_slip(client_request_id="bogus-auth-denied")
+
+		_assert_no_upload_side_effects(mock_frappe, file)
+
+
 # ---------------------------------------------------------------------------
 # Permission guards
 # ---------------------------------------------------------------------------
