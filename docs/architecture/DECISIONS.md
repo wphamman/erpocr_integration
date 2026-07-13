@@ -236,7 +236,7 @@
 - **Pointer:** `tasks/auto_draft.py` `_totals_reconcile`; OPEN-QUESTIONS Q11 (resolved), Q4 (evidence); CHANGELOG 1.9.0.
 
 ## ADR-0015 — Pass 2 is NO-GO; repair three bounded release blockers before re-freeze
-- **Status:** Accepted 2026-07-13 · implementation and Pass R pending
+- **Status:** Accepted 2026-07-13 · repair train completed and shipped v1.10.0 after runtime GO
 - **Decision:** The full-flow Pass-2 handback against integrated candidate `b69f91c` is accepted as
   **NO-GO**: ERP-P2-1 High (Delivery Note → Purchase Order cannot create a draft), ERP-P2-2 Medium
   (first Website User upload can bypass CSRF comparison), and ERP-P2-3 Medium (supplier statements
@@ -252,7 +252,7 @@
 - **Pointer:** `docs/handbacks/ARCHITECT-CLOSE-ERP-P2-PASS2-2026-07-13.md`; OPEN-QUESTIONS Q12-Q14.
 
 ## ADR-0016 — OCR Delivery Note PO schedule uses the reviewed delivery date, else today
-- **Status:** Accepted 2026-07-13 under portfolio ADR-017 · implementation pending
+- **Status:** Accepted 2026-07-13 under portfolio ADR-017 · shipped v1.10.0 (`463c3fe`, merge `138aed6`)
 - **Decision:** `OCR Delivery Note.create_purchase_order()` must set both Purchase Order header and
   every included item `schedule_date` to `OCR Delivery Note.delivery_date` when present. If the
   reviewed source has no delivery date, use site `today()` and leave the draft for operator review.
@@ -271,7 +271,7 @@
 - **Pointer:** ERP-P2-1; `ocr_delivery_note.py:create_purchase_order`.
 
 ## ADR-0017 — Fleet-slip cookie writes fail closed unless the session CSRF token matches
-- **Status:** Accepted 2026-07-13 · implementation and consumer-runtime proof pending
+- **Status:** Accepted 2026-07-13 · shipped v1.10.0 (`91f8bbd`, merge `f6fbd88`); consumer runtime PASS
 - **Decision:** `upload_fleet_slip` must enforce an initialized, matching Frappe CSRF token before any
   permission, idempotency, file, or database work for cookie-authenticated requests. A missing server
   token, missing header, or mismatch is denied with the normal CSRF error class. Do not mint a token
@@ -287,7 +287,7 @@
 - **Pointer:** ERP-P2-2; `fleet_api.upload_fleet_slip`; OPEN-QUESTIONS Q12.
 
 ## ADR-0018 — Supplier statements are first-class `/accounts` work queues
-- **Status:** Accepted 2026-07-13 under portfolio ADR-017 · implementation pending
+- **Status:** Accepted 2026-07-13 under portfolio ADR-017 · shipped v1.10.0 (`03f564b`, merge `39b9562`)
 - **Decision:** Add `OCR Statement` to `/accounts` with its own actionable states, counts, list fields,
   error/empty/loading behavior, and direct Desk drill-through. Statement actionable states are
   `Pending`, `Extracting`, `Reconciled`, and `Error`; `Reviewed` is terminal and excluded from
@@ -301,7 +301,7 @@
 - **Pointer:** ERP-P2-3; `frontend/src/lib/doctypeMeta.tsx`; OPEN-QUESTIONS Q13.
 
 ## ADR-0019 — Dependency advisories accepted for this release with explicit invalidation signals
-- **Status:** Accepted-for-release 2026-07-13 · non-blocking follow-up Q14
+- **Status:** Accepted-for-release 2026-07-13 · carried into v1.10.0; non-blocking follow-up Q14
 - **Decision:** Do not fold dependency churn into the three Pass-2 repairs. The 2026-07-13 production
   audit reports 2 High and 3 Moderate transitive advisories. The latest published
   `frappe-react-sdk` 1.17.0 still pins vulnerable `socket.io-client` 4.7.1; npm's automatic proposal

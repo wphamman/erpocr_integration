@@ -4,7 +4,9 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.9.0** (baselined at merge `ec4910a`; **v1.9.0 delta: NONE** — all changes internal/_-prefixed, no new whitelisted method, no field/contract changes): §2c/§2a/§5/§6 reflect the D0
+**Current through v1.10.0** (product baseline `39b9562`; **v1.10.0 provider delta:** the existing
+`upload_fleet_slip` write now has the explicit cookie-CSRF invariant below; no method, signature,
+payload, response, permission, or token-auth change): §2c/§2a/§5/§6 reflect the D0
 driver-perm widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and
 the owner-scoped idempotent replay (ADR-0006/ADR-0007). §3a records the v1.7.0
 `starpops_accounts` SPA fold-in — a read-only `/accounts` dashboard consuming OCR doctypes via
@@ -14,7 +16,7 @@ helper, not a cross-app contract; no §3/§4 field changes, but note the **§3 s
 `OCR Fleet Slip.expense_account` is **blank on new Fleet Card slips** since v1.8.0 (Q6 — flag
 emitted to the fleet architect). See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
 
-**Unreleased ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
+**v1.10.0 ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
 closed for cookie-authenticated requests unless an initialized session CSRF token matches the
 standard Frappe header. No method, signature, payload, response, permission, or token-auth change.
 
@@ -150,11 +152,12 @@ External consumers read these DocTypes; **their field names are the de-facto con
 - **OCR Statement / OCR Statement Item** — reconciliation results (status, `recon_status`, `matched_invoice`, `difference`).
 - **OCR Import** — processing records / stats backing.
 
-**3a — In-app `/accounts` dashboard (v1.7.0, ADR-0010).** The folded-in React SPA reads **OCR
-Import / OCR Delivery Note / OCR Fleet Slip** counts + lists via generic `frappe.client`
+**3a — In-app `/accounts` dashboard (v1.7.0; Statement queue added v1.10.0, ADR-0010/0018).** The
+folded-in React SPA reads **OCR Import / OCR Delivery Note / OCR Fleet Slip / OCR Statement** counts
+and lists via generic `frappe.client`
 (`get_count`/`get_list`), as the logged-in user — **read-only, no write path, no new whitelisted
 method**. The `/apps` **tile** is gated by `erpocr_integration.dashboard.permission.has_app_permission`
-(Administrator / System Manager / read on any of the three); the `/accounts` **route itself is a
+(Administrator / System Manager / read on any of the original three); the `/accounts` **route itself is a
 public www shell** — data is enforced per-user on every `frappe.client` call. Not an external
 surface — a view onto this app's own data. Source: `frontend/`; built dist committed under `public/accounts/`.
 

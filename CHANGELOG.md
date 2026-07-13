@@ -2,6 +2,47 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-07-13
+
+Pass-2 remediation release. This is a minor release because it adds supplier-statement work to the
+operator-facing Accounts dashboard; it also closes the Delivery Note → Purchase Order failure, hardens
+the consumed fleet-slip write against first-session CSRF bypass, and prevents Drive connection-test
+diagnostics from persisting secret-bearing exception text.
+
+### Added
+- **Supplier statements are first-class `/accounts` work queues (ERP-P2-3 / ADR-0018).** The read-only
+  dashboard now shows `OCR Statement` counts and lists with its own actionable states (`Pending`,
+  `Extracting`, `Reconciled`, `Error`); terminal `Reviewed` records stay out of outstanding work.
+  Operators can see supplier/date/period/balance/reconciliation issues and drill directly into the Desk
+  Statement without typing a URL. Existing Import, Delivery Note, and Fleet Slip buckets are unchanged.
+
+### Fixed
+- **Delivery Note → Purchase Order required-by dates (ERP-P2-1 / ADR-0016).** Draft POs now use the
+  reviewed delivery date for the header and every included item, falling back once to the site date when
+  the source date is blank. Unmatched rows remain excluded, included rates remain zero for operator
+  review, and the existing duplicate/linkage guards are unchanged.
+
+### Security
+- **Fleet-slip cookie writes fail closed on CSRF (ERP-P2-2 / ADR-0017).** Before permission,
+  idempotency, file, database, or enqueue work, `upload_fleet_slip` requires an initialized session token
+  matching `X-Frappe-CSRF-Token` for cookie-authenticated requests. Validated token/OAuth clients retain
+  their established headerless behavior. Real Driver Shell retry evidence proved the existing consumer
+  reuses the same token and idempotency key across retries.
+- **Drive connection-test errors are secret-safe (P2A-L1).** The failure response remains generic and
+  Error Log now records only the stable operation name and exception type—not the exception string or
+  traceback, which can contain service-account or provider diagnostics.
+
+### Verification
+- Fresh independent source Pass R: ERP-P2-1, ERP-P2-2, and ERP-P2-3 all PASS with C/H/M/L 0/0/0/0.
+- Serialized fresh-site Frappe 15.95 / ERPNext 15.94 runtime: GO with C/H/M/L 0/0/0/0; focused Python
+  94, full mocked Python 866, real DN/PO, CSRF/Driver Shell, Statement browser, original PI/PR/JE,
+  permission, worker, and auto-control seams all passed; served Accounts assets matched committed bytes.
+- The separate secret-safe fresh-site runtime proved the synthetic secret absent from both the client
+  response and persisted Error Log. Physical device, real Gemini success, and real Drive/Gmail ingestion
+  remain not assessed.
+- Production dependency audit remains the accepted ADR-0019 follow-up: 2 High + 3 Moderate transitive
+  advisories, no demonstrated reachable socket path, no dependency or lockfile change in this release.
+
 ## [1.9.0] — 2026-07-10
 
 Invoice-path release closing OPEN-QUESTIONS Q9, Q10 (as ruled by Willie 2026-07-10), and Q11 (opened the same day by the Q4 auto-draft probe). No cross-app surface delta.
@@ -559,6 +600,7 @@ First stable release. The full pipeline — invoices, delivery notes, fleet slip
 - Supplier and item matching with alias learning.
 - Automatic draft PI creation with tax, currency, and PO linkage.
 
+[1.10.0]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.10.0
 [1.4.1]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.4.1
 [1.3.0]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.3.0
 [1.0.4]: https://github.com/wphamman/erpocr_integration/releases/tag/v1.0.4
