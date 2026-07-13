@@ -134,6 +134,7 @@ class OCRDeliveryNote(Document):
 			frappe.throw(_("Please select a Supplier before creating a Purchase Order."))
 
 		settings = frappe.get_cached_doc("OCR Settings")
+		schedule_date = self.delivery_date or frappe.utils.today()
 
 		po_items = []
 		skipped_unmatched = 0
@@ -146,6 +147,7 @@ class OCRDeliveryNote(Document):
 				"item_code": item.item_code,
 				"qty": item.qty or 1,
 				"rate": 0,  # Accounts team fills in rates
+				"schedule_date": schedule_date,
 				"description": item.description_ocr or item.item_name or "OCR Scanned Item",
 			}
 
@@ -164,7 +166,8 @@ class OCRDeliveryNote(Document):
 				"supplier": self.supplier,
 				"company": self.company,
 				"set_posting_time": 1,
-				"transaction_date": self.delivery_date or frappe.utils.today(),
+				"transaction_date": schedule_date,
+				"schedule_date": schedule_date,
 				"items": po_items,
 			}
 		)

@@ -192,10 +192,10 @@ class TestUpdateStatus:
 
 
 class TestCreatePurchaseOrder:
-	def test_creates_po_draft(self, mock_frappe):
-		"""Successfully creates a PO draft from DN with matched items."""
+	@staticmethod
+	def _configure_po_mocks(mock_frappe, po_name="PO-00001"):
 		mock_po = MagicMock()
-		mock_po.name = "PO-00001"
+		mock_po.name = po_name
 		mock_po.items = []
 		mock_frappe.get_doc.return_value = mock_po
 		mock_frappe.db.get_value.return_value = SimpleNamespace(
@@ -206,7 +206,11 @@ class TestCreatePurchaseOrder:
 			default_warehouse="Stores - TC",
 			get=lambda k, d=None: "Stores - TC" if "warehouse" in k else d,
 		)
-		mock_frappe.get_all.return_value = []
+		return mock_po
+
+	def test_creates_po_draft(self, mock_frappe):
+		"""Successfully creates a PO draft from DN with matched items."""
+		mock_po = self._configure_po_mocks(mock_frappe)
 
 		items = [_make_dn_item(item_code="SR-12-6", qty=50)]
 		doc = _make_ocr_dn(
@@ -219,6 +223,56 @@ class TestCreatePurchaseOrder:
 		assert doc.purchase_order_result == "PO-00001"
 		assert doc.status == "Draft Created"
 		mock_po.insert.assert_called_once()
+
+	def test_delivery_date_propagates_to_header_and_included_items(self, mock_frappe):
+		"""Reviewed delivery date drives every required-by date; unmatched rows stay excluded."""
+		self._configure_po_mocks(mock_frappe)
+		items = [
+			_make_dn_item(item_code="SR-12-6", qty=50, idx=1),
+			_make_dn_item(item_code="CM-50", qty=8, idx=2),
+			_make_dn_item(item_code=None, match_status="Unmatched", idx=3),
+		]
+		doc = _make_ocr_dn(
+			status="Matched",
+			document_type="Purchase Order",
+			delivery_date="2025-03-04",
+			items=items,
+		)
+
+		doc.create_purchase_order()
+
+		po_dict = mock_frappe.get_doc.call_args.args[0]
+		assert po_dict["transaction_date"] == "2025-03-04"
+		assert po_dict["schedule_date"] == "2025-03-04"
+		assert len(po_dict["items"]) == 2
+		assert [item["schedule_date"] for item in po_dict["items"]] == [
+			"2025-03-04",
+			"2025-03-04",
+		]
+		assert [item["item_code"] for item in po_dict["items"]] == ["SR-12-6", "CM-50"]
+		assert all(item["rate"] == 0 for item in po_dict["items"])
+
+	def test_missing_delivery_date_uses_one_deterministic_today(self, mock_frappe):
+		"""Missing source date uses one site-today value for header and all included items."""
+		self._configure_po_mocks(mock_frappe)
+		mock_frappe.utils.today.return_value = "2025-03-05"
+		doc = _make_ocr_dn(
+			status="Matched",
+			document_type="Purchase Order",
+			delivery_date=None,
+			items=[
+				_make_dn_item(item_code="SR-12-6", idx=1),
+				_make_dn_item(item_code="CM-50", idx=2),
+			],
+		)
+
+		doc.create_purchase_order()
+
+		po_dict = mock_frappe.get_doc.call_args.args[0]
+		assert po_dict["transaction_date"] == "2025-03-05"
+		assert po_dict["schedule_date"] == "2025-03-05"
+		assert {item["schedule_date"] for item in po_dict["items"]} == {"2025-03-05"}
+		mock_frappe.utils.today.assert_called_once_with()
 
 	def test_blocks_wrong_status(self, mock_frappe):
 		"""Blocks PO creation from non-Matched/Needs Review status."""
