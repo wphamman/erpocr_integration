@@ -13,6 +13,7 @@ Handles:
 - Retry endpoint
 """
 
+import hmac
 import json
 
 import frappe
@@ -429,6 +430,34 @@ def _verify_image_decodable(content: bytes) -> None:
 		)
 
 
+def _enforce_upload_csrf() -> None:
+	"""Fail closed on cookie-authenticated uploads without a matching CSRF token.
+
+	Frappe v15's request guard compares ``frappe.session.data.csrf_token`` with
+	``X-Frappe-CSRF-Token``, but returns early when the saved token has not yet
+	been initialized. This consumed write contract cannot allow that first-write
+	gap, so it repeats the framework convention with fail-closed semantics.
+
+	API-token/OAuth requests are deliberately exempt. Frappe's validated token
+	auth path calls ``frappe.set_user()``, which stamps ``session.sid`` to the
+	authenticated user; requiring that stamp as well as an Authorization header
+	means a cookie caller cannot bypass this guard by adding a bogus header.
+	"""
+	authorization = frappe.get_request_header("Authorization")
+	is_token_authenticated = bool(authorization) and frappe.session.sid == frappe.session.user
+	if is_token_authenticated:
+		return
+
+	session_data = getattr(frappe.session, "data", None)
+	saved_token = getattr(session_data, "csrf_token", None)
+	request_token = frappe.get_request_header("X-Frappe-CSRF-Token")
+	if saved_token and request_token and hmac.compare_digest(str(saved_token), str(request_token)):
+		return
+
+	frappe.flags.disable_traceback = True
+	frappe.throw(_("Invalid Request"), frappe.CSRFTokenError)
+
+
 @frappe.whitelist(methods=["POST"])
 def upload_fleet_slip(
 	client_request_id: str,
@@ -474,11 +503,14 @@ def upload_fleet_slip(
 		{"ocr_fleet_slip": <OCR-FS-…>, "status": <str>,
 		 "client_request_id": <uuid>, "duplicate": bool}
 
-	Raises: PermissionError for guests / callers holding neither OCR Fleet Slip
-	create nor the plain ``Driver`` role (possession-based posture, D0);
+	Raises: CSRFTokenError when a cookie-authenticated request has no initialized,
+	matching Frappe CSRF token; PermissionError for guests / callers holding
+	neither OCR Fleet Slip create nor the plain ``Driver`` role (possession-based posture, D0);
 	ValidationError for a missing key, a missing/oversize/wrong-type file, or an
 	unknown vehicle.
 	"""
+	_enforce_upload_csrf()
+
 	from erpocr_integration.api import SUPPORTED_FILE_TYPES, validate_file_magic_bytes
 
 	# ── Permission: OCR-Fleet-Slip create OR plain Driver ──────────────────

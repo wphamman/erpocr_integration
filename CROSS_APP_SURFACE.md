@@ -14,6 +14,10 @@ helper, not a cross-app contract; no §3/§4 field changes, but note the **§3 s
 `OCR Fleet Slip.expense_account` is **blank on new Fleet Card slips** since v1.8.0 (Q6 — flag
 emitted to the fleet architect). See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
 
+**Unreleased ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
+closed for cookie-authenticated requests unless an initialized session CSRF token matches the
+standard Frappe header. No method, signature, payload, response, permission, or token-auth change.
+
 **v1.7.0 fold-in (ADR-0010) — no new whitelisted surface.** The `starpops_accounts` read-only
 React dashboard now ships *inside* this app at `/accounts` (§3a). It adds a website route, an
 `/apps` tile whose visibility is gated by a `has_permission` callback
@@ -58,7 +62,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.fleet_api.retry_fleet_extraction` | POST | OCR Fleet Slip perm | Retry fleet extraction |
 | `erpocr_integration.fleet_api.bulk_mark_recorded` | POST | OCR Fleet Slip write (doctype) + per-row `mark_recorded()` guards | v1.8.0: bulk-close Matched Fleet Card slips (list action; server re-validates every row; ≤200/call; UI helper, not a cross-app contract) |
 | `erpocr_integration.fleet_api.route_to_invoice_pipeline` | POST | OCR Fleet Slip write (per-doc) + OCR Import create | Re-route mis-foldered slip to invoice pipeline |
-| `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **OCR Fleet Slip create OR plain `Driver` role** (driver shell; D0) | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
+| `erpocr_integration.fleet_api.upload_fleet_slip` | **POST** | **Initialized matching CSRF token for cookie auth**, then OCR Fleet Slip create OR plain `Driver` role (driver shell; D0); token auth preserved | Phone-captured fleet-slip upload — idempotent, async, recon-only (§2c) |
 | `erpocr_integration.tasks.drive_integration.test_drive_connection` | POST | System Manager | Config self-test |
 | `erpocr_integration.tasks.email_monitor.trigger_email_check` | POST | System Manager | Manual email poll |
 
@@ -89,6 +93,12 @@ Returns (same shape fresh + idempotent replay):
 - **Recon-only, never invoice.** Creates an OCR Fleet Slip with `purchase_invoice` NULL (the
   v1.2.0 invariant). The endpoint is structurally incapable of creating/feeding a Purchase
   Invoice or an OCR Import — its permission gate never consults OCR Import.
+- **Cookie-authenticated writes fail closed on CSRF (ADR-0017).** Before permission, idempotency,
+  file, or database work, the endpoint requires an already-initialized
+  `frappe.session.data.csrf_token` to match the `X-Frappe-CSRF-Token` request header using a
+  constant-time comparison. A missing server token, missing header, or mismatch raises Frappe's
+  normal `CSRFTokenError`; the mutation never mints a token. Validated API-token/OAuth clients keep
+  their established no-CSRF-header behavior.
 - **Permission posture (v1.6.0; D0 2026-07-06): `OCR Fleet Slip` create OR the plain
   `Driver` role.** Possession-based driver writes accept `Driver` — the same posture as
   `fleet_management.api.submit_vehicle_inspection` — so real drivers need **no site-level
