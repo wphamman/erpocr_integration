@@ -1,14 +1,14 @@
 import { Link } from "react-router-dom";
 import { useFrappeGetDocCount } from "frappe-react-sdk";
 import {
-	ACTIONABLE_STATUSES,
 	DESK_SLUG,
+	QUEUE_CONFIG,
 	STATUS_STYLE,
-	type ActionableStatus,
 	type DocTypeKey,
+	type QueueStatus,
 } from "@/lib/doctypeMeta";
 
-function StatCount({ doctype, status }: { doctype: DocTypeKey; status: ActionableStatus }) {
+function StatCount({ doctype, status }: { doctype: DocTypeKey; status: QueueStatus }) {
 	const { data, isLoading, error } = useFrappeGetDocCount(doctype, [["status", "=", status]]);
 	const to = `/q/${DESK_SLUG[doctype]}/${encodeURIComponent(status)}`;
 
@@ -27,11 +27,13 @@ function StatCount({ doctype, status }: { doctype: DocTypeKey; status: Actionabl
 }
 
 export default function QueueCard({ doctype }: { doctype: DocTypeKey }) {
+	const config = QUEUE_CONFIG[doctype];
+
 	return (
 		<section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
 			<h2 className="mb-3 text-sm font-semibold text-slate-900">{doctype}</h2>
 			<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-				{ACTIONABLE_STATUSES.map((status) => (
+				{config.statuses.map((status) => (
 					<StatCount key={status} doctype={doctype} status={status} />
 				))}
 			</div>

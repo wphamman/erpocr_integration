@@ -2,13 +2,12 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { useFrappeGetDocList } from "frappe-react-sdk";
 import TopNav from "@/components/TopNav";
 import {
-	ACTIONABLE_STATUSES,
 	DESK_SLUG,
 	DOCTYPE_BY_SLUG,
 	QUEUE_CONFIG,
 	STATUS_STYLE,
-	type ActionableStatus,
 	type FrappeRow,
+	type QueueStatus,
 } from "@/lib/doctypeMeta";
 
 const PAGE_LIMIT = 100;
@@ -16,14 +15,20 @@ const PAGE_LIMIT = 100;
 export default function QueueList() {
 	const { slug, status: rawStatus } = useParams<{ slug: string; status: string }>();
 	const doctype = slug ? DOCTYPE_BY_SLUG[slug] : undefined;
-	const status = rawStatus as ActionableStatus | undefined;
+	const status = rawStatus as QueueStatus | undefined;
 
-	// Unknown slug / status → bounce to overview (handles typos and stale bookmarks).
-	if (!doctype || !status || !ACTIONABLE_STATUSES.includes(status)) {
+	// Unknown slug → bounce to overview (handles typos and stale bookmarks).
+	if (!doctype) {
 		return <Navigate to="/" replace />;
 	}
 
 	const config = QUEUE_CONFIG[doctype];
+
+	// Status validity is doctype-specific: statement statuses must never leak into
+	// Import/DN/Fleet routes, and their statuses must not leak into statements.
+	if (!status || !config.statuses.includes(status)) {
+		return <Navigate to="/" replace />;
+	}
 
 	const { data, isLoading, error, mutate } = useFrappeGetDocList<FrappeRow>(doctype, {
 		fields: config.fields,
@@ -40,7 +45,7 @@ export default function QueueList() {
 			<main className="mx-auto max-w-5xl space-y-4 px-6 py-6">
 				<div className="flex items-center justify-between">
 					<div className="flex flex-wrap items-center gap-2">
-						{ACTIONABLE_STATUSES.map((s) => (
+						{config.statuses.map((s) => (
 							<Link
 								key={s}
 								to={`/q/${DESK_SLUG[doctype]}/${encodeURIComponent(s)}`}

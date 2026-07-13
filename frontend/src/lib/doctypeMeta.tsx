@@ -2,19 +2,44 @@
 // Overview and QueueList both source from here so adding a new column or a new
 // doctype is a single-file change.
 
-export type DocTypeKey = "OCR Import" | "OCR Delivery Note" | "OCR Fleet Slip";
+export type DocTypeKey =
+	| "OCR Import"
+	| "OCR Delivery Note"
+	| "OCR Fleet Slip"
+	| "OCR Statement";
 
-export const DOCTYPES: DocTypeKey[] = ["OCR Import", "OCR Delivery Note", "OCR Fleet Slip"];
+export const DOCTYPES: DocTypeKey[] = [
+	"OCR Import",
+	"OCR Delivery Note",
+	"OCR Fleet Slip",
+	"OCR Statement",
+];
 
-// The actionable buckets accounts works through. Pending = still extracting via
-// Gemini, Completed / No Action = done — both excluded from outstanding work.
-export const ACTIONABLE_STATUSES = ["Needs Review", "Matched", "Draft Created", "Error"] as const;
-export type ActionableStatus = (typeof ACTIONABLE_STATUSES)[number];
+// Import, DN, and Fleet retain their existing queues. Statements have their own
+// workflow: Reviewed is terminal and deliberately absent from outstanding work.
+export const DOCUMENT_ACTIONABLE_STATUSES = [
+	"Needs Review",
+	"Matched",
+	"Draft Created",
+	"Error",
+] as const;
+export const STATEMENT_ACTIONABLE_STATUSES = [
+	"Pending",
+	"Extracting",
+	"Reconciled",
+	"Error",
+] as const;
+export type QueueStatus =
+	| (typeof DOCUMENT_ACTIONABLE_STATUSES)[number]
+	| (typeof STATEMENT_ACTIONABLE_STATUSES)[number];
 
-export const STATUS_STYLE: Record<ActionableStatus, string> = {
+export const STATUS_STYLE: Record<QueueStatus, string> = {
 	"Needs Review": "text-amber-700 bg-amber-50 border-amber-200",
 	Matched: "text-blue-700 bg-blue-50 border-blue-200",
 	"Draft Created": "text-slate-700 bg-slate-50 border-slate-200",
+	Pending: "text-amber-700 bg-amber-50 border-amber-200",
+	Extracting: "text-violet-700 bg-violet-50 border-violet-200",
+	Reconciled: "text-emerald-700 bg-emerald-50 border-emerald-200",
 	Error: "text-red-700 bg-red-50 border-red-200",
 };
 
@@ -25,6 +50,7 @@ export const DESK_SLUG: Record<DocTypeKey, string> = {
 	"OCR Import": "ocr-import",
 	"OCR Delivery Note": "ocr-delivery-note",
 	"OCR Fleet Slip": "ocr-fleet-slip",
+	"OCR Statement": "ocr-statement",
 };
 
 // Reverse lookup: URL slug → doctype name.
@@ -44,6 +70,7 @@ export type Column = {
 };
 
 export type QueueConfig = {
+	statuses: readonly QueueStatus[];
 	// Fields requested from get_list (always includes name, status, creation).
 	fields: string[];
 	columns: Column[];
@@ -68,6 +95,19 @@ function formatAmount(amount: unknown, currency: unknown): string {
 	return `${ccy}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatBalance(amount: unknown, currency: unknown): string {
+	if (amount === null || amount === undefined || amount === "") return "—";
+	const n = typeof amount === "number" ? amount : parseFloat(String(amount));
+	if (!Number.isFinite(n)) return "—";
+	const ccy = currency ? `${currency} ` : "";
+	return `${ccy}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function countValue(value: unknown): number {
+	const n = typeof value === "number" ? value : Number(value ?? 0);
+	return Number.isFinite(n) ? n : 0;
+}
+
 // Bold matched supplier; muted OCR'd name as fallback.
 function renderSupplier(row: FrappeRow): React.ReactNode {
 	if (row.supplier) return String(row.supplier);
@@ -81,6 +121,7 @@ function renderSupplier(row: FrappeRow): React.ReactNode {
 
 export const QUEUE_CONFIG: Record<DocTypeKey, QueueConfig> = {
 	"OCR Import": {
+		statuses: DOCUMENT_ACTIONABLE_STATUSES,
 		fields: [
 			"name",
 			"supplier",
@@ -116,6 +157,7 @@ export const QUEUE_CONFIG: Record<DocTypeKey, QueueConfig> = {
 		],
 	},
 	"OCR Delivery Note": {
+		statuses: DOCUMENT_ACTIONABLE_STATUSES,
 		fields: [
 			"name",
 			"supplier",
@@ -149,6 +191,7 @@ export const QUEUE_CONFIG: Record<DocTypeKey, QueueConfig> = {
 		],
 	},
 	"OCR Fleet Slip": {
+		statuses: DOCUMENT_ACTIONABLE_STATUSES,
 		fields: [
 			"name",
 			"vehicle_registration",
@@ -208,6 +251,67 @@ export const QUEUE_CONFIG: Record<DocTypeKey, QueueConfig> = {
 					) : (
 						<span className="text-slate-300">—</span>
 					),
+			},
+			{
+				key: "age",
+				label: "Age",
+				className: "text-right tabular-nums text-slate-500",
+				render: (r) => ageDays(r.creation),
+			},
+		],
+	},
+	"OCR Statement": {
+		statuses: STATEMENT_ACTIONABLE_STATUSES,
+		fields: [
+			"name",
+			"supplier",
+			"supplier_name_ocr",
+			"statement_date",
+			"period_from",
+			"period_to",
+			"closing_balance",
+			"currency",
+			"mismatch_count",
+			"missing_count",
+			"not_in_statement_count",
+			"status",
+			"creation",
+		],
+		columns: [
+			{ key: "name", label: "Name", render: (r) => String(r.name ?? "") },
+			{ key: "supplier", label: "Supplier", render: renderSupplier },
+			{ key: "statement_date", label: "Date", render: (r) => formatDate(r.statement_date) },
+			{
+				key: "period",
+				label: "Period",
+				render: (r) => {
+					const from = formatDate(r.period_from);
+					const to = formatDate(r.period_to);
+					return from === "—" && to === "—" ? "—" : `${from} – ${to}`;
+				},
+			},
+			{
+				key: "closing_balance",
+				label: "Closing balance",
+				className: "text-right tabular-nums",
+				render: (r) => formatBalance(r.closing_balance, r.currency),
+			},
+			{
+				key: "issues",
+				label: "Recon issues",
+				render: (r) => {
+					const mismatch = countValue(r.mismatch_count);
+					const missing = countValue(r.missing_count);
+					const notInStatement = countValue(r.not_in_statement_count);
+					if (mismatch + missing + notInStatement === 0) {
+						return <span className="text-emerald-600">None</span>;
+					}
+					return (
+						<span className="text-amber-700">
+							{mismatch} mismatch · {missing} missing · {notInStatement} not listed
+						</span>
+					);
+				},
 			},
 			{
 				key: "age",
