@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build --base=/assets/erpocr_integration/accounts/ && node scripts/copy-html-entry.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:source": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "frappe-react-sdk": "^1.12.0",
