@@ -875,7 +875,21 @@ def test_drive_connection():
 		}
 
 	except Exception as e:
-		return {"success": False, "message": f"Connection failed: {e!s}"}
+		# Do not echo provider/request details to the client, and do not persist
+		# exception strings or full tracebacks server-side — both can carry
+		# service-account / API diagnostics. Stable operation + type only.
+		frappe.log_error(
+			title="Drive Connection Test Failed",
+			message=(
+				"Drive connection test failed.\n"
+				"operation=test_drive_connection\n"
+				f"exception_type={type(e).__name__}"
+			),
+		)
+		return {
+			"success": False,
+			"message": "Connection failed. Check Error Log for details.",
+		}
 
 
 # ── Delivery Note Drive Scan ──────────────────────────────────────────

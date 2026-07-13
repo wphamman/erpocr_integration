@@ -634,3 +634,87 @@ class TestMultiInvoicePartialFailureRollback:
 			if len(c.args) >= 3 and isinstance(c.args[2], dict) and c.args[2].get("status") == "Error"
 		]
 		assert error_status_writes, "placeholder must be marked Error after rollback"
+
+
+# ---------------------------------------------------------------------------
+# 6. test_drive_connection — no raw exception echo (P2A-L1)
+# ---------------------------------------------------------------------------
+
+
+class TestDriveConnectionTest:
+	"""System Manager self-test must not leak provider/exception text to the client."""
+
+	@staticmethod
+	def _enabled_settings():
+		return SimpleNamespace(
+			drive_integration_enabled=True,
+			drive_archive_folder_id="folder-archive-1",
+			get_password=MagicMock(return_value='{"type": "service_account"}'),
+		)
+
+	def test_exception_does_not_echo_secret_like_text(self, mock_frappe):
+		"""Synthetic secret must be absent from client response and Error Log message."""
+		secret = "sa-private-key-SYNTHETIC_SECRET_DO_NOT_ECHO_xyz789"
+		mock_frappe.get_single = MagicMock(return_value=self._enabled_settings())
+		mock_frappe.get_traceback = MagicMock(return_value=f"Traceback: {secret}")
+		mock_frappe.log_error.reset_mock()
+
+		with patch.object(
+			erpocr_integration.tasks.drive_integration,
+			"_get_drive_service",
+			side_effect=Exception(f"auth failed: {secret}"),
+		):
+			result = erpocr_integration.tasks.drive_integration.test_drive_connection()
+
+		assert result["success"] is False
+		assert secret not in result["message"]
+		assert "Connection failed" in result["message"]
+		# Stable generic message — not the old f"Connection failed: {e!s}" shape.
+		assert result["message"] == "Connection failed. Check Error Log for details."
+
+		# Diagnostic Error Log still occurs (title + stable context).
+		mock_frappe.log_error.assert_called_once()
+		kwargs = mock_frappe.log_error.call_args.kwargs
+		assert kwargs.get("title") == "Drive Connection Test Failed"
+		logged = kwargs.get("message") or ""
+		assert secret not in logged
+		assert "operation=test_drive_connection" in logged
+		assert "exception_type=Exception" in logged
+		# Must not persist raw traceback (secret ride-along path).
+		mock_frappe.get_traceback.assert_not_called()
+		assert "Traceback" not in logged
+		# Capture every string arg/kwarg from the log call for secret absence.
+		for arg in mock_frappe.log_error.call_args.args:
+			assert secret not in str(arg)
+		for val in kwargs.values():
+			assert secret not in str(val)
+
+	def test_success_shape_unchanged(self, mock_frappe):
+		"""Happy path still returns success with folder name/id message."""
+		mock_frappe.get_single = MagicMock(return_value=self._enabled_settings())
+		mock_service = MagicMock()
+		mock_service.files.return_value.get.return_value.execute.return_value = {
+			"id": "folder-archive-1",
+			"name": "OCR Archive",
+		}
+
+		with patch.object(
+			erpocr_integration.tasks.drive_integration,
+			"_get_drive_service",
+			return_value=mock_service,
+		):
+			result = erpocr_integration.tasks.drive_integration.test_drive_connection()
+
+		assert result["success"] is True
+		assert "OCR Archive" in result["message"]
+		assert "folder-archive-1" in result["message"]
+		mock_frappe.log_error.assert_not_called()
+
+	def test_endpoint_is_post_only(self):
+		"""Decorator remains methods=['POST'] (source-level; mock whitelist strips attrs)."""
+		import inspect
+
+		# The conftest whitelist mock returns the bare function, so method
+		# metadata is not attached at runtime. Assert against module source.
+		mod_src = inspect.getsource(erpocr_integration.tasks.drive_integration).replace("\r\n", "\n")
+		assert '@frappe.whitelist(methods=["POST"])\ndef test_drive_connection' in mod_src
