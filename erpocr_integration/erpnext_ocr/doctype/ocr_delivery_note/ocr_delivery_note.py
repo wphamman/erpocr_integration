@@ -6,7 +6,11 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
-from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import _resolve_ocr_description
+from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+	REF_ITEM_FETCH_FIELDS,
+	_inherit_ref_fields,
+	_resolve_ocr_description,
+)
 
 
 def _resolve_rate(item_code, purchase_order_item=None):
@@ -239,10 +243,10 @@ class OCRDeliveryNote(Document):
 			for po_item in frappe.get_all(
 				"Purchase Order Item",
 				filters={"parent": self.purchase_order},
-				fields=["name", "item_code"],
+				fields=["name", "item_code", "uom", "conversion_factor", "project"],
 				order_by="idx",
 			):
-				po_items_by_code.setdefault(po_item.item_code, []).append(po_item.name)
+				po_items_by_code.setdefault(po_item.item_code, []).append(po_item)
 
 		pr_items = []
 		skipped_unmatched = 0
@@ -252,12 +256,31 @@ class OCRDeliveryNote(Document):
 				skipped_unmatched += 1
 				continue
 
-			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback
+			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback.
+			# po_ref carries the full reference row (uom/conversion_factor/project)
+			# so it can be inherited onto the PR row below (v1.10.1), matching the
+			# invoice path — fetched in the SAME lookup that answers the stale-ref
+			# check, no extra round-trip.
+			# Stale-ref guard (mirrors the invoice path): if the saved ref points at
+			# a PO item whose item_code disagrees with the OCR row's current
+			# item_code, drop it — otherwise ERPNext silently resyncs item_code (and
+			# now uom/project would be inherited) from the wrong PO row.
 			po_detail = item.purchase_order_item
+			po_ref = None
+			if po_detail and item.item_code:
+				ref = frappe.db.get_value(
+					"Purchase Order Item", po_detail, REF_ITEM_FETCH_FIELDS, as_dict=True
+				)
+				if ref and ref.item_code != item.item_code:
+					po_detail = None
+				elif ref:
+					po_ref = ref
 			if not po_detail and self.purchase_order and item.item_code:
 				candidates = po_items_by_code.get(item.item_code, [])
 				if candidates:
-					po_detail = candidates.pop(0)
+					candidate = candidates.pop(0)
+					po_detail = candidate.name
+					po_ref = candidate
 
 			rate = _resolve_rate(item.item_code, po_detail)
 
@@ -280,6 +303,7 @@ class OCRDeliveryNote(Document):
 			if self.purchase_order and po_detail:
 				pr_item["purchase_order"] = self.purchase_order
 				pr_item["purchase_order_item"] = po_detail
+				_inherit_ref_fields(pr_item, po_ref)
 
 			pr_items.append(pr_item)
 

@@ -2,6 +2,32 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] — 2026-07-17
+
+Patch release. Fixes a live defect where creating a Purchase Invoice (or Purchase Receipt) from an
+OCR record linked to a Purchase Order threw `Incorrect value in row 1:UOM must be equal to 'EA'`.
+
+### Fixed
+- **Inherit `uom` / `conversion_factor` / `project` from the linked PO/PR row.** When OCR links a
+  built PI/PR line to a reference row (`po_detail` / `pr_detail` / `purchase_order_item`) it now
+  copies that row's UOM, conversion factor, and project onto the line, instead of leaving them blank
+  for ERPNext to re-derive from the Item master. ERPNext's `validate_with_previous_doc` compares
+  `uom` (and `project`) between the new line and the reference row; when an item's `purchase_uom`
+  (e.g. `Kg`) differed from the UOM the PO/PR was actually raised in (e.g. `EA`), creation hard-threw.
+  `uom` and `conversion_factor` are always inherited together (the factor drives `stock_qty`); a
+  blank value on the reference row is left unset (not forced to `""`); a stale reference dropped by
+  the existing item-code guard contributes nothing; PO wins over PR when a line carries both. Money
+  is unaffected — `amount = qty × rate` regardless of the UOM label. Fixed in all three builders:
+  `OCRImport.create_purchase_invoice`, `OCRImport.create_purchase_receipt`, and
+  `OCRDeliveryNote.create_purchase_receipt`. Currency and rate mismatches are deliberately left to
+  throw (they are genuine business signals, not label mismatches).
+- **Delivery Note → Purchase Receipt gained the stale-reference guard the invoice paths already
+  had.** When a DN row's saved `purchase_order_item` points at a PO line whose `item_code` no longer
+  matches the (re-matched) OCR row, the reference is now dropped and re-matched by item_code, instead
+  of letting ERPNext silently resync the PR line's item_code — and, from this release, instead of
+  inheriting the wrong PO row's UOM/project. Pre-existing latent bug on the DN path, surfaced by the
+  UOM-inheritance review.
+
 ## [1.10.0] — 2026-07-13
 
 Pass-2 remediation release. This is a minor release because it adds supplier-statement work to the
