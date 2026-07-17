@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+	REF_ITEM_FETCH_FIELDS,
 	OCRImport,
 	_build_taxes_from_template,
 	_detect_tax_inclusive_rates,
@@ -1387,18 +1388,40 @@ class TestMarkNoAction:
 # ---------------------------------------------------------------------------
 
 
-def _stale_ref_db_get_value(po_item_codes=None, pr_item_codes=None, **handler_kwargs):
+def _stale_ref_db_get_value(
+	po_item_codes=None, pr_item_codes=None, po_item_rows=None, pr_item_rows=None, **handler_kwargs
+):
 	"""Return a db.get_value side_effect that also answers Purchase Order Item and
-	Purchase Receipt Item item_code lookups from caller-provided dicts."""
+	Purchase Receipt Item reference-row lookups from caller-provided dicts.
+
+	Since v1.10.1 the production code fetches the reference row with
+	get_value(doctype, name, REF_ITEM_FETCH_FIELDS, as_dict=True) and reads
+	.item_code / .uom / .conversion_factor / .project off it (attribute access,
+	as real frappe returns frappe._dict). So this helper returns a SimpleNamespace
+	row, not a bare item_code string. `po_item_codes`/`pr_item_codes` remain the
+	terse "name -> item_code" form (uom/conv/project default to None → nothing
+	inherited); `po_item_rows`/`pr_item_rows` map name -> full field dict when a
+	test needs to assert inheritance.
+	"""
 	base = _db_get_value_handler(**handler_kwargs)
 	po_item_codes = po_item_codes or {}
 	pr_item_codes = pr_item_codes or {}
+	po_item_rows = po_item_rows or {}
+	pr_item_rows = pr_item_rows or {}
+
+	def _row(name, codes, rows):
+		if name in rows:
+			return SimpleNamespace(**rows[name])
+		code = codes.get(name)
+		if code is None:
+			return None
+		return SimpleNamespace(item_code=code, uom=None, conversion_factor=None, project=None)
 
 	def handler(doctype, name, fields=None, **kwargs):
 		if doctype == "Purchase Order Item":
-			return po_item_codes.get(name)
+			return _row(name, po_item_codes, po_item_rows)
 		if doctype == "Purchase Receipt Item":
-			return pr_item_codes.get(name)
+			return _row(name, pr_item_codes, pr_item_rows)
 		return base(doctype, name, fields, **kwargs)
 
 	return handler
@@ -1490,6 +1513,254 @@ class TestStalePORefClearing:
 		assert pr_item["item_code"] == "NEW-CODE"
 		assert "purchase_order_item" not in pr_item
 		assert "purchase_order" not in pr_item
+
+
+# ---------------------------------------------------------------------------
+# v1.10.1 — inherit uom / conversion_factor / project from the linked PO/PR row
+# so ERPNext's validate_with_previous_doc compares the row against itself instead
+# of re-deriving uom from the Item master (which throws when the item's
+# purchase_uom differs from the uom the PO/PR row was actually raised in — the
+# live "Incorrect value in row 1:UOM must be equal to 'EA'" defect).
+# ---------------------------------------------------------------------------
+
+
+class TestRefFieldInheritance:
+	def test_pi_inherits_uom_and_conversion_from_saved_po_ref(self, mock_frappe, sample_settings):
+		"""The live defect: PO row raised in EA, item purchase_uom is Kg. The built
+		PI row must carry the PO row's uom AND conversion_factor, not be left blank."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="LALB505", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_rows={
+				"po-item-row-1": {
+					"item_code": "LALB505",
+					"uom": "EA",
+					"conversion_factor": 1.0,
+					"project": None,
+				}
+			},
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["po_detail"] == "po-item-row-1"
+		assert pi_item["uom"] == "EA"
+		assert pi_item["conversion_factor"] == 1.0
+
+		# ADR-0009 guard: the ref lookup MUST pass the field list + as_dict=True.
+		# The wholesale mock returns an attribute row regardless, so without this
+		# assertion a regression dropping as_dict (real frappe would then return a
+		# list and `.item_code` would AttributeError on prod) would stay green.
+		ref_calls = [
+			c
+			for c in mock_frappe.db.get_value.call_args_list
+			if c.args and c.args[0] == "Purchase Order Item"
+		]
+		assert ref_calls, "expected a Purchase Order Item ref lookup"
+		assert any(
+			c.args[2] == REF_ITEM_FETCH_FIELDS and c.kwargs.get("as_dict") is True for c in ref_calls
+		), "ref lookup must use REF_ITEM_FETCH_FIELDS with as_dict=True"
+
+	def test_pi_inherits_project_from_po_ref(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="MATCH-CODE", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_rows={
+				"po-item-row-1": {
+					"item_code": "MATCH-CODE",
+					"uom": "Nos",
+					"conversion_factor": 1.0,
+					"project": "PROJ-01",
+				}
+			},
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["project"] == "PROJ-01"
+
+	def test_pi_blank_uom_on_ref_leaves_key_absent(self, mock_frappe, sample_settings):
+		"""Blank uom on the reference row → do NOT set uom (fall through to ERPNext
+		default). An explicit empty string would be worse than leaving it unset."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="MATCH-CODE", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_rows={
+				"po-item-row-1": {
+					"item_code": "MATCH-CODE",
+					"uom": None,
+					"conversion_factor": None,
+					"project": None,
+				}
+			},
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert "uom" not in pi_item
+		assert "conversion_factor" not in pi_item
+		assert "project" not in pi_item
+
+	def test_pi_dropped_stale_ref_inherits_nothing(self, mock_frappe, sample_settings):
+		"""When the stale-ref guard drops the ref, nothing is inherited from it and
+		the ref keys stay absent (must not resurrect a dropped ref's uom)."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="NEW-CODE", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_rows={
+				"po-item-row-1": {
+					"item_code": "OLD-CODE",  # disagrees → dropped
+					"uom": "EA",
+					"conversion_factor": 1.0,
+					"project": "PROJ-01",
+				}
+			},
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert "po_detail" not in pi_item
+		assert "uom" not in pi_item
+		assert "conversion_factor" not in pi_item
+		assert "project" not in pi_item
+
+	def test_pi_po_ref_wins_over_pr_ref_for_inheritance(self, mock_frappe, sample_settings):
+		"""A PI row carrying BOTH po_detail and pr_detail inherits the PO row's
+		values (ruling 5)."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			purchase_receipt_link="PR-00001",
+			items=[
+				_make_item(
+					item_code="MATCH-CODE",
+					purchase_order_item="po-item-row-1",
+					pr_detail="pr-item-row-1",
+				)
+			],
+		)
+		mock_frappe.db.exists.return_value = True  # PR-belongs-to-PO validation
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_rows={
+				"po-item-row-1": {
+					"item_code": "MATCH-CODE",
+					"uom": "EA",
+					"conversion_factor": 1.0,
+					"project": "PROJ-PO",
+				}
+			},
+			pr_item_rows={
+				"pr-item-row-1": {
+					"item_code": "MATCH-CODE",
+					"uom": "Box",
+					"conversion_factor": 10.0,
+					"project": "PROJ-PR",
+				}
+			},
+		)
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["po_detail"] == "po-item-row-1"
+		assert pi_item["pr_detail"] == "pr-item-row-1"
+		assert pi_item["uom"] == "EA"  # PO wins, not "Box"
+		assert pi_item["conversion_factor"] == 1.0
+		assert pi_item["project"] == "PROJ-PO"
+
+	def test_pi_no_po_link_leaves_row_unchanged(self, mock_frappe, sample_settings):
+		"""No PO/PR reference at all → no uom/conversion_factor/project keys added
+		(regression guard: unlinked invoices behave exactly as before)."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			items=[_make_item(item_code="MATCH-CODE")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert "uom" not in pi_item
+		assert "conversion_factor" not in pi_item
+		assert "project" not in pi_item
+
+	def test_pr_inherits_uom_and_conversion_from_po_ref(self, mock_frappe, sample_settings):
+		"""The PR builder (ocr_import.create_purchase_receipt) has the same hole."""
+		doc = _make_ocr_import(
+			document_type="Purchase Receipt",
+			status="Matched",
+			purchase_order="PO-00001",
+			items=[_make_item(item_code="LALB505", purchase_order_item="po-item-row-1")],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PR-00001")
+		mock_frappe.db.get_value.side_effect = _stale_ref_db_get_value(
+			po_item_rows={
+				"po-item-row-1": {
+					"item_code": "LALB505",
+					"uom": "EA",
+					"conversion_factor": 1.0,
+					"project": "PROJ-01",
+				}
+			},
+			item_is_stock=1,
+		)
+
+		doc.create_purchase_receipt()
+
+		pr_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pr_item["purchase_order_item"] == "po-item-row-1"
+		assert pr_item["uom"] == "EA"
+		assert pr_item["conversion_factor"] == 1.0
+		assert pr_item["project"] == "PROJ-01"
+
+	def test_pi_inherits_from_fifo_auto_matched_po_row(self, mock_frappe, sample_settings):
+		"""When the item-level ref is missing and the row is auto-matched by item_code
+		(FIFO), the built line still inherits uom/conversion_factor/project from the
+		auto-matched PO row (the FIFO path stores the full row, not just its name)."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			purchase_order="PO-00001",
+			items=[_make_item(purchase_order_item=None)],  # no saved ref → FIFO path
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.get_all.return_value = [
+			SimpleNamespace(
+				name="po-item-auto-1",
+				item_code="ITEM-001",
+				uom="EA",
+				conversion_factor=1.0,
+				project="PROJ-01",
+			),
+		]
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["po_detail"] == "po-item-auto-1"
+		assert pi_item["uom"] == "EA"
+		assert pi_item["conversion_factor"] == 1.0
+		assert pi_item["project"] == "PROJ-01"
 
 
 # ---------------------------------------------------------------------------

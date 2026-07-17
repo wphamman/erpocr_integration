@@ -134,6 +134,48 @@ def _extract_service_pattern(description: str) -> str:
 	return text
 
 
+#: Fields fetched (in the same query as the existing PO/PR ref lookup) so a
+#: reference row's uom/conversion_factor/project can be inherited onto the
+#: built PI/PR row (v1.10.1). See _inherit_ref_fields.
+REF_ITEM_FETCH_FIELDS = ["item_code", "uom", "conversion_factor", "project"]
+
+
+def _inherit_ref_fields(target: dict, ref) -> None:
+	"""Copy uom+conversion_factor and project from a PO/PR reference row onto a
+	built PI/PR item dict.
+
+	When a child row carries a previous-doc reference (po_detail/pr_detail on a
+	PI row, purchase_order_item on a PR row), ERPNext's validate_with_previous_doc
+	compares project/item_code/uom between the new row and the reference row and
+	hard-throws on any mismatch. Left unset, ERPNext derives `uom` from the Item
+	master (purchase_uom or stock_uom) at insert time — which can legitimately
+	differ from the uom the reference row was actually raised in. Inheriting the
+	reference row's own values makes the new row compare against itself instead.
+
+	uom and conversion_factor are inherited as a PAIR, never one without the
+	other — conversion_factor drives `stock_qty = qty * conversion_factor`, so
+	inheriting uom alone would leave ERPNext re-deriving a mismatched factor and
+	silently mis-stating received stock. `amount = qty * rate` is unaffected
+	either way — no money changes.
+
+	Blank/None on the reference row means: don't set the field at all (fall
+	through to ERPNext's own default resolution) — setting an explicit empty
+	string is worse than leaving it unset.
+
+	`ref` is expected to be a frappe._dict / attribute-accessible row (or None
+	when nothing was inherited, e.g. the stale-ref guard dropped it).
+	"""
+	if not ref:
+		return
+	uom = getattr(ref, "uom", None)
+	if uom:
+		target["uom"] = uom
+		target["conversion_factor"] = getattr(ref, "conversion_factor", None) or 1
+	project = getattr(ref, "project", None)
+	if project:
+		target["project"] = project
+
+
 def _detect_tax_inclusive_rates(ocr_import) -> bool:
 	"""Detect whether OCR-extracted item rates already include tax.
 
@@ -600,10 +642,10 @@ class OCRImport(Document):
 			for po_item in frappe.get_all(
 				"Purchase Order Item",
 				filters={"parent": self.purchase_order},
-				fields=["name", "item_code"],
+				fields=["name", "item_code", "uom", "conversion_factor", "project"],
 				order_by="idx",
 			):
-				po_items_by_code.setdefault(po_item.item_code, []).append(po_item.name)
+				po_items_by_code.setdefault(po_item.item_code, []).append(po_item)
 
 		pr_items_by_code = {}
 		if self.purchase_receipt_link and self.purchase_order:
@@ -613,10 +655,10 @@ class OCRImport(Document):
 					"parent": self.purchase_receipt_link,
 					"purchase_order": self.purchase_order,
 				},
-				fields=["name", "item_code"],
+				fields=["name", "item_code", "uom", "conversion_factor", "project"],
 				order_by="idx",
 			):
-				pr_items_by_code.setdefault(pr_item.item_code, []).append(pr_item.name)
+				pr_items_by_code.setdefault(pr_item.item_code, []).append(pr_item)
 
 		pi_items = []
 		for item in self.items:
@@ -659,15 +701,25 @@ class OCRImport(Document):
 			# Safety: if the saved ref points at a PO item with a different item_code
 			# than the OCR row's current item_code, drop it — ERPNext's PI-from-PO
 			# sync would otherwise overwrite the user's item_code at insert time.
+			# po_ref carries the full reference row (uom/conversion_factor/project)
+			# so it can be inherited below (v1.10.1) — fetched in the SAME query
+			# that already answers the stale-ref check, no extra round-trip.
 			po_detail = item.purchase_order_item
+			po_ref = None
 			if po_detail and item.item_code:
-				ref_code = frappe.db.get_value("Purchase Order Item", po_detail, "item_code")
-				if ref_code and ref_code != item.item_code:
+				ref = frappe.db.get_value(
+					"Purchase Order Item", po_detail, REF_ITEM_FETCH_FIELDS, as_dict=True
+				)
+				if ref and ref.item_code != item.item_code:
 					po_detail = None
+				elif ref:
+					po_ref = ref
 			if not po_detail and self.purchase_order and item.item_code:
 				candidates = po_items_by_code.get(item.item_code, [])
 				if candidates:
-					po_detail = candidates.pop(0)
+					candidate = candidates.pop(0)
+					po_detail = candidate.name
+					po_ref = candidate
 
 			if self.purchase_order and po_detail:
 				pi_item["purchase_order"] = self.purchase_order
@@ -680,18 +732,34 @@ class OCRImport(Document):
 			# Without this, changing item_code after running Match PR Items causes ERPNext
 			# to sync the stale PR's item_code back onto the PI at insert time.
 			pr_detail = item.pr_detail
+			pr_ref = None
 			if pr_detail and item.item_code:
-				ref_code = frappe.db.get_value("Purchase Receipt Item", pr_detail, "item_code")
-				if ref_code and ref_code != item.item_code:
+				ref = frappe.db.get_value(
+					"Purchase Receipt Item", pr_detail, REF_ITEM_FETCH_FIELDS, as_dict=True
+				)
+				if ref and ref.item_code != item.item_code:
 					pr_detail = None
+				elif ref:
+					pr_ref = ref
 			if not pr_detail and self.purchase_receipt_link and self.purchase_order and item.item_code:
 				candidates = pr_items_by_code.get(item.item_code, [])
 				if candidates:
-					pr_detail = candidates.pop(0)
+					candidate = candidates.pop(0)
+					pr_detail = candidate.name
+					pr_ref = candidate
 
 			if self.purchase_receipt_link and self.purchase_order and pr_detail:
 				pi_item["purchase_receipt"] = self.purchase_receipt_link
 				pi_item["pr_detail"] = pr_detail
+
+			# Inherit uom/conversion_factor/project from whichever ref actually
+			# survived the guards above (never a dropped stale ref). PO wins over
+			# PR when a row carries both (ruling: the PR derives from the PO, so
+			# if their compare-fields ever disagreed the record is broken either way).
+			inherit_ref = po_ref if (self.purchase_order and po_detail) else None
+			if inherit_ref is None and self.purchase_receipt_link and self.purchase_order and pr_detail:
+				inherit_ref = pr_ref
+			_inherit_ref_fields(pi_item, inherit_ref)
 
 			pi_items.append(pi_item)
 
@@ -829,10 +897,10 @@ class OCRImport(Document):
 			for po_item in frappe.get_all(
 				"Purchase Order Item",
 				filters={"parent": self.purchase_order},
-				fields=["name", "item_code"],
+				fields=["name", "item_code", "uom", "conversion_factor", "project"],
 				order_by="idx",
 			):
-				po_items_by_code.setdefault(po_item.item_code, []).append(po_item.name)
+				po_items_by_code.setdefault(po_item.item_code, []).append(po_item)
 
 		pr_items = []
 		non_stock_warnings = []
@@ -871,19 +939,29 @@ class OCRImport(Document):
 			# Use saved item-level ref, or auto-match by item_code (FIFO) as fallback.
 			# Safety: drop the saved ref if it points at a PO row with a different
 			# item_code than the OCR row's current item_code (same rationale as PI).
+			# po_ref carries the full reference row so uom/conversion_factor/project
+			# can be inherited below (v1.10.1) — same query as the stale-ref check.
 			po_detail = item.purchase_order_item
+			po_ref = None
 			if po_detail and item.item_code:
-				ref_code = frappe.db.get_value("Purchase Order Item", po_detail, "item_code")
-				if ref_code and ref_code != item.item_code:
+				ref = frappe.db.get_value(
+					"Purchase Order Item", po_detail, REF_ITEM_FETCH_FIELDS, as_dict=True
+				)
+				if ref and ref.item_code != item.item_code:
 					po_detail = None
+				elif ref:
+					po_ref = ref
 			if not po_detail and self.purchase_order and item.item_code:
 				candidates = po_items_by_code.get(item.item_code, [])
 				if candidates:
-					po_detail = candidates.pop(0)
+					candidate = candidates.pop(0)
+					po_detail = candidate.name
+					po_ref = candidate
 
 			if self.purchase_order and po_detail:
 				pr_item["purchase_order"] = self.purchase_order
 				pr_item["purchase_order_item"] = po_detail
+				_inherit_ref_fields(pr_item, po_ref)
 
 			pr_items.append(pr_item)
 

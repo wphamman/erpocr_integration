@@ -418,7 +418,12 @@ class TestCreatePurchaseReceipt:
 			if doctype == "OCR Delivery Note":
 				return SimpleNamespace(purchase_order_result=None, purchase_receipt=None)
 			if doctype == "Purchase Order Item":
-				return 100.0  # PO rate
+				if fields == "rate":
+					return 100.0
+				# stale-ref guard / inheritance fetch: item_code matches the OCR row
+				return SimpleNamespace(
+					name=name, item_code="SR-12-6", uom=None, conversion_factor=None, project=None
+				)
 			if doctype == "Item":
 				return 1  # is_stock_item
 			return None
@@ -451,6 +456,105 @@ class TestCreatePurchaseReceipt:
 		pr_item = pr_dict["items"][0]
 		assert pr_item["purchase_order"] == "PO-00001"
 		assert pr_item["purchase_order_item"] == "poi-001"
+
+	def test_pr_drops_stale_po_ref_and_inherits_nothing(self, mock_frappe):
+		"""v1.10.1: DN->PR stale-ref guard. A saved purchase_order_item pointing at
+		a PO row whose item_code disagrees with the OCR row is dropped — neither the
+		ref link nor its uom/project may reach the PR line (Terra/Grok review)."""
+		mock_pr = MagicMock()
+		mock_pr.name = "PR-00005"
+		mock_pr.items = []
+		mock_frappe.get_doc.return_value = mock_pr
+
+		def db_get_value_side_effect(doctype, name, fields=None, **kw):
+			if doctype == "OCR Delivery Note":
+				return SimpleNamespace(purchase_order_result=None, purchase_receipt=None)
+			if doctype == "Purchase Order Item":
+				if fields == "rate":
+					return 100.0
+				# saved ref points at a DIFFERENT item_code + a non-EA uom
+				return SimpleNamespace(
+					name=name, item_code="OLD-CODE", uom="Box", conversion_factor=10.0, project="PROJ-X"
+				)
+			if doctype == "Item" and fields == "is_stock_item":
+				return 1
+			if doctype == "Item":
+				# _resolve_rate's fallback (ref was dropped, so no PO rate)
+				return SimpleNamespace(last_purchase_rate=50, standard_rate=60)
+			return None
+
+		mock_frappe.db.get_value.side_effect = db_get_value_side_effect
+		mock_frappe.get_cached_doc.return_value = SimpleNamespace(
+			dn_default_warehouse="",
+			default_warehouse="",
+			get=lambda k, d=None: d,
+		)
+		# No FIFO candidates → after the stale drop the row carries no PO ref at all
+		mock_frappe.get_all.return_value = []
+
+		items = [_make_dn_item(item_code="NEW-CODE", purchase_order_item="poi-stale", qty=50)]
+		doc = _make_ocr_dn(
+			status="Matched",
+			document_type="Purchase Receipt",
+			purchase_order="PO-00001",
+			items=items,
+		)
+		doc.create_purchase_receipt()
+
+		pr_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pr_item["item_code"] == "NEW-CODE"
+		assert "purchase_order_item" not in pr_item
+		assert "uom" not in pr_item
+		assert "conversion_factor" not in pr_item
+		assert "project" not in pr_item
+
+	def test_pr_inherits_uom_conversion_project_from_po_ref(self, mock_frappe):
+		"""v1.10.1: the DN->PR builder inherits uom/conversion_factor/project from
+		the linked PO row so ERPNext's validate_with_previous_doc compares the row
+		against itself (same UOM-mismatch defect as the invoice path). _resolve_rate
+		still queries the scalar 'rate' field; the ref fetch uses the field list."""
+		mock_pr = MagicMock()
+		mock_pr.name = "PR-00004"
+		mock_pr.items = []
+		mock_frappe.get_doc.return_value = mock_pr
+
+		po_ref_row = SimpleNamespace(
+			name="poi-001", item_code="SR-12-6", uom="EA", conversion_factor=1.0, project="PROJ-01"
+		)
+
+		def db_get_value_side_effect(doctype, name, fields=None, **kw):
+			if doctype == "OCR Delivery Note":
+				return SimpleNamespace(purchase_order_result=None, purchase_receipt=None)
+			if doctype == "Purchase Order Item":
+				if fields == "rate":
+					return 100.0
+				return po_ref_row  # the REF_ITEM_FETCH_FIELDS as_dict lookup
+			if doctype == "Item":
+				return 1  # is_stock_item
+			return None
+
+		mock_frappe.db.get_value.side_effect = db_get_value_side_effect
+		mock_frappe.get_cached_doc.return_value = SimpleNamespace(
+			dn_default_warehouse="",
+			default_warehouse="",
+			get=lambda k, d=None: d,
+		)
+		mock_frappe.get_all.return_value = []
+
+		items = [_make_dn_item(item_code="SR-12-6", purchase_order_item="poi-001", qty=50)]
+		doc = _make_ocr_dn(
+			status="Matched",
+			document_type="Purchase Receipt",
+			purchase_order="PO-00001",
+			items=items,
+		)
+		doc.create_purchase_receipt()
+
+		pr_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pr_item["purchase_order_item"] == "poi-001"
+		assert pr_item["uom"] == "EA"
+		assert pr_item["conversion_factor"] == 1.0
+		assert pr_item["project"] == "PROJ-01"
 
 	def test_pr_po_fallback_when_row_refs_missing(self, mock_frappe):
 		"""PR auto-matches PO items by item_code when row-level refs are missing."""
