@@ -317,3 +317,32 @@
 - **Rejected:** npm's SDK downgrade; unreviewed `overrides`; broad dependency upgrades inside a
   release-blocker repair train; claiming the advisories are harmless rather than currently unexploited.
 - **Pointer:** ERP-P2-4; OPEN-QUESTIONS Q14.
+
+## ADR-0020 — Created PI/PR lines inherit compare-fields from the linked PO/PR row
+- **Status:** Accepted 2026-07-17 · shipped v1.10.1
+- **Context:** Creating a Purchase Invoice/Receipt from an OCR record linked to a Purchase Order
+  threw `Incorrect value in row 1:UOM must be equal to 'EA'` (live: Cactus `OCR-IMP-01898`,
+  `OCR-IMP-01937`). OCR set the previous-doc reference (`po_detail`/`pr_detail`/
+  `purchase_order_item`) but left `uom` blank, so ERPNext re-derived it from the Item master
+  (`purchase_uom or stock_uom`); `validate_with_previous_doc` compares `[project, item_code, uom]`
+  between the new line and the reference row and hard-throws on any mismatch. Items whose
+  `purchase_uom` (`Kg`) differed from the UOM the PO was raised in (`EA`) failed at create.
+- **Decision:** When a built PI/PR line carries a previous-doc reference, **inherit that reference
+  row's `uom` + `conversion_factor` (always as a pair) and `project`** onto the line, rather than
+  leaving them for ERPNext to re-derive. `uom` and `conversion_factor` move together because the
+  factor drives `stock_qty = qty × conversion_factor` (money is unaffected — `amount = qty × rate`).
+  Inherit only from a reference that survives the item-code stale-ref guard; a blank ref value is
+  left unset (never `""`); PO wins over PR when a line carries both. Applied to all three builders
+  (`OCRImport.create_purchase_invoice`, `OCRImport.create_purchase_receipt`,
+  `OCRDeliveryNote.create_purchase_receipt`); the DN→PR builder gained the stale-ref guard the two
+  invoice builders already had.
+- **Rejected:** (a) inheriting `currency` from the PO header — a currency mismatch is a genuine
+  business signal (the invoice really is in a different currency than the PO), so it stays a throw;
+  (b) working around `maintain_same_rate` — OCR's rate legitimately differs from the PO rate, that
+  is the point of invoice capture; (c) adding a hand-editable UOM column to the OCR doctype — a UOM
+  that disagrees with the PO just reintroduces the throw.
+- **Verification:** 866→876 mocked tests (incl. the field-list/`as_dict` call-shape assertion, ADR-0009
+  guard); two independent external reviews (GPT-5.6-Terra, Grok-4.5) SHIP after one round-1 bounce that
+  found the missing DN guard.
+- **Pointer:** commit range `ef3bd2f..d668804`; `erpnext_ocr/doctype/ocr_import/ocr_import.py`
+  `_inherit_ref_fields` / `REF_ITEM_FETCH_FIELDS`.
