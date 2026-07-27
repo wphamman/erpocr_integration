@@ -693,3 +693,57 @@ class TestTotalsReconcile:
 
 		assert result is True
 		doc.create_purchase_invoice.assert_called_once()
+
+	def test_v1102_discount_fix_does_not_change_totals_reconcile_outcome(self):
+		"""Pinning test (v1.10.2 kickoff §3): does the ElectraHertz per-line-
+		discount fix in ocr_import.py make _totals_reconcile reconcile a
+		correctly-handled discounted invoice?
+
+		Investigated finding: NO. `_totals_reconcile`'s own `line_sum` is
+		still computed from raw `item.qty * item.rate` (the list price) —
+		untouched by the v1.10.2 fix, which only changed (a) the rate the
+		PI/PR builders derive for the actual created document, and (b)
+		`_detect_tax_inclusive_rates`'s internal sum (used here only to pick
+		the reference — subtotal vs total_amount).
+
+		D0236754 (3 lines, qty 11/20/6 @ list rate 53.00, discounted amount
+		437.25/795.00/238.50; subtotal 1470.75): raw line_sum = 11*53 + 20*53
+		+ 6*53 = 1961.00, which diverges from EITHER reference (subtotal
+		1470.75 or total 1691.36) far beyond tolerance — so this gate still
+		skips to manual review, exactly as it did before the fix (just always
+		against `subtotal` now, since the corrected `_detect_tax_inclusive_rates`
+		no longer misreads this discounted invoice as tax-inclusive — that
+		reference-selection change happens to not flip the pass/fail verdict
+		here, since raw qty*rate diverges hugely from total_amount too).
+
+		This is a conservative (never-wrong) outcome, not a regression: a
+		discounted invoice that the builder fix now bills CORRECTLY still
+		routes to human review instead of auto-drafting, exactly like before.
+		If the architect wants such invoices to auto-draft again (as the
+		kickoff's framing anticipates), `_totals_reconcile`'s `line_sum` would
+		need the same amount-aware precedence the builders now use — that
+		change is OUT OF SCOPE here (auto_draft.py is not named in kickoff §2
+		parts A-E) and is called out explicitly in the handback rather than
+		built unilaterally.
+		"""
+		doc = _make_ocr_import(
+			subtotal=1470.75,
+			tax_amount=220.61,
+			total_amount=1691.36,
+			currency="ZAR",
+			items=[
+				# A real captured record always has BOTH rate (list price) and
+				# amount (discounted total) — set both, as _populate_ocr_import
+				# actually stores them, so _detect_tax_inclusive_rates (called
+				# inside _totals_reconcile to pick the reference) sees the same
+				# data a live record would.
+				_make_item(qty=11, rate=53.00, amount=437.25),
+				_make_item(qty=20, rate=53.00, amount=795.00),
+				_make_item(qty=6, rate=53.00, amount=238.50),
+			],
+		)
+		ok, reason = _totals_reconcile(doc)
+		assert ok is False
+		assert "1,961.00" in reason
+		assert "1,470.75" in reason
+		assert "subtotal" in reason  # reference picked via the now-fixed detector
