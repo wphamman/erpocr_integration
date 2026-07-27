@@ -23,8 +23,13 @@ line — billing at the undiscounted list price instead of the printed, discount
   Deliberately does NOT set `price_list_rate` or `discount_percentage` on the ERPNext line — that
   would invite `get_item_details` to re-derive rate from the Buying Price List, the same
   "leave it for ERPNext to re-derive" class of bug as the v1.10.1 UOM fix (ADR-0020). The rate is
-  NOT pre-rounded to 2dp — a sub-cent difference from ERPNext's own `qty × rate` re-derivation is
-  expected and accepted. Known, accepted limitation: a genuinely FREE line (`amount` extracted as
+  NOT pre-rounded to 2dp. Known, accepted limitation: when the printed amount is not exactly
+  divisible by qty, ERPNext rounds the derived rate to the Currency precision (`currency_precision`,
+  else the number format's 2dp) and the posted line can differ from the printed total by a cent —
+  e.g. qty 3 / amount 10.00 → rate 3.33 → posts 9.99. Inherent to ERPNext's per-unit rate model (no
+  rate represents 3 units totalling exactly 10.00), bounded at a cent per line versus the whole
+  discount this release stops losing, absorbed by the divergence-warning tolerance below, and left
+  to ERPNext's document-level rounding adjustment. Known, accepted limitation: a genuinely FREE line (`amount` extracted as
   an explicit 0.00 — e.g. a 100%-discount / no-charge item) is indistinguishable from "amount not
   extracted" and falls back to `qty × rate`, billing the undiscounted rate instead of R0; the
   database cannot tell the two cases apart, and the document-level divergence check below still

@@ -236,10 +236,21 @@ def _effective_line_rate(item):
 
 	Falls back to the OCR row's own `rate` only when there's no `amount` to
 	reproduce at all (absent/0 — the pre-existing regression-safety case,
-	unchanged). Deliberately NOT rounded to 2dp: ERPNext recomputes
+	unchanged). Deliberately NOT rounded here: ERPNext recomputes
 	`amount = qty * rate` at its own working precision when the line is
-	inserted, and a sub-cent difference from the printed amount is expected,
-	not a defect.
+	inserted.
+
+	KNOWN LIMITATION (accepted, external review 2026-07-17): when the printed
+	amount is not exactly divisible by qty, ERPNext rounds the derived rate to
+	the Currency precision (`currency_precision`, else the number format's 2dp
+	— frappe/model/meta.py::get_field_precision) and the posted line can differ
+	from the printed total by a cent. e.g. qty 3 / amount 10.00 → rate 3.33 →
+	posts 9.99. This is inherent to ERPNext's per-unit rate model, not
+	introduced here — no rate can represent 3 units totalling exactly 10.00 —
+	and it is bounded by a cent per line, versus the whole discount (R384.25 on
+	one live line) that this function exists to stop losing. The (D) warning
+	tolerance deliberately absorbs it so it doesn't generate noise; ERPNext's
+	own document-level rounding adjustment handles the residue.
 	"""
 	amount = flt(getattr(item, "amount", None))
 	if not amount:
