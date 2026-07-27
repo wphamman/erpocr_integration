@@ -176,12 +176,55 @@ def _inherit_ref_fields(target: dict, ref) -> None:
 		target["project"] = project
 
 
+def _effective_line_total(item) -> float:
+	"""Effective line total for a PI/PR row: the extracted `amount` (the
+	printed, possibly-discounted line total) wins over qty*rate when present
+	and non-zero — same precedence as create_journal_entry's existing
+	`item.amount or (qty * rate)` (v1.10.2, ElectraHertz per-line discount:
+	Gemini extracts unit_price=53.00 list price and amount=437.25 discounted
+	total; billing at qty*unit_price over-charges the discounted amount).
+
+	`amount` is read defensively via getattr — some test doubles (and any
+	future caller) may hand us a row shape that predates this field.
+	"""
+	amount = flt(getattr(item, "amount", None))
+	return amount or flt(item.qty or 1) * flt(item.rate or 0)
+
+
+def _effective_line_rate(item):
+	"""Derive the PI/PR line rate so the built line total (qty * rate)
+	reproduces the extracted (possibly discounted) `amount`, instead of
+	billing at the undiscounted unit price (v1.10.2).
+
+	Falls back to the OCR row's own `rate` when qty is 0 (guards a
+	ZeroDivisionError — there's no sensible per-unit rate to derive).
+	Deliberately NOT rounded to 2dp: ERPNext recomputes `amount = qty * rate`
+	at its own working precision when the line is inserted, and a sub-cent
+	difference from the printed amount is expected, not a defect.
+	"""
+	qty = flt(item.qty)
+	if qty == 0:
+		return flt(item.rate or 0)
+	return _effective_line_total(item) / qty
+
+
 def _detect_tax_inclusive_rates(ocr_import) -> bool:
 	"""Detect whether OCR-extracted item rates already include tax.
 
-	Compares sum(rate * qty) against subtotal (excl tax) and total_amount (incl tax)
-	to determine which is closer. This is country-agnostic — works with any tax system
-	(SA VAT, EU VAT, GST, sales tax, etc.) without hardcoding any tax rate.
+	Compares sum(effective line total) against subtotal (excl tax) and total_amount
+	(incl tax) to determine which is closer. This is country-agnostic — works with
+	any tax system (SA VAT, EU VAT, GST, sales tax, etc.) without hardcoding any tax
+	rate.
+
+	The per-line sum uses `_effective_line_total` (extracted `amount` when present,
+	else qty*rate) rather than raw qty*rate (v1.10.2). A per-line discount inflates
+	qty*rate above the true (discounted) line total, which used to fool this
+	detector into misreading a discounted, tax-EXCLUSIVE invoice as inclusive (live:
+	ElectraHertz D0236754 — qty*rate sums closer to total_amount than to the correct
+	subtotal purely because of the undiscounted rate). Once the effective total is
+	used, a fully-discounted invoice's line sum equals its subtotal exactly and the
+	detector self-corrects. For a normal (non-discounted) invoice `amount` already
+	equals qty*rate, so this is a no-op there.
 
 	An ambiguity threshold prevents misclassification on mixed/discounted invoices:
 	if neither distance is clearly closer (within 5% of the tax amount), we default
@@ -198,7 +241,7 @@ def _detect_tax_inclusive_rates(ocr_import) -> bool:
 	if tax_amount <= 0 or subtotal <= 0 or total_amount <= subtotal:
 		return False
 
-	rate_qty_sum = sum(flt(item.qty or 1) * flt(item.rate or 0) for item in ocr_import.items)
+	rate_qty_sum = sum(_effective_line_total(item) for item in ocr_import.items)
 	if rate_qty_sum <= 0:
 		return False
 
@@ -664,7 +707,9 @@ class OCRImport(Document):
 		for item in self.items:
 			pi_item = {
 				"qty": item.qty or 1,
-				"rate": item.rate or 0,
+				# v1.10.2: derive rate from the extracted (possibly discounted) amount,
+				# not the raw unit price — see _effective_line_rate.
+				"rate": _effective_line_rate(item),
 				"description": item.description_ocr or item.item_name or "OCR Imported Item",
 			}
 
@@ -914,7 +959,8 @@ class OCRImport(Document):
 			pr_item = {
 				"item_code": item.item_code,
 				"qty": item.qty or 1,
-				"rate": item.rate or 0,
+				# v1.10.2: same amount-aware derivation as create_purchase_invoice.
+				"rate": _effective_line_rate(item),
 				"description": item.description_ocr or item.item_name or "OCR Imported Item",
 			}
 

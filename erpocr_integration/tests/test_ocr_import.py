@@ -10,6 +10,8 @@ from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
 	OCRImport,
 	_build_taxes_from_template,
 	_detect_tax_inclusive_rates,
+	_effective_line_rate,
+	_effective_line_total,
 	_extract_service_pattern,
 	_resolve_ocr_description,
 )
@@ -90,15 +92,25 @@ def _make_ocr_import(**overrides):
 
 
 def _make_item(**overrides):
-	"""Create a mock OCR Import Item row."""
+	"""Create a mock OCR Import Item row.
+
+	`amount` defaults to qty * rate — mirroring a normal, non-discounted
+	Gemini extraction where the printed line total equals quantity x unit
+	price — unless the caller passes an explicit `amount=` (v1.10.2 tests
+	that model a discounted or self-inconsistent line, where amount !=
+	qty * rate, need to override it explicitly).
+	"""
+	qty = overrides.get("qty", 1)
+	rate = overrides.get("rate", 500.00)
 	defaults = dict(
 		description_ocr="Test Item",
 		product_code="",
 		item_code="ITEM-001",
 		item_name="Test Item",
-		qty=1,
-		rate=500.00,
-		amount=500.00,
+		qty=qty,
+		rate=rate,
+		amount=qty * rate,
+		discount_percentage=0,
 		expense_account="5000 - Cost of Goods Sold - TC",
 		cost_center="Main - TC",
 		match_status="Auto Matched",
@@ -1216,10 +1228,161 @@ class TestDetectTaxInclusiveRates:
 		# diff_to_subtotal = 0, diff_to_total = 150, |0-150| = 150 >> 7.5
 		assert _detect_tax_inclusive_rates(doc) is False
 
+	def test_discounted_invoice_cascade_resolves_exclusive(self):
+		"""v1.10.2 tax-inclusivity cascade — the ElectraHertz live defect.
+
+		D0236754: 3 lines at qty 11/20/6, list rate 53.00, discounted amount
+		437.25/795.00/238.50. subtotal=1470.75, tax=220.61, total=1691.36.
+
+		BEFORE the fix, this detector summed raw qty*rate = 11*53 + 20*53 +
+		6*53 = 1961.00. diff_to_subtotal=490.25, diff_to_total=269.64 — closer
+		to total, so it returned True (inclusive), which then built the PI
+		tax-inclusive and posted the wrong VAT on top of an already-wrong
+		(undiscounted) line total.
+
+		AFTER the fix (using the extracted `amount`), the line sum is
+		Sum(amount) = 437.25+795.00+238.50 = 1470.75 — exactly the subtotal —
+		so the detector now resolves False (exclusive), which is correct: this
+		is an ordinary VAT-exclusive invoice, not a tax-inclusive one.
+		"""
+		doc = _make_ocr_import(
+			subtotal=1470.75,
+			tax_amount=220.61,
+			total_amount=1691.36,
+			items=[
+				_make_item(qty=11, rate=53.00, amount=437.25),
+				_make_item(qty=20, rate=53.00, amount=795.00),
+				_make_item(qty=6, rate=53.00, amount=238.50),
+			],
+		)
+		assert _detect_tax_inclusive_rates(doc) is False
+
+
+class TestEffectiveLineRateAndTotal:
+	"""v1.10.2 — the ElectraHertz per-line discount fix.
+
+	`create_purchase_invoice`/`create_purchase_receipt` used to build every
+	line from qty * rate (the extracted, undiscounted unit price), ignoring
+	the extracted `amount` (the printed, possibly-discounted line total)
+	entirely. These cover the derivation helpers directly.
+	"""
+
+	def test_live_defect_byte_for_byte(self):
+		"""The exact live numbers: qty 11, rate 53.00 (list), amount 437.25
+		(printed/discounted). Derived rate must be 39.75 so the built line
+		(qty * rate) reproduces the printed 437.25 total."""
+		item = _make_item(qty=11, rate=53.00, amount=437.25)
+		rate = _effective_line_rate(item)
+		assert rate == pytest.approx(39.75, abs=1e-9)
+		assert 11 * rate == pytest.approx(437.25, abs=1e-9)
+
+	def test_amount_absent_falls_back_to_qty_times_rate(self):
+		"""Regression: an OCR row with no (or zero) extracted amount must
+		build at the plain qty * rate, exactly as before this fix."""
+		item = _make_item(qty=4, rate=25.00, amount=0)
+		assert _effective_line_rate(item) == 25.00
+		assert _effective_line_total(item) == 100.00
+
+	def test_amount_none_falls_back_to_qty_times_rate(self):
+		item = _make_item(qty=4, rate=25.00, amount=None)
+		assert _effective_line_rate(item) == 25.00
+
+	def test_qty_zero_falls_back_to_ocr_rate_no_zero_division(self):
+		"""qty=0 must never raise ZeroDivisionError — fall back to item.rate."""
+		item = _make_item(qty=0, rate=53.00, amount=437.25)
+		assert _effective_line_rate(item) == 53.00
+
+	def test_derived_rate_not_pre_rounded(self):
+		"""The derived rate must NOT be pre-rounded to 2dp — a sub-cent
+		difference from ERPNext's own qty*rate re-derivation is acceptable and
+		must not be introduced by our own rounding."""
+		item = _make_item(qty=3, rate=10.00, amount=10.00)  # 10/3 = 3.333...
+		rate = _effective_line_rate(item)
+		assert rate == pytest.approx(10.0 / 3.0, abs=1e-12)
+		assert round(rate, 2) != rate  # confirms it really is unrounded
+
+	def test_no_discount_unchanged(self):
+		"""A normal (non-discounted) line — amount already equals qty*rate —
+		derives the same rate as before this fix (regression safety)."""
+		item = _make_item(qty=10, rate=85.00, amount=850.00)
+		assert _effective_line_rate(item) == 85.00
+
 
 # ---------------------------------------------------------------------------
 # _extract_service_pattern tests
 # ---------------------------------------------------------------------------
+
+
+class TestDiscountedLineCreation:
+	"""v1.10.2 integration: create_purchase_invoice / create_purchase_receipt
+	build the ElectraHertz-shaped discounted line at the derived rate (from
+	qty + the extracted amount), not the extracted (undiscounted) unit price.
+	"""
+
+	def test_pi_builds_discounted_line_at_derived_rate(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			items=[_make_item(qty=11, rate=53.00, amount=437.25)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["rate"] == pytest.approx(39.75, abs=1e-9)
+		assert pi_item["qty"] * pi_item["rate"] == pytest.approx(437.25, abs=1e-9)
+		# Ruled out deliberately: never set price_list_rate or discount_percentage
+		# on the built ERPNext line (would invite get_item_details to re-derive
+		# rate from the Buying Price List — the same class of bug as ADR-0020).
+		assert "price_list_rate" not in pi_item
+		assert "discount_percentage" not in pi_item
+
+	def test_pr_builds_discounted_line_at_derived_rate(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Receipt",
+			status="Matched",
+			items=[_make_item(qty=11, rate=53.00, amount=437.25)],
+		)
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler(item_is_stock=1)
+		mock_frappe.get_cached_doc.return_value = sample_settings
+		created_pr = MagicMock()
+		created_pr.name = "PR-00001"
+		mock_frappe.get_doc.return_value = created_pr
+		mock_frappe.msgprint = MagicMock()
+
+		doc.create_purchase_receipt()
+
+		pr_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pr_item["rate"] == pytest.approx(39.75, abs=1e-9)
+		assert "price_list_rate" not in pr_item
+		assert "discount_percentage" not in pr_item
+
+	def test_pi_no_discount_unaffected(self, mock_frappe, sample_settings):
+		"""Regression: a normal invoice (amount == qty*rate) builds at exactly
+		the same rate as before this fix."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			items=[_make_item(qty=10, rate=85.00, amount=850.00)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["rate"] == 85.00
+
+	def test_pi_qty_zero_does_not_raise(self, mock_frappe, sample_settings):
+		"""qty=0 must not raise ZeroDivisionError during create."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			items=[_make_item(qty=0, rate=53.00, amount=437.25)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()  # must not raise
+
+		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
+		assert pi_item["rate"] == 53.00
 
 
 class TestExtractServicePattern:
