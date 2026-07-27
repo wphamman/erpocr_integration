@@ -240,7 +240,7 @@ def _effective_line_rate(item):
 	`amount = qty * rate` at its own working precision when the line is
 	inserted.
 
-	KNOWN LIMITATION (accepted, external review 2026-07-17): when the printed
+	KNOWN LIMITATION (accepted, external review 2026-07-27): when the printed
 	amount is not exactly divisible by qty, ERPNext rounds the derived rate to
 	the Currency precision (`currency_precision`, else the number format's 2dp
 	— frappe/model/meta.py::get_field_precision) and the posted line can differ

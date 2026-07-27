@@ -4,7 +4,10 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.10.0** (product baseline `39b9562`; **v1.10.0 provider delta:** the existing
+**Current through v1.10.2** (product baseline `7d1fa7e` = tag `v1.10.2`; see the v1.10.1/v1.10.2
+delta notes below). Historical context from the v1.10.0 baseline (`39b9562`) follows.
+
+**v1.10.0 provider delta:** the existing
 `upload_fleet_slip` write now has the explicit cookie-CSRF invariant below; no method, signature,
 payload, response, permission, or token-auth change): §2c/§2a/§5/§6 reflect the D0
 driver-perm widening (`upload_fleet_slip` accepts the plain `Driver` role, endpoint-scoped) and
@@ -15,6 +18,18 @@ delta: ONE new §2a method, `fleet_api.bulk_mark_recorded`** (32 → 33) — an 
 helper, not a cross-app contract; no §3/§4 field changes, but note the **§3 semantics change**:
 `OCR Fleet Slip.expense_account` is **blank on new Fleet Card slips** since v1.8.0 (Q6 — flag
 emitted to the fleet architect). See [docs/architecture/DECISIONS.md](docs/architecture/DECISIONS.md).
+
+**v1.10.1 delta: NONE.** The PO/PR UOM-inheritance fix (ADR-0020) changed only how PI/PR lines are
+built internally — no method, signature, payload, response, permission, or field change.
+
+**v1.10.2 delta (ADR-0021): no new method (still 33); ONE permission-posture change + ONE new field.**
+(a) §2 `api.retry_gemini_extraction` keeps its signature but now also accepts `Needs Review`/`Matched`
+records — that widening is gated on **System Manager** and refused once a PI/PR/JE is linked, so an
+ordinary OCR-Manager consumer sees today's `Error`-only behaviour unchanged. (b) **§3 field addition:**
+`OCR Import Item.discount_percentage` (Percent) — additive and nullable; existing consumers reading
+that child table are unaffected, but a consumer recomputing a line total should now read `amount` as
+authoritative rather than `qty × rate` (the same rule this app's own builders adopted). No §4
+Custom-Field or §2c provider-contract change.
 
 **v1.10.0 ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
 closed for cookie-authenticated requests unless an initialized session CSRF token matches the
@@ -51,7 +66,7 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
 | `erpocr_integration.stats_api.get_ocr_stats` | GET | **System Manager / Accounts Manager only** | Aggregated processing stats — *the one endpoint intended for an external dashboard consumer* |
 | `erpocr_integration.statement_api.rereconcile_statement` | POST-ish | OCR Statement write | Re-run statement reconciliation after manual supplier change |
 | `erpocr_integration.api.upload_pdf` | POST | create perm on OCR Import | Manual file upload |
-| `erpocr_integration.api.retry_gemini_extraction` | POST | OCR Import perm | Retry failed extraction |
+| `erpocr_integration.api.retry_gemini_extraction` | POST | OCR Import write; **+ System Manager** when status ≠ `Error` | Retry a failed extraction (any holder of write perm), or — since v1.10.2 — **re-extract** a `Needs Review`/`Matched` record, which additionally requires **System Manager** and is refused outright once a PI/PR/JE is linked. Signature unchanged. |
 | `erpocr_integration.api.check_duplicates` | GET | OCR Import perm | Duplicate detection pre-create |
 | `erpocr_integration.api.get_open_purchase_orders` | GET | read | PO picker (UI) |
 | `erpocr_integration.api.get_purchase_receipts_for_po` | GET | read | PR picker (UI) |

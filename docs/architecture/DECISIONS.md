@@ -348,7 +348,7 @@
   `_inherit_ref_fields` / `REF_ITEM_FETCH_FIELDS`.
 
 ## ADR-0021 — The extracted line `amount` is authoritative for PI/PR line values
-- **Status:** Accepted 2026-07-17 · shipped v1.10.2
+- **Status:** Accepted 2026-07-27 · shipped v1.10.2
 - **Context:** Supplier invoices with a per-line `%Disc` column (live: ElectraHertz `D0236754`) are
   extracted faithfully — Gemini returns `unit_price` = list price (53.00) AND `amount` = the printed
   discounted line total (437.25), and both were already stored. But `create_purchase_invoice` and
