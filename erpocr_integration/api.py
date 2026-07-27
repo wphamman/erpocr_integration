@@ -521,6 +521,7 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 				"item_name": description[:140],
 				"qty": line.get("quantity", 1.0),
 				"rate": line.get("unit_price", 0.0),
+				"discount_percentage": line.get("discount_percentage") or 0.0,
 				"amount": line.get("amount", 0.0),
 				"match_status": "Unmatched",
 			},
