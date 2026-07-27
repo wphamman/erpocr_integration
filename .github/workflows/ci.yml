@@ -14,7 +14,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      # PINNED deliberately. An unpinned `pip install ruff` made CI
+      # non-reproducible: ruff 0.16.0 (2026-07) began formatting Python code
+      # blocks inside Markdown, so CI went red on 4 pre-existing .md files that
+      # no commit had touched, while every developer's local ruff stayed green.
+      # Bump this pin as its own reviewed change (it will require reformatting
+      # those .md files), never implicitly on an unrelated push.
+      - run: pip install ruff==0.15.12
       - run: ruff check .
       - run: ruff format --check .
 
