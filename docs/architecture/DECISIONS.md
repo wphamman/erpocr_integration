@@ -346,3 +346,47 @@
   found the missing DN guard.
 - **Pointer:** commit range `ef3bd2f..d668804`; `erpnext_ocr/doctype/ocr_import/ocr_import.py`
   `_inherit_ref_fields` / `REF_ITEM_FETCH_FIELDS`.
+
+## ADR-0021 — The extracted line `amount` is authoritative for PI/PR line values
+- **Status:** Accepted 2026-07-17 · shipped v1.10.2
+- **Context:** Supplier invoices with a per-line `%Disc` column (live: ElectraHertz `D0236754`) are
+  extracted faithfully — Gemini returns `unit_price` = list price (53.00) AND `amount` = the printed
+  discounted line total (437.25), and both were already stored. But `create_purchase_invoice` and
+  `OCRImport.create_purchase_receipt` built every line from `qty × rate` and never read `amount`,
+  billing the undiscounted price (`OCR-IMP-01106` → `SI0111875`: R1,855.00 vs R1,691.36). The
+  inflated line sum then **also** fooled `_detect_tax_inclusive_rates` into classifying a
+  VAT-exclusive invoice as inclusive, so the VAT was wrong too (R241.95 vs R220.61). Note
+  `create_journal_entry` had used the correct `item.amount or (qty × rate)` precedence since v1.1.x
+  — the defect was that the other two builders never adopted it.
+- **Decision:** The extracted `amount` is authoritative for what a line is worth. Both builders
+  derive `rate = effective_total / (qty or 1)` where `effective_total` = `amount` when present and
+  non-zero, else `qty × rate` — generalising the JE builder's precedence. The `qty or 1` divisor
+  deliberately mirrors the coercion the builders already apply to the built qty, so the two agree at
+  qty 0. `_detect_tax_inclusive_rates` sums the same effective total. The Gemini schema captures
+  `discount_percentage` so a line can be checked against its own declared discount, and re-extraction
+  (previously `Error`-only) is opened to `Needs Review`/`Matched` for **System Manager only**, since
+  its only real use is migrating already-captured records onto a changed schema.
+- **Rejected:** (a) setting `price_list_rate` + `discount_percentage` on the ERPNext line so the PI
+  mirrors the supplier's paperwork — it invites `get_item_details`/pricing rules to re-derive the
+  rate, the same class as ADR-0020; both external reviewers judged this reasoning *directionally
+  sound but over-stated* (`force_item_fields` excludes `rate`, and re-derivation needs pricing rules
+  to fire), and both still endorsed derived-rate-only as the safer money path; (b) **blocking**
+  creation on a totals mismatch — ADR-0002 keeps manual creation review-first, so the two divergence
+  checks warn and never block; (c) an operator-facing or bulk re-extract (batch re-extraction would
+  defeat the caller-side Gemini rate-limit stagger).
+- **Known, accepted limitations:** a printed amount not exactly divisible by qty rounds to Currency
+  precision, so a posted line can differ from the printed total by a cent (qty 3 / amount 10.00 →
+  rate 3.33 → 9.99) — inherent to ERPNext's per-unit rate model, bounded, absorbed by the warning
+  tolerance; and a genuinely FREE line (`amount` an explicit 0.00) is indistinguishable from "amount
+  absent" and bills at `qty × rate`, caught at document level by check 2.
+- **Trap re-encountered:** the document-level check was first written comparing the line sum against
+  `subtotal` unconditionally — which false-warns every tax-INCLUSIVE invoice by the tax amount. This
+  is the identical trap ADR-0014 records from v1.9.0. Caught by external review; the check now picks
+  its reference via `_detect_tax_inclusive_rates`, mirroring `_totals_reconcile`.
+- **Deliberately NOT changed:** `tasks/auto_draft.py::_totals_reconcile` still sums raw `qty × rate`,
+  so discounted invoices continue to fail that gate and route to human review rather than
+  auto-drafting. Conservative by choice — see OPEN-QUESTIONS Q15.
+- **Verification:** 876 → 916 mocked tests; three external review rounds (GPT-5.6-Terra, Grok-4.5),
+  which caught the qty-0 derivation gap and the tax-inclusivity trap above.
+- **Pointer:** commit range `348fe49..78ce969`; `_effective_line_total` / `_effective_line_rate` /
+  `_check_line_divergence` / `_check_document_total_divergence` in `ocr_import.py`.
