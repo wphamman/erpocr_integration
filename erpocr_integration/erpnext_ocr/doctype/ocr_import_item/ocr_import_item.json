@@ -11,6 +11,7 @@
 		"item_name",
 		"qty",
 		"rate",
+		"discount_percentage",
 		"amount",
 		"expense_account",
 		"cost_center",
@@ -58,6 +59,14 @@
 			"fieldtype": "Currency",
 			"in_list_view": 1,
 			"label": "Rate"
+		},
+		{
+			"fieldname": "discount_percentage",
+			"fieldtype": "Percent",
+			"in_list_view": 1,
+			"label": "Discount %",
+			"read_only": 0,
+			"description": "Per-line discount percentage as printed on the invoice (e.g. a '%Disc' column). Informational — the built PI/PR line's rate is derived from qty and the extracted `amount`, not recomputed from this percentage. Editable so a reviewer can correct a misread value."
 		},
 		{
 			"fieldname": "amount",
