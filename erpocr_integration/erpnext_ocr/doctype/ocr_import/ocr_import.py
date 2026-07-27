@@ -202,6 +202,16 @@ def _effective_line_total(item) -> float:
 
 	`amount` is read defensively via getattr — some test doubles (and any
 	future caller) may hand us a row shape that predates this field.
+
+	Known, accepted limitation (v1.10.2 round-2 review): a genuinely FREE
+	line (amount == 0.00, e.g. a 100%-discount / no-charge item) is
+	indistinguishable from "amount not extracted" — both are falsy — so this
+	falls back to qty*rate and bills the line at the undiscounted rate
+	instead of R0. The database cannot tell the two cases apart, and (D)
+	check 2 (`_check_document_total_divergence`) still catches the resulting
+	document-level mismatch. Mirrors the pre-existing `create_journal_entry`
+	precedence this release generalised from — left as-is deliberately, not
+	an oversight.
 	"""
 	amount = flt(getattr(item, "amount", None))
 	return amount or flt(item.qty or 1) * flt(item.rate or 0)
@@ -212,16 +222,29 @@ def _effective_line_rate(item):
 	reproduces the extracted (possibly discounted) `amount`, instead of
 	billing at the undiscounted unit price (v1.10.2).
 
-	Falls back to the OCR row's own `rate` when qty is 0 (guards a
-	ZeroDivisionError — there's no sensible per-unit rate to derive).
-	Deliberately NOT rounded to 2dp: ERPNext recomputes `amount = qty * rate`
-	at its own working precision when the line is inserted, and a sub-cent
-	difference from the printed amount is expected, not a defect.
+	v1.10.2 round-2 review correction: derives against the same EFFECTIVE
+	quantity the builders actually use (`item.qty or 1` — both
+	create_purchase_invoice and create_purchase_receipt coerce a qty of 0 to
+	1 before building the line), not raw `item.qty`. The original version
+	returned the OCR row's raw `rate` when qty was 0 to dodge a
+	ZeroDivisionError — but since the builder then bills 1 unit at that raw
+	rate, a qty-0 row with a genuine discounted `amount` under-billed instead
+	of reproducing the extracted amount (qty 0 / rate 53.00 / amount 437.25
+	built a line of 1 x 53.00 = 53.00, not 437.25). Dividing by the same
+	`item.qty or 1` the builders use keeps this function's output and the
+	built line in agreement for every qty, including 0.
+
+	Falls back to the OCR row's own `rate` only when there's no `amount` to
+	reproduce at all (absent/0 — the pre-existing regression-safety case,
+	unchanged). Deliberately NOT rounded to 2dp: ERPNext recomputes
+	`amount = qty * rate` at its own working precision when the line is
+	inserted, and a sub-cent difference from the printed amount is expected,
+	not a defect.
 	"""
-	qty = flt(item.qty)
-	if qty == 0:
+	amount = flt(getattr(item, "amount", None))
+	if not amount:
 		return flt(item.rate or 0)
-	return _effective_line_total(item) / qty
+	return amount / (flt(item.qty) or 1)
 
 
 def _check_line_divergence(item) -> str | None:
@@ -274,23 +297,48 @@ def _check_line_divergence(item) -> str | None:
 
 
 def _check_document_total_divergence(ocr_import) -> str | None:
-	"""(D) check 2 — Sum(effective line total) vs the extracted `subtotal`.
+	"""(D) check 2 — Sum(effective line total) vs the CORRECT reference total.
 
-	Independent of any discount handling: catches a self-contradictory OCR
-	record, e.g. a line whose qty/rate/amount were extracted from a
-	DIFFERENT invoice on the same scanned page (live: OCR-IMP-01106 line 3 —
-	qty 4 / R159.00 belonged to invoice D0237213, not D0236754).
+	v1.10.2 round-2 review correction: the original version always compared
+	against `subtotal`, which is tax-inclusivity-blind. On a tax-INCLUSIVE
+	invoice the line amounts already include tax, so the line sum reconciles
+	against `total_amount`, not `subtotal` — comparing against subtotal would
+	false-warn every clean inclusive invoice by exactly the tax amount. This
+	is the SAME trap `tasks/auto_draft.py::_totals_reconcile` was already
+	corrected for (ADR-0014, v1.9.0); the reference-selection logic below
+	mirrors that function (deliberately not its tolerance constants, which
+	stay auto-draft-only per that ADR).
+
+	Independent of any discount handling otherwise: catches a
+	self-contradictory OCR record, e.g. a line whose qty/rate/amount were
+	extracted from a DIFFERENT invoice on the same scanned page (live:
+	OCR-IMP-01106 line 3 — qty 4 / R159.00 belonged to invoice D0237213, not
+	D0236754).
+
+	Degenerate cases (no usable reference) return None — never warn, mirroring
+	_totals_reconcile's fail-open posture.
 	"""
-	subtotal = flt(getattr(ocr_import, "subtotal", None))
-	if not subtotal:
-		return None
+	if _detect_tax_inclusive_rates(ocr_import):
+		reference = flt(getattr(ocr_import, "total_amount", None))
+		ref_label = "total"
+	else:
+		reference = flt(getattr(ocr_import, "subtotal", None))
+		ref_label = "subtotal"
+		if reference <= 0:
+			# Gemini emits subtotal "0 if not shown" — fall back to the pre-tax total.
+			reference = flt(getattr(ocr_import, "total_amount", None)) - flt(
+				getattr(ocr_import, "tax_amount", None)
+			)
+	if reference <= 0:
+		return None  # no usable reference — can't validate
+
 	line_sum = sum(_effective_line_total(item) for item in ocr_import.items)
-	if not _amounts_diverge(line_sum, subtotal):
+	if not _amounts_diverge(line_sum, reference):
 		return None
 	return _(
-		"Sum of line amounts ({0}) does not match the extracted subtotal ({1}) — "
+		"Sum of line amounts ({0}) does not match the extracted {1} ({2}) — "
 		"the OCR record may be self-inconsistent; review the line items."
-	).format(f"{line_sum:.2f}", f"{subtotal:.2f}")
+	).format(f"{line_sum:.2f}", ref_label, f"{reference:.2f}")
 
 
 def _detect_tax_inclusive_rates(ocr_import) -> bool:

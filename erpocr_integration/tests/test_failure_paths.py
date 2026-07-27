@@ -525,11 +525,17 @@ class TestRetryGeminiExtraction:
 
 	def test_refused_when_purchase_invoice_linked_even_for_system_manager(self, mock_frappe):
 		"""v1.10.2 (E): a linked PI/PR/JE always refuses re-extraction —
-		Unlink & Reset comes first — regardless of role or status."""
+		Unlink & Reset comes first — regardless of role or status.
+
+		Uses status="Matched" (not "Draft Created") so the status allowlist
+		check ALREADY PASSES (a System Manager may re-extract Matched) and the
+		linked-document guard is the only thing that can reject this call —
+		"Draft Created" would fail the status gate on its own, making the test
+		pass even if the linked-document guard were removed entirely."""
 		mock_frappe.get_roles = MagicMock(return_value=["System Manager"])
 		doc = SimpleNamespace(
 			name="OCR-IMP-LINKED",
-			status="Draft Created",
+			status="Matched",
 			source_type="Gemini Manual Upload",
 			drive_file_id="drive-123",
 			purchase_invoice="PI-00001",

@@ -15,13 +15,21 @@ line — billing at the undiscounted list price instead of the printed, discount
   `create_journal_entry` already had the correct `item.amount or (qty × rate)` precedence. Live:
   invoice `D0236754` — qty 11 @ list rate 53.00, 25% discount, printed total 437.25 — billed at
   583.00 instead of 437.25 (`OCR-IMP-01106` → `SI0111875`, R1,855.00 vs R1,691.36). Both builders
-  now derive the line's rate as `effective_total / qty` (`effective_total` = extracted `amount`
-  when present and non-zero, else `qty × rate`), so `qty × rate` reproduces the printed total.
+  now derive the line's rate as `effective_total / (qty or 1)` (`effective_total` = extracted
+  `amount` when present and non-zero, else `qty × rate`; `qty or 1` matches the SAME coercion both
+  builders already apply to the built qty, including the qty=0 edge case — a review catch: the
+  first cut fell back to the raw unit price on qty=0, silently under-billing a discounted qty-0 row
+  instead of reproducing its extracted amount), so `qty × rate` reproduces the printed total.
   Deliberately does NOT set `price_list_rate` or `discount_percentage` on the ERPNext line — that
   would invite `get_item_details` to re-derive rate from the Buying Price List, the same
   "leave it for ERPNext to re-derive" class of bug as the v1.10.1 UOM fix (ADR-0020). The rate is
   NOT pre-rounded to 2dp — a sub-cent difference from ERPNext's own `qty × rate` re-derivation is
-  expected and accepted.
+  expected and accepted. Known, accepted limitation: a genuinely FREE line (`amount` extracted as
+  an explicit 0.00 — e.g. a 100%-discount / no-charge item) is indistinguishable from "amount not
+  extracted" and falls back to `qty × rate`, billing the undiscounted rate instead of R0; the
+  database cannot tell the two cases apart, and the document-level divergence check below still
+  catches the resulting mismatch. Mirrors the pre-existing `create_journal_entry` precedence this
+  release generalized from.
 - **Second-order fix: the tax-inclusivity detector no longer misreads a discounted invoice as
   tax-inclusive.** `_detect_tax_inclusive_rates` summed raw `qty × rate`, so the inflated
   (undiscounted) line total sat closer to `total_amount` than to `subtotal` on `D0236754`, wrongly
@@ -46,12 +54,18 @@ line — billing at the undiscounted list price instead of the printed, discount
   is silent; it still warns when `discount_percentage` is 0/absent but `amount` diverges from
   `qty × rate` anyway (a legacy pre-this-release record, or an undeclared/mis-keyed discount), or
   when a declared discount doesn't reconcile with the extracted amount. (2) whole document,
-  `Σ(effective line total)` vs the extracted `subtotal` — catches a self-contradictory OCR record
-  independent of discounts (live: `OCR-IMP-01106` line 3 carried qty/rate/amount from a *different*
-  invoice, `D0237213`, on the same scanned page — internally consistent given ITS OWN discount, so
-  check 1 is silent on it; check 2 is what catches the cross-invoice bleed). Tolerance is a
-  rounding-noise-tolerant band, `max(R0.02, 0.5%)` — deliberately separate from
-  `tasks/auto_draft.py`'s auto-draft-only totals gate.
+  `Σ(effective line total)` vs the CORRECT reference total — catches a self-contradictory OCR
+  record independent of discounts (live: `OCR-IMP-01106` line 3 carried qty/rate/amount from a
+  *different* invoice, `D0237213`, on the same scanned page — internally consistent given ITS OWN
+  discount, so check 1 is silent on it; check 2 is what catches the cross-invoice bleed). A review
+  catch before release: the first cut always compared against `subtotal`, which is
+  tax-inclusivity-blind — on a tax-INCLUSIVE invoice the line amounts already include tax, so the
+  sum reconciles against `total_amount`, not `subtotal`, and every clean inclusive invoice would
+  have false-warned by exactly the tax amount. This repo hit the identical trap in
+  `tasks/auto_draft.py::_totals_reconcile` (ADR-0014, v1.9.0); check 2 now mirrors that function's
+  reference-selection logic (via `_detect_tax_inclusive_rates`) instead of repeating the mistake.
+  Tolerance is a rounding-noise-tolerant band, `max(R0.02, 0.5%)` — deliberately separate from
+  `_totals_reconcile`'s own tolerance constants, which stay auto-draft-only.
 - **Admin-only re-extraction migration tool (`retry_gemini_extraction`).** Previously gated to
   `Error` status only. Now also permits `Needs Review` and `Matched` — but ONLY for a System
   Manager, and only when no PI/PR/JE has been created from the record yet (Unlink & Reset comes

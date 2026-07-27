@@ -1290,9 +1290,23 @@ class TestEffectiveLineRateAndTotal:
 		item = _make_item(qty=4, rate=25.00, amount=None)
 		assert _effective_line_rate(item) == 25.00
 
-	def test_qty_zero_falls_back_to_ocr_rate_no_zero_division(self):
-		"""qty=0 must never raise ZeroDivisionError — fall back to item.rate."""
+	def test_qty_zero_with_amount_reproduces_amount_no_zero_division(self):
+		"""v1.10.2 round-2 review correction: qty=0 must never raise
+		ZeroDivisionError, but the ORIGINAL fallback (raw item.rate) silently
+		under-billed — both builders coerce `qty or 1` before building the
+		line, so a qty-0/rate-53.00/amount-437.25 row built 1 x 53.00 = 53.00
+		instead of reproducing 437.25. Dividing by the SAME effective quantity
+		the builders use (`item.qty or 1`) keeps this function and the built
+		line in agreement: 437.25 / 1 = 437.25."""
 		item = _make_item(qty=0, rate=53.00, amount=437.25)
+		rate = _effective_line_rate(item)
+		assert rate == 437.25
+		assert 1 * rate == pytest.approx(437.25, abs=1e-9)  # matches builder's qty=0 or 1
+
+	def test_qty_zero_no_amount_falls_back_to_ocr_rate(self):
+		"""qty=0 AND no amount to reproduce → nothing to derive from, falls
+		back to the OCR row's own rate (regression-safety case, unchanged)."""
+		item = _make_item(qty=0, rate=53.00, amount=0)
 		assert _effective_line_rate(item) == 53.00
 
 	def test_derived_rate_not_pre_rounded(self):
@@ -1375,7 +1389,11 @@ class TestDiscountedLineCreation:
 		assert pi_item["rate"] == 85.00
 
 	def test_pi_qty_zero_does_not_raise(self, mock_frappe, sample_settings):
-		"""qty=0 must not raise ZeroDivisionError during create."""
+		"""qty=0 must not raise ZeroDivisionError during create, and — v1.10.2
+		round-2 review correction — the built line must reproduce the
+		extracted amount: the builder coerces qty 0 -> 1
+		(`"qty": item.qty or 1`), so the derived rate must be 437.25 (not the
+		raw 53.00 unit price) for 1 x rate to equal the printed amount."""
 		doc = _make_ocr_import(
 			document_type="Purchase Invoice",
 			items=[_make_item(qty=0, rate=53.00, amount=437.25)],
@@ -1385,7 +1403,9 @@ class TestDiscountedLineCreation:
 		doc.create_purchase_invoice()  # must not raise
 
 		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
-		assert pi_item["rate"] == 53.00
+		assert pi_item["qty"] == 1  # builder's own qty-0 coercion
+		assert pi_item["rate"] == pytest.approx(437.25, abs=1e-9)
+		assert pi_item["qty"] * pi_item["rate"] == pytest.approx(437.25, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -1582,6 +1602,83 @@ class TestDivergenceWarnings:
 		assert result == "PR-00001"  # draft still created
 		call = mock_frappe.msgprint.call_args
 		assert call.kwargs.get("indicator") == "orange"
+
+
+class TestCheckDocumentTotalDivergenceTaxAware:
+	"""v1.10.2 round-2 review correction: check 2 must pick its reference
+	(subtotal vs total_amount) the same tax-inclusivity-aware way
+	tasks/auto_draft.py::_totals_reconcile already does (ADR-0014, v1.9.0) —
+	comparing an inclusive line sum against the subtotal false-warns every
+	clean tax-inclusive invoice by exactly the tax amount. This repo has been
+	bitten by this exact trap before; check 2 must not repeat it.
+	"""
+
+	def test_clean_inclusive_invoice_is_silent(self):
+		"""Consumer-receipt shape: rates already include VAT, so the line sum
+		reconciles against total_amount, NOT subtotal. Must NOT warn — the
+		pre-fix version would have compared 1000 against 869.57 (the
+		pre-tax subtotal) and false-warned by exactly the tax amount."""
+		doc = _make_ocr_import(
+			subtotal=869.57,
+			tax_amount=130.43,
+			total_amount=1000.00,
+			items=[
+				_make_item(qty=1, rate=600.00, amount=600.00),
+				_make_item(qty=1, rate=400.00, amount=400.00),
+			],
+		)
+		assert _check_document_total_divergence(doc) is None
+
+	def test_exclusive_live_bleed_still_warns(self):
+		"""The live OCR-IMP-01106 defect: an ordinary VAT-EXCLUSIVE invoice
+		whose line 3 bled in from a different invoice (D0237213) on the same
+		scanned page. Sum(amount) 1391.25 != subtotal 1470.75 -> still warns,
+		via the subtotal reference (correctly picked as exclusive)."""
+		doc = _make_ocr_import(
+			subtotal=1470.75,
+			tax_amount=220.61,
+			total_amount=1691.36,
+			items=[
+				_make_item(qty=11, rate=53.00, discount_percentage=25, amount=437.25),
+				_make_item(qty=20, rate=53.00, discount_percentage=25, amount=795.00),
+				# Contaminated line: values from a different invoice.
+				_make_item(qty=4, rate=53.00, discount_percentage=25, amount=159.00),
+			],
+		)
+		msg = _check_document_total_divergence(doc)
+		assert msg is not None
+		assert "1391.25" in msg
+		assert "1470.75" in msg
+		assert "subtotal" in msg
+
+	def test_no_tax_uses_subtotal_reference_unchanged(self):
+		"""Regression: no tax at all -> exclusive path (subtotal), exactly as
+		before this correction."""
+		doc = _make_ocr_import(
+			subtotal=1000.00,
+			tax_amount=0,
+			total_amount=1000.00,
+			items=[_make_item(qty=1, rate=900.00, amount=900.00)],
+		)
+		msg = _check_document_total_divergence(doc)
+		assert msg is not None
+		assert "subtotal" in msg
+
+	def test_inclusive_invoice_with_genuine_mismatch_still_warns(self):
+		"""A tax-inclusive invoice that ALSO has a genuinely wrong line sum
+		must still warn — tax-aware does not mean tax-blind. Line sum 950
+		is still closer to the incl-tax total (1000, diff 50) than to the
+		pre-tax subtotal (869.57, diff 80.43), so the detector still reads
+		this as inclusive and compares against total_amount, correctly."""
+		doc = _make_ocr_import(
+			subtotal=869.57,
+			tax_amount=130.43,
+			total_amount=1000.00,
+			items=[_make_item(qty=1, rate=950.00, amount=950.00)],  # should be 1000
+		)
+		msg = _check_document_total_divergence(doc)
+		assert msg is not None
+		assert "total" in msg
 
 
 class TestExtractServicePattern:
