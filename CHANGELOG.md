@@ -2,6 +2,61 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] — 2026-07-27
+
+Patch release. Fixes a live defect where a per-line invoice discount (ElectraHertz's `%Disc`
+column) was captured correctly by Gemini but never read when building the Purchase Invoice/Receipt
+line — billing at the undiscounted list price instead of the printed, discounted total.
+
+### Fixed
+- **PI/PR lines now bill at the extracted (possibly discounted) amount, not the raw unit price.**
+  `create_purchase_invoice` and `OCRImport.create_purchase_receipt` built every line from
+  `qty × rate` and never read `amount` (the printed line total), even though
+  `create_journal_entry` already had the correct `item.amount or (qty × rate)` precedence. Live:
+  invoice `D0236754` — qty 11 @ list rate 53.00, 25% discount, printed total 437.25 — billed at
+  583.00 instead of 437.25 (`OCR-IMP-01106` → `SI0111875`, R1,855.00 vs R1,691.36). Both builders
+  now derive the line's rate as `effective_total / qty` (`effective_total` = extracted `amount`
+  when present and non-zero, else `qty × rate`), so `qty × rate` reproduces the printed total.
+  Deliberately does NOT set `price_list_rate` or `discount_percentage` on the ERPNext line — that
+  would invite `get_item_details` to re-derive rate from the Buying Price List, the same
+  "leave it for ERPNext to re-derive" class of bug as the v1.10.1 UOM fix (ADR-0020). The rate is
+  NOT pre-rounded to 2dp — a sub-cent difference from ERPNext's own `qty × rate` re-derivation is
+  expected and accepted.
+- **Second-order fix: the tax-inclusivity detector no longer misreads a discounted invoice as
+  tax-inclusive.** `_detect_tax_inclusive_rates` summed raw `qty × rate`, so the inflated
+  (undiscounted) line total sat closer to `total_amount` than to `subtotal` on `D0236754`, wrongly
+  classifying an ordinary VAT-exclusive invoice as inclusive and posting the wrong VAT on top of an
+  already-wrong line total. It now sums the same amount-aware effective total the PI/PR builders
+  use; for a non-discounted invoice `amount` already equals `qty × rate`, so this is a no-op there.
+
+### Added
+- **Gemini now captures per-line discount percentage.** `discount_percentage` is a new required
+  line-item field in the extraction schema (0 when no discount column is shown), stored on a new
+  `OCR Import Item.discount_percentage` (Percent, editable, in the list view). The `amount` field
+  description no longer tells Gemini it equals `quantity × unit_price` — that wording actively
+  encouraged Gemini to recompute and discard a printed discount instead of reporting the true line
+  total.
+- **Loud, non-blocking divergence warnings at manual create time (PI + PR), never gated
+  (ADR-0002).** Two checks, both `frappe.msgprint` with the draft still created: (1) per line,
+  `qty × unit_price` vs the extracted `amount` — fires by design on every genuinely discounted line,
+  telling the reviewer the built rate differs from the printed unit price; (2) whole document,
+  `Σ(effective line total)` vs the extracted `subtotal` — catches a self-contradictory OCR record
+  independent of discounts (live: `OCR-IMP-01106` line 3 carried qty/rate/amount from a *different*
+  invoice, `D0237213`, on the same scanned page). Tolerance is a rounding-noise-tolerant band,
+  `max(R0.02, 0.5%)` — deliberately separate from `tasks/auto_draft.py`'s auto-draft-only totals
+  gate.
+- **Admin-only re-extraction migration tool (`retry_gemini_extraction`).** Previously gated to
+  `Error` status only. Now also permits `Needs Review` and `Matched` — but ONLY for a System
+  Manager, and only when no PI/PR/JE has been created from the record yet (Unlink & Reset comes
+  first). This is deliberately not an operator workflow: re-running the same model over the same
+  image mostly reproduces the same wrong answer and discards any operator corrections already made
+  (qty/rate/amount are all editable). Its purpose is pulling already-captured records onto a *new*
+  extraction after a schema/prompt change — exactly this release. The client renders a
+  "Re-extract from Scan" button (behind a `frappe.confirm` warning) only for System Managers on
+  non-Error Gemini records with nothing yet created; the existing Error-state "Retry Extraction"
+  button is unchanged for everyone. No bulk/list re-extract action was added — deliberate, to avoid
+  hammering the Gemini rate limit outside the existing caller-side stagger.
+
 ## [1.10.1] — 2026-07-17
 
 Patch release. Fixes a live defect where creating a Purchase Invoice (or Purchase Receipt) from an

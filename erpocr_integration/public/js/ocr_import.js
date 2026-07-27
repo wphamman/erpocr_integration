@@ -254,7 +254,8 @@ frappe.ui.form.on('OCR Import', {
 		}
 
 		// Add retry button for failed extractions
-		if (frm.doc.status === 'Error' && ['Gemini Manual Upload', 'Gemini Email', 'Gemini Drive Scan'].includes(frm.doc.source_type)) {
+		const gemini_source_types = ['Gemini Manual Upload', 'Gemini Email', 'Gemini Drive Scan'];
+		if (frm.doc.status === 'Error' && gemini_source_types.includes(frm.doc.source_type)) {
 			frm.add_custom_button(__('Retry Extraction'), function() {
 				frappe.call({
 					method: 'erpocr_integration.api.retry_gemini_extraction',
@@ -270,6 +271,45 @@ frappe.ui.form.on('OCR Import', {
 						}
 					}
 				});
+			}, __('Actions'));
+		} else if (
+			// v1.10.2 (E): admin-only migration tool for pulling already-captured
+			// records onto a NEW extraction after a schema/prompt change — NOT an
+			// operator retry workflow. Re-running the same model over the same
+			// image mostly reproduces the same wrong answer and discards any
+			// operator corrections already made (qty/rate/amount are all editable
+			// on the grid) — that's why this needs System Manager and an explicit
+			// confirm, unlike the plain Error-state retry above.
+			['Needs Review', 'Matched'].includes(frm.doc.status) &&
+			gemini_source_types.includes(frm.doc.source_type) &&
+			!frm.doc.purchase_invoice && !frm.doc.purchase_receipt && !frm.doc.journal_entry &&
+			frappe.user.has_role('System Manager')
+		) {
+			frm.add_custom_button(__('Re-extract from Scan'), function() {
+				frappe.confirm(
+					__(
+						'This re-runs Gemini extraction from the original scan and will DISCARD any ' +
+						'corrections made on this record (supplier, item matches, edited qty/rate/amount). ' +
+						'Use this only after an extraction schema/prompt change — for a single mis-read ' +
+						'line, editing the field directly is usually the better fix. Continue?'
+					),
+					function() {
+						frappe.call({
+							method: 'erpocr_integration.api.retry_gemini_extraction',
+							args: {ocr_import: frm.doc.name},
+							callback: function(r) {
+								if (!r.exc) {
+									frm.reload_doc();
+									frappe.show_alert({
+										message: __('Re-extracting from scan...'),
+										indicator: 'blue'
+									});
+									poll_extraction_status(frm, frm.doc.name);
+								}
+							}
+						});
+					}
+				);
 			}, __('Actions'));
 		}
 

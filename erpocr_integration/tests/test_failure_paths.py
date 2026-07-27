@@ -441,13 +441,19 @@ class TestArchiveMoveFailure:
 class TestRetryGeminiExtraction:
 	"""retry_gemini_extraction enforces permissions and source-type gating."""
 
-	def test_rejects_non_error_status(self, mock_frappe):
-		"""Cannot retry an OCR Import that isn't in Error status."""
+	def test_rejects_non_error_status_without_system_manager(self, mock_frappe):
+		"""v1.10.2 (E): Matched/Needs Review are re-extractable, but ONLY for a
+		System Manager — the default mock role list (["All"]) must still be
+		rejected, preserving today's Error-only behaviour for an ordinary OCR
+		Manager."""
 		doc = SimpleNamespace(
 			name="OCR-IMP-001",
 			status="Matched",
 			source_type="Gemini Manual Upload",
 			drive_file_id="drive-123",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
 		)
 		mock_frappe.get_doc = MagicMock(return_value=doc)
 
@@ -455,6 +461,143 @@ class TestRetryGeminiExtraction:
 			erpocr_integration.api.retry_gemini_extraction("OCR-IMP-001")
 
 		mock_frappe.throw.assert_called()
+
+	def test_rejects_needs_review_without_system_manager(self, mock_frappe):
+		doc = SimpleNamespace(
+			name="OCR-IMP-NR",
+			status="Needs Review",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with pytest.raises(Exception):
+			erpocr_integration.api.retry_gemini_extraction("OCR-IMP-NR")
+
+	def test_rejects_draft_created_status_even_for_system_manager(self, mock_frappe):
+		"""Draft Created (and any other status) is never re-extractable — this
+		is the (E) status allowlist itself, not just the linked-doc guard."""
+		mock_frappe.get_roles = MagicMock(return_value=["System Manager"])
+		doc = SimpleNamespace(
+			name="OCR-IMP-DC",
+			status="Draft Created",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with pytest.raises(Exception):
+			erpocr_integration.api.retry_gemini_extraction("OCR-IMP-DC")
+
+	def test_matched_allowed_for_system_manager(self, mock_frappe):
+		"""v1.10.2 (E): a System Manager CAN re-extract a Matched record (the
+		post-schema-change migration case) — the whole point of this feature."""
+		mock_frappe.get_roles = MagicMock(return_value=["System Manager"])
+		doc = SimpleNamespace(
+			name="OCR-IMP-SM",
+			status="Matched",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			source_filename="test.pdf",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			db_set=MagicMock(),
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with patch.object(
+			erpocr_integration.tasks.drive_integration,
+			"download_file_from_drive",
+			return_value=b"%PDF-1.4 test",
+		):
+			mock_frappe.enqueue = MagicMock()
+			result = erpocr_integration.api.retry_gemini_extraction("OCR-IMP-SM")
+
+		assert result is not None
+		mock_frappe.enqueue.assert_called_once()
+
+	def test_refused_when_purchase_invoice_linked_even_for_system_manager(self, mock_frappe):
+		"""v1.10.2 (E): a linked PI/PR/JE always refuses re-extraction —
+		Unlink & Reset comes first — regardless of role or status."""
+		mock_frappe.get_roles = MagicMock(return_value=["System Manager"])
+		doc = SimpleNamespace(
+			name="OCR-IMP-LINKED",
+			status="Draft Created",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			purchase_invoice="PI-00001",
+			purchase_receipt=None,
+			journal_entry=None,
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with pytest.raises(Exception):
+			erpocr_integration.api.retry_gemini_extraction("OCR-IMP-LINKED")
+
+	def test_refused_when_purchase_receipt_linked(self, mock_frappe):
+		mock_frappe.get_roles = MagicMock(return_value=["System Manager"])
+		doc = SimpleNamespace(
+			name="OCR-IMP-LINKED-PR",
+			status="Matched",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			purchase_invoice=None,
+			purchase_receipt="PR-00001",
+			journal_entry=None,
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with pytest.raises(Exception):
+			erpocr_integration.api.retry_gemini_extraction("OCR-IMP-LINKED-PR")
+
+	def test_refused_when_journal_entry_linked(self, mock_frappe):
+		mock_frappe.get_roles = MagicMock(return_value=["System Manager"])
+		doc = SimpleNamespace(
+			name="OCR-IMP-LINKED-JE",
+			status="Matched",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry="JE-00001",
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with pytest.raises(Exception):
+			erpocr_integration.api.retry_gemini_extraction("OCR-IMP-LINKED-JE")
+
+	def test_error_status_still_open_to_everyone(self, mock_frappe):
+		"""Regression: the existing Error-only path is untouched for a plain
+		user (no System Manager role)."""
+		doc = SimpleNamespace(
+			name="OCR-IMP-ERR",
+			status="Error",
+			source_type="Gemini Manual Upload",
+			drive_file_id="drive-123",
+			source_filename="test.pdf",
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			db_set=MagicMock(),
+		)
+		mock_frappe.get_doc = MagicMock(return_value=doc)
+
+		with patch.object(
+			erpocr_integration.tasks.drive_integration,
+			"download_file_from_drive",
+			return_value=b"%PDF-1.4 test",
+		):
+			mock_frappe.enqueue = MagicMock()
+			result = erpocr_integration.api.retry_gemini_extraction("OCR-IMP-ERR")
+
+		assert result is not None
 
 	def test_rejects_non_gemini_source_type(self, mock_frappe):
 		"""Cannot retry a non-Gemini source type."""
