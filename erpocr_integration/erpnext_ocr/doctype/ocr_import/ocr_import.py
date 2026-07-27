@@ -176,12 +176,199 @@ def _inherit_ref_fields(target: dict, ref) -> None:
 		target["project"] = project
 
 
+#: Tolerance for the (D) divergence warnings — a rounding-noise-tolerant band,
+#: NOT an exact compare. Deliberately separate from auto_draft.py's
+#: _TOTALS_TOLERANCE_* (that gate is auto-draft-only and must stay decoupled).
+_DIVERGENCE_TOLERANCE_ABS = 0.02
+_DIVERGENCE_TOLERANCE_PCT = 0.005
+
+
+def _amounts_diverge(a: float, b: float) -> bool:
+	"""True when `a` and `b` differ beyond max(R0.02, 0.5% of the larger
+	magnitude) — used by the (D) manual-create divergence warnings (v1.10.2).
+	Loose enough that ERPNext's own qty*rate re-derivation at its working
+	precision (a few cents on a large invoice) never spuriously warns."""
+	tolerance = max(_DIVERGENCE_TOLERANCE_ABS, _DIVERGENCE_TOLERANCE_PCT * max(abs(a), abs(b)))
+	return abs(a - b) > tolerance
+
+
+def _effective_line_total(item) -> float:
+	"""Effective line total for a PI/PR row: the extracted `amount` (the
+	printed, possibly-discounted line total) wins over qty*rate when present
+	and non-zero — same precedence as create_journal_entry's existing
+	`item.amount or (qty * rate)` (v1.10.2, ElectraHertz per-line discount:
+	Gemini extracts unit_price=53.00 list price and amount=437.25 discounted
+	total; billing at qty*unit_price over-charges the discounted amount).
+
+	`amount` is read defensively via getattr — some test doubles (and any
+	future caller) may hand us a row shape that predates this field.
+
+	Known, accepted limitation (v1.10.2 round-2 review): a genuinely FREE
+	line (amount == 0.00, e.g. a 100%-discount / no-charge item) is
+	indistinguishable from "amount not extracted" — both are falsy — so this
+	falls back to qty*rate and bills the line at the undiscounted rate
+	instead of R0. The database cannot tell the two cases apart, and (D)
+	check 2 (`_check_document_total_divergence`) still catches the resulting
+	document-level mismatch. Mirrors the pre-existing `create_journal_entry`
+	precedence this release generalised from — left as-is deliberately, not
+	an oversight.
+	"""
+	amount = flt(getattr(item, "amount", None))
+	return amount or flt(item.qty or 1) * flt(item.rate or 0)
+
+
+def _effective_line_rate(item):
+	"""Derive the PI/PR line rate so the built line total (qty * rate)
+	reproduces the extracted (possibly discounted) `amount`, instead of
+	billing at the undiscounted unit price (v1.10.2).
+
+	v1.10.2 round-2 review correction: derives against the same EFFECTIVE
+	quantity the builders actually use (`item.qty or 1` — both
+	create_purchase_invoice and create_purchase_receipt coerce a qty of 0 to
+	1 before building the line), not raw `item.qty`. The original version
+	returned the OCR row's raw `rate` when qty was 0 to dodge a
+	ZeroDivisionError — but since the builder then bills 1 unit at that raw
+	rate, a qty-0 row with a genuine discounted `amount` under-billed instead
+	of reproducing the extracted amount (qty 0 / rate 53.00 / amount 437.25
+	built a line of 1 x 53.00 = 53.00, not 437.25). Dividing by the same
+	`item.qty or 1` the builders use keeps this function's output and the
+	built line in agreement for every qty, including 0.
+
+	Falls back to the OCR row's own `rate` only when there's no `amount` to
+	reproduce at all (absent/0 — the pre-existing regression-safety case,
+	unchanged). Deliberately NOT rounded here: ERPNext recomputes
+	`amount = qty * rate` at its own working precision when the line is
+	inserted.
+
+	KNOWN LIMITATION (accepted, external review 2026-07-17): when the printed
+	amount is not exactly divisible by qty, ERPNext rounds the derived rate to
+	the Currency precision (`currency_precision`, else the number format's 2dp
+	— frappe/model/meta.py::get_field_precision) and the posted line can differ
+	from the printed total by a cent. e.g. qty 3 / amount 10.00 → rate 3.33 →
+	posts 9.99. This is inherent to ERPNext's per-unit rate model, not
+	introduced here — no rate can represent 3 units totalling exactly 10.00 —
+	and it is bounded by a cent per line, versus the whole discount (R384.25 on
+	one live line) that this function exists to stop losing. The (D) warning
+	tolerance deliberately absorbs it so it doesn't generate noise; ERPNext's
+	own document-level rounding adjustment handles the residue.
+	"""
+	amount = flt(getattr(item, "amount", None))
+	if not amount:
+		return flt(item.rate or 0)
+	return amount / (flt(item.qty) or 1)
+
+
+def _check_line_divergence(item) -> str | None:
+	"""(D) check 1 — is the line internally consistent GIVEN its own stated
+	discount? Compares `qty * rate * (1 - discount_percentage/100)` (the
+	EXPECTED total once the declared discount is applied) against the
+	extracted `amount`, NOT raw `qty * rate` against `amount`.
+
+	v1.10.2 architect correction: the original version compared raw qty*rate
+	vs amount, which fires on EVERY line for a supplier who discounts every
+	line (ElectraHertz) — every invoice would warn on every line, all saying
+	nothing beyond "this line has a discount" (already visible on the OCR
+	record), training operators to click through warnings and destroying the
+	value of check 2 (the document-level check that catches a genuine
+	defect). A discounted line that reconciles with its own declared
+	discount_percentage is NOT a data problem and must be silent.
+
+	Still warns when discount_percentage is 0/absent but amount diverges from
+	qty*rate anyway — that's a legacy record (extracted before this release,
+	so no discount was captured) or an undeclared/mis-keyed discount, and is
+	genuinely worth a reviewer's eye. Also still warns when a DECLARED
+	discount doesn't reconcile with the extracted amount (mis-keyed
+	percentage or a real data problem).
+
+	Returns a message fragment, or None when there's nothing to compare
+	against (`amount` absent/0 — the regression fallback case) or the
+	expected and extracted totals are within tolerance.
+	"""
+	amount = flt(getattr(item, "amount", None))
+	if not amount:
+		return None
+	list_total = flt(item.qty or 1) * flt(item.rate or 0)
+	discount_percentage = flt(getattr(item, "discount_percentage", None))
+	expected_total = list_total * (1 - discount_percentage / 100)
+	if not _amounts_diverge(expected_total, amount):
+		return None
+	desc = getattr(item, "description_ocr", None) or getattr(item, "item_name", None) or "line"
+	return _(
+		"Line '{0}': qty x rate = {1} with a {2}% discount expects {3}, but the "
+		"extracted amount is {4} (the line was built at a derived rate to match "
+		"the printed total — review for a mis-keyed discount or a data-entry "
+		"mismatch)."
+	).format(
+		desc,
+		f"{list_total:.2f}",
+		f"{discount_percentage:g}",
+		f"{expected_total:.2f}",
+		f"{amount:.2f}",
+	)
+
+
+def _check_document_total_divergence(ocr_import) -> str | None:
+	"""(D) check 2 — Sum(effective line total) vs the CORRECT reference total.
+
+	v1.10.2 round-2 review correction: the original version always compared
+	against `subtotal`, which is tax-inclusivity-blind. On a tax-INCLUSIVE
+	invoice the line amounts already include tax, so the line sum reconciles
+	against `total_amount`, not `subtotal` — comparing against subtotal would
+	false-warn every clean inclusive invoice by exactly the tax amount. This
+	is the SAME trap `tasks/auto_draft.py::_totals_reconcile` was already
+	corrected for (ADR-0014, v1.9.0); the reference-selection logic below
+	mirrors that function (deliberately not its tolerance constants, which
+	stay auto-draft-only per that ADR).
+
+	Independent of any discount handling otherwise: catches a
+	self-contradictory OCR record, e.g. a line whose qty/rate/amount were
+	extracted from a DIFFERENT invoice on the same scanned page (live:
+	OCR-IMP-01106 line 3 — qty 4 / R159.00 belonged to invoice D0237213, not
+	D0236754).
+
+	Degenerate cases (no usable reference) return None — never warn, mirroring
+	_totals_reconcile's fail-open posture.
+	"""
+	if _detect_tax_inclusive_rates(ocr_import):
+		reference = flt(getattr(ocr_import, "total_amount", None))
+		ref_label = "total"
+	else:
+		reference = flt(getattr(ocr_import, "subtotal", None))
+		ref_label = "subtotal"
+		if reference <= 0:
+			# Gemini emits subtotal "0 if not shown" — fall back to the pre-tax total.
+			reference = flt(getattr(ocr_import, "total_amount", None)) - flt(
+				getattr(ocr_import, "tax_amount", None)
+			)
+	if reference <= 0:
+		return None  # no usable reference — can't validate
+
+	line_sum = sum(_effective_line_total(item) for item in ocr_import.items)
+	if not _amounts_diverge(line_sum, reference):
+		return None
+	return _(
+		"Sum of line amounts ({0}) does not match the extracted {1} ({2}) — "
+		"the OCR record may be self-inconsistent; review the line items."
+	).format(f"{line_sum:.2f}", ref_label, f"{reference:.2f}")
+
+
 def _detect_tax_inclusive_rates(ocr_import) -> bool:
 	"""Detect whether OCR-extracted item rates already include tax.
 
-	Compares sum(rate * qty) against subtotal (excl tax) and total_amount (incl tax)
-	to determine which is closer. This is country-agnostic — works with any tax system
-	(SA VAT, EU VAT, GST, sales tax, etc.) without hardcoding any tax rate.
+	Compares sum(effective line total) against subtotal (excl tax) and total_amount
+	(incl tax) to determine which is closer. This is country-agnostic — works with
+	any tax system (SA VAT, EU VAT, GST, sales tax, etc.) without hardcoding any tax
+	rate.
+
+	The per-line sum uses `_effective_line_total` (extracted `amount` when present,
+	else qty*rate) rather than raw qty*rate (v1.10.2). A per-line discount inflates
+	qty*rate above the true (discounted) line total, which used to fool this
+	detector into misreading a discounted, tax-EXCLUSIVE invoice as inclusive (live:
+	ElectraHertz D0236754 — qty*rate sums closer to total_amount than to the correct
+	subtotal purely because of the undiscounted rate). Once the effective total is
+	used, a fully-discounted invoice's line sum equals its subtotal exactly and the
+	detector self-corrects. For a normal (non-discounted) invoice `amount` already
+	equals qty*rate, so this is a no-op there.
 
 	An ambiguity threshold prevents misclassification on mixed/discounted invoices:
 	if neither distance is clearly closer (within 5% of the tax amount), we default
@@ -198,7 +385,7 @@ def _detect_tax_inclusive_rates(ocr_import) -> bool:
 	if tax_amount <= 0 or subtotal <= 0 or total_amount <= subtotal:
 		return False
 
-	rate_qty_sum = sum(flt(item.qty or 1) * flt(item.rate or 0) for item in ocr_import.items)
+	rate_qty_sum = sum(_effective_line_total(item) for item in ocr_import.items)
 	if rate_qty_sum <= 0:
 		return False
 
@@ -664,7 +851,9 @@ class OCRImport(Document):
 		for item in self.items:
 			pi_item = {
 				"qty": item.qty or 1,
-				"rate": item.rate or 0,
+				# v1.10.2: derive rate from the extracted (possibly discounted) amount,
+				# not the raw unit price — see _effective_line_rate.
+				"rate": _effective_line_rate(item),
 				"description": item.description_ocr or item.item_name or "OCR Imported Item",
 			}
 
@@ -766,6 +955,13 @@ class OCRImport(Document):
 		if not pi_items:
 			frappe.throw(_("No line items to create Purchase Invoice."))
 
+		# (D) Divergence warnings (v1.10.2, ADR-0002: warn, never block) — computed
+		# from the source OCR data, independent of the pi_items already built above.
+		divergence_warnings = [msg for msg in (_check_line_divergence(item) for item in self.items) if msg]
+		doc_divergence = _check_document_total_divergence(self)
+		if doc_divergence:
+			divergence_warnings.append(doc_divergence)
+
 		pi_dict = {
 			"doctype": "Purchase Invoice",
 			"supplier": self.supplier,
@@ -847,12 +1043,14 @@ class OCRImport(Document):
 		self.status = "Draft Created"
 		self.save()
 
-		frappe.msgprint(
-			_("Purchase Invoice {0} created as draft.").format(
-				frappe.utils.get_link_to_form("Purchase Invoice", pi.name)
-			),
-			indicator="green",
+		msg = _("Purchase Invoice {0} created as draft.").format(
+			frappe.utils.get_link_to_form("Purchase Invoice", pi.name)
 		)
+		if divergence_warnings:
+			# (D) Never blocks — the draft above is already created. Just tell the
+			# reviewer loudly (ADR-0002).
+			msg += "<br><br>" + "<br>".join(divergence_warnings)
+		frappe.msgprint(msg, indicator="green" if not divergence_warnings else "orange")
 
 		return pi.name
 
@@ -914,7 +1112,8 @@ class OCRImport(Document):
 			pr_item = {
 				"item_code": item.item_code,
 				"qty": item.qty or 1,
-				"rate": item.rate or 0,
+				# v1.10.2: same amount-aware derivation as create_purchase_invoice.
+				"rate": _effective_line_rate(item),
 				"description": item.description_ocr or item.item_name or "OCR Imported Item",
 			}
 
@@ -972,6 +1171,13 @@ class OCRImport(Document):
 					"Match items first, or change Document Type to Purchase Invoice."
 				)
 			)
+
+		# (D) Divergence warnings (v1.10.2, ADR-0002: warn, never block) — see
+		# create_purchase_invoice for rationale.
+		divergence_warnings = [msg for msg in (_check_line_divergence(item) for item in self.items) if msg]
+		doc_divergence = _check_document_total_divergence(self)
+		if doc_divergence:
+			divergence_warnings.append(doc_divergence)
 
 		pr_dict = {
 			"doctype": "Purchase Receipt",
@@ -1032,6 +1238,7 @@ class OCRImport(Document):
 			warnings.append(_("{0} unmatched row(s) skipped").format(skipped_unmatched))
 		if non_stock_warnings:
 			warnings.append(_("Non-stock items included: {0}").format(", ".join(non_stock_warnings)))
+		warnings.extend(divergence_warnings)
 		if warnings:
 			msg += "<br><br>" + _("Warning: {0}. Review the draft carefully.").format("; ".join(warnings))
 		frappe.msgprint(msg, indicator="green" if not warnings else "orange")

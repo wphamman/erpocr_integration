@@ -52,6 +52,37 @@ class TestPopulateOcrImport:
 		assert doc.items[0].rate == 85.00
 		assert doc.items[0].match_status == "Unmatched"
 
+	def test_discount_percentage_threaded_through(self, sample_settings):
+		"""v1.10.2: discount_percentage from the extracted line survives into the
+		OCR Import Item row; absent → defaults to 0 (regression safety)."""
+		doc = self._make_ocr_import_mock()
+		drive_result = {"file_id": None, "shareable_link": None, "folder_path": None}
+		data = {
+			"header_fields": {"subtotal": 0, "tax_amount": 0, "total_amount": 0},
+			"line_items": [
+				{
+					"description": "Discounted line",
+					"product_code": "",
+					"quantity": 11,
+					"unit_price": 53.00,
+					"discount_percentage": 25,
+					"amount": 437.25,
+				},
+				{
+					"description": "Undiscounted line",
+					"product_code": "",
+					"quantity": 1,
+					"unit_price": 100.0,
+					"amount": 100.0,
+				},
+			],
+		}
+
+		_populate_ocr_import(doc, data, sample_settings, drive_result)
+
+		assert doc.items[0].discount_percentage == 25
+		assert doc.items[1].discount_percentage == 0.0  # absent → default
+
 	def test_confidence_scaled(self, sample_extracted_data, sample_settings):
 		"""Gemini returns 0.0-1.0, OCR Import stores 0-100."""
 		doc = self._make_ocr_import_mock()

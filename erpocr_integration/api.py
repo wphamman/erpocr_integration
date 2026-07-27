@@ -521,6 +521,7 @@ def _populate_ocr_import(ocr_import, extracted_data: dict, settings, drive_resul
 				"item_name": description[:140],
 				"qty": line.get("quantity", 1.0),
 				"rate": line.get("unit_price", 0.0),
+				"discount_percentage": line.get("discount_percentage") or 0.0,
 				"amount": line.get("amount", 0.0),
 				"match_status": "Unmatched",
 			},
@@ -679,8 +680,39 @@ def retry_gemini_extraction(ocr_import: str):
 
 	ocr_import_doc = frappe.get_doc("OCR Import", ocr_import)
 
-	if ocr_import_doc.status != "Error":
-		frappe.throw(_("Can only retry failed extractions"))
+	# v1.10.2 (E): admin-only re-extraction migration tool, not an operator
+	# workflow. Error stays open to everyone — today's behaviour, unchanged.
+	# Needs Review / Matched additionally require System Manager: re-running
+	# the same model over the same image with the same schema mostly
+	# reproduces the same wrong answer AND discards any operator corrections
+	# already made (qty/rate/amount edits are all editable in the grid) — the
+	# genuinely useful case is pulling already-captured records onto a NEW
+	# extraction after a schema/prompt change (exactly this release), which is
+	# an admin migration action, not something every OCR Manager should reach
+	# for on a routine mis-match.
+	if ocr_import_doc.status == "Error":
+		pass
+	elif ocr_import_doc.status in ("Needs Review", "Matched"):
+		if "System Manager" not in frappe.get_roles(frappe.session.user):
+			frappe.throw(_("Only a System Manager can re-extract a record that is not in Error status."))
+	else:
+		frappe.throw(_("Can only retry failed, Needs Review, or Matched extractions"))
+
+	# Refuse once a document has been created from this import — Unlink & Reset
+	# comes first. Checked on the fields directly (not just status) for defence
+	# in depth: status alone could theoretically lag a stale link. getattr
+	# guards test doubles / any doc shape that predates these fields.
+	if (
+		getattr(ocr_import_doc, "purchase_invoice", None)
+		or getattr(ocr_import_doc, "purchase_receipt", None)
+		or getattr(ocr_import_doc, "journal_entry", None)
+	):
+		frappe.throw(
+			_(
+				"Cannot re-extract — a document has already been created from this "
+				"import. Unlink & Reset it first."
+			)
+		)
 
 	if ocr_import_doc.source_type not in ("Gemini Manual Upload", "Gemini Email", "Gemini Drive Scan"):
 		frappe.throw(_("Can only retry Gemini extractions"))

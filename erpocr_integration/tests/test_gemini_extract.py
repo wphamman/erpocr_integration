@@ -47,6 +47,28 @@ class TestBuildExtractionSchema:
 		assert "unit_price" in item_props
 		assert "amount" in item_props
 
+	def test_discount_percentage_field_exists_and_required(self):
+		"""v1.10.2 (ElectraHertz per-line discount): discount_percentage is a new
+		required line-item field, and `amount` no longer describes itself as
+		quantity x unit_price — that wording actively told Gemini to discard the
+		discount and recompute the undiscounted total."""
+		schema = _build_extraction_schema()
+		invoice_schema = schema["properties"]["invoices"]["items"]
+		line_items = invoice_schema["properties"]["line_items"]
+		item_props = line_items["items"]["properties"]
+		item_required = line_items["items"]["required"]
+		assert "discount_percentage" in item_props
+		assert "discount_percentage" in item_required
+		amount_description = item_props["amount"]["description"]
+		desc_lower = amount_description.lower()
+		# The old wording literally defined amount AS quantity x unit_price
+		# ("Total for this line (quantity x unit_price)") — that told Gemini to
+		# recompute and discard any discount. The new wording must not define it
+		# that way, even though it may still mention the phrase while explaining
+		# the discount case ("NOT necessarily quantity x unit_price").
+		assert "(quantity x unit_price)" not in desc_lower
+		assert "after" in desc_lower
+
 	def test_confidence_field_exists(self):
 		schema = _build_extraction_schema()
 		invoice_schema = schema["properties"]["invoices"]["items"]
@@ -73,6 +95,10 @@ class TestBuildExtractionPrompt:
 	def test_mentions_date_format(self):
 		prompt = _build_extraction_prompt()
 		assert "YYYY-MM-DD" in prompt
+
+	def test_mentions_discount(self):
+		prompt = _build_extraction_prompt()
+		assert "discount" in prompt.lower()
 
 	def test_mentions_currency_symbols(self):
 		prompt = _build_extraction_prompt()
@@ -259,6 +285,38 @@ class TestTransformToOcrImportFormat:
 		assert result["header_fields"]["subtotal"] == 0.0
 		assert result["line_items"][0]["quantity"] == 1.0
 		assert result["line_items"][0]["unit_price"] == 0.0
+		assert result["line_items"][0]["discount_percentage"] == 0.0
+
+	def test_discount_percentage_passthrough(self):
+		"""v1.10.2: the ElectraHertz per-line discount — Gemini's extracted
+		discount_percentage rides through the transform unchanged."""
+		gemini_data = {
+			"supplier_name": "ElectraHertz",
+			"supplier_tax_id": "",
+			"invoice_number": "D0236754",
+			"invoice_date": "2026-07-01",
+			"due_date": "",
+			"subtotal": 1470.75,
+			"tax_amount": 220.61,
+			"total_amount": 1691.36,
+			"currency": "ZAR",
+			"confidence": 0.9,
+			"line_items": [
+				{
+					"description": "DIST BLOCK 7W GRY PHASE BAR",
+					"product_code": "",
+					"quantity": 11,
+					"unit_price": 53.00,
+					"discount_percentage": 25,
+					"amount": 437.25,
+				}
+			],
+		}
+		result = _transform_to_ocr_import_format(gemini_data, "test.pdf")
+		item = result["line_items"][0]
+		assert item["discount_percentage"] == 25
+		assert item["amount"] == 437.25
+		assert item["unit_price"] == 53.00
 
 
 # ---------------------------------------------------------------------------

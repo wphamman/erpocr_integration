@@ -139,8 +139,12 @@ For each product or service line item in the invoice table, extract:
 - Description (full text description of the item/service)
 - Product code / SKU / Item code (if present - may be in a separate column from description)
 - Quantity (numeric quantity ordered/delivered)
-- Unit price / Rate (price per unit)
-- Line amount / Total (total for this line = quantity x unit price)
+- Unit price / Rate (the LIST price per unit, before any per-line discount)
+- Discount percentage (if the line has a "%Disc" / "Discount" column reducing its total, extract
+  that percentage as a number 0-100; 0 if no discount column is shown for this line)
+- Line amount / Total (the ACTUAL total printed for this line — the amount actually billed AFTER
+  any discount is applied. Do NOT compute this as quantity x unit price; if a discount reduces the
+  line, extract the discounted total exactly as printed on the invoice)
 
 **Important Instructions:**
 - If the document contains multiple invoices (e.g., a statement or batch PDF), return each as a separate entry in the invoices array
@@ -211,13 +215,35 @@ def _build_extraction_schema() -> dict:
 							"description": "Product code, SKU, or item code (empty string if not present)",
 						},
 						"quantity": {"type": "number", "description": "Quantity ordered/delivered"},
-						"unit_price": {"type": "number", "description": "Price per unit"},
+						"unit_price": {
+							"type": "number",
+							"description": "List price per unit, before any per-line discount",
+						},
+						"discount_percentage": {
+							"type": "number",
+							"description": (
+								"Per-line discount percentage (0-100) if a '%Disc' or Discount "
+								"column reduces this line's total; 0 if no discount is shown"
+							),
+						},
 						"amount": {
 							"type": "number",
-							"description": "Total for this line (quantity x unit_price)",
+							"description": (
+								"The printed line total actually billed, AFTER any discount is "
+								"applied — NOT necessarily quantity x unit_price. If a discount "
+								"reduces the line, this is the discounted total exactly as printed, "
+								"not a recomputed quantity x unit_price"
+							),
 						},
 					},
-					"required": ["description", "product_code", "quantity", "unit_price", "amount"],
+					"required": [
+						"description",
+						"product_code",
+						"quantity",
+						"unit_price",
+						"discount_percentage",
+						"amount",
+					],
 				},
 			},
 		},
@@ -423,6 +449,7 @@ def _transform_to_ocr_import_format(gemini_data: dict, filename: str) -> dict:
 				"product_code": product_code,
 				"quantity": item.get("quantity", 1.0),
 				"unit_price": item.get("unit_price", 0.0),
+				"discount_percentage": item.get("discount_percentage") or 0.0,
 				"amount": item.get("amount", 0.0),
 			}
 		)
