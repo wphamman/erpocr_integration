@@ -38,13 +38,20 @@ line — billing at the undiscounted list price instead of the printed, discount
   total.
 - **Loud, non-blocking divergence warnings at manual create time (PI + PR), never gated
   (ADR-0002).** Two checks, both `frappe.msgprint` with the draft still created: (1) per line,
-  `qty × unit_price` vs the extracted `amount` — fires by design on every genuinely discounted line,
-  telling the reviewer the built rate differs from the printed unit price; (2) whole document,
+  is the line internally consistent GIVEN its own stated `discount_percentage` — `qty × rate ×
+  (1 − discount_percentage/100)` (expected) vs the extracted `amount`. A first cut compared raw
+  `qty × unit_price` against `amount`, which fired on every line for a supplier who discounts every
+  line (ElectraHertz) — warning fatigue that trains reviewers to click through, destroying the value
+  of check 2. Corrected before release: a properly-declared, internally-consistent discounted line
+  is silent; it still warns when `discount_percentage` is 0/absent but `amount` diverges from
+  `qty × rate` anyway (a legacy pre-this-release record, or an undeclared/mis-keyed discount), or
+  when a declared discount doesn't reconcile with the extracted amount. (2) whole document,
   `Σ(effective line total)` vs the extracted `subtotal` — catches a self-contradictory OCR record
   independent of discounts (live: `OCR-IMP-01106` line 3 carried qty/rate/amount from a *different*
-  invoice, `D0237213`, on the same scanned page). Tolerance is a rounding-noise-tolerant band,
-  `max(R0.02, 0.5%)` — deliberately separate from `tasks/auto_draft.py`'s auto-draft-only totals
-  gate.
+  invoice, `D0237213`, on the same scanned page — internally consistent given ITS OWN discount, so
+  check 1 is silent on it; check 2 is what catches the cross-invoice bleed). Tolerance is a
+  rounding-noise-tolerant band, `max(R0.02, 0.5%)` — deliberately separate from
+  `tasks/auto_draft.py`'s auto-draft-only totals gate.
 - **Admin-only re-extraction migration tool (`retry_gemini_extraction`).** Previously gated to
   `Error` status only. Now also permits `Needs Review` and `Matched` — but ONLY for a System
   Manager, and only when no PI/PR/JE has been created from the record yet (Unlink & Reset comes

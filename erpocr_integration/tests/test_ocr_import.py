@@ -1389,6 +1389,74 @@ class TestDiscountedLineCreation:
 
 
 # ---------------------------------------------------------------------------
+# (D) check 1 — discount-aware line consistency (architect correction)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckLineDivergenceDiscountAware:
+	"""v1.10.2 architect correction: the first cut of check 1 compared raw
+	qty*rate vs amount, which fires BY DESIGN on every line for a supplier
+	who discounts every line (ElectraHertz) — every one of their invoices
+	would warn on every line, all saying nothing more than "this line has a
+	discount" (already visible on the OCR record). That trains operators to
+	click through warnings, which destroys the value of check 2 (the
+	document-level check that catches a genuine defect).
+
+	Corrected: check 1 now tests whether the line is internally consistent
+	GIVEN its own stated discount_percentage — `qty * rate * (1 -
+	discount_percentage/100)` (expected) vs the extracted `amount` — not
+	whether a discount exists at all.
+	"""
+
+	def test_discounted_but_consistent_line_is_silent(self):
+		"""The regression this correction exists to prevent: a normal,
+		correctly-declared discounted line (qty 11, rate 53.00, 25% discount,
+		amount 437.25 — the ElectraHertz live case) is NOT a data problem and
+		must NOT warn."""
+		item = _make_item(qty=11, rate=53.00, discount_percentage=25, amount=437.25)
+		assert _check_line_divergence(item) is None
+
+	def test_no_discount_amount_matches_qty_rate_is_silent(self):
+		"""Regression: an ordinary undiscounted line is unaffected."""
+		item = _make_item(qty=10, rate=85.00, discount_percentage=0, amount=850.00)
+		assert _check_line_divergence(item) is None
+
+	def test_no_discount_amount_diverges_still_warns(self):
+		"""discount_percentage 0/absent but amount != qty*rate: the legacy
+		case (a record extracted before this release captured no discount) or
+		an undeclared/mis-keyed discount — genuinely worth a reviewer's eye."""
+		item = _make_item(qty=11, rate=53.00, discount_percentage=0, amount=437.25)
+		msg = _check_line_divergence(item)
+		assert msg is not None
+		assert "437.25" in msg
+
+	def test_live_line3_internally_consistent_given_discount_is_silent(self):
+		"""The live record's line 3 (qty 4, rate 53.00, 25% discount, amount
+		159.00) is internally consistent GIVEN its stated discount — the
+		values actually belong to a different invoice on the same scanned
+		page, but that bleed is a DOCUMENT-level inconsistency (check 2:
+		Sum(amount) 1391.25 != subtotal 1470.75), not a line-level one. Must
+		be silent at line level — check 2 is what catches this defect."""
+		item = _make_item(qty=4, rate=53.00, discount_percentage=25, amount=159.00)
+		assert _check_line_divergence(item) is None
+
+	def test_mismatched_declared_discount_still_warns(self):
+		"""A declared discount that does not reconcile with the extracted
+		amount (mis-keyed percentage, or a genuine data problem) must still
+		warn — discount-aware does not mean discount-blind."""
+		item = _make_item(qty=11, rate=53.00, discount_percentage=10, amount=437.25)
+		# expected at 10% disc = 583.00 * 0.9 = 524.70, but amount is 437.25
+		# (the real 25%-disc total) — declared % doesn't match reality.
+		msg = _check_line_divergence(item)
+		assert msg is not None
+
+	def test_amount_absent_still_returns_none(self):
+		"""Regression: nothing to compare against → no warning, unchanged."""
+		item = _make_item(qty=11, rate=53.00, discount_percentage=25, amount=0)
+		assert _check_line_divergence(item) is None
+
+
+# ---------------------------------------------------------------------------
 # (D) Divergence warnings — never block (ADR-0002)
 # ---------------------------------------------------------------------------
 
@@ -1396,17 +1464,22 @@ class TestDiscountedLineCreation:
 class TestDivergenceWarnings:
 	"""v1.10.2 (D): loud, non-blocking warnings at manual create time.
 
-	Check 1 (per line): qty * unit_price vs extracted amount.
+	Check 1 (per line): is the line internally consistent GIVEN its own
+	stated discount_percentage (see TestCheckLineDivergenceDiscountAware for
+	the discount-aware unit coverage).
 	Check 2 (whole doc): Sum(effective line total) vs extracted subtotal.
 	Both must warn via frappe.msgprint (indicator orange) and the draft must
 	still be created (ADR-0002 — never block manual creation).
 	"""
 
-	def test_line_divergence_warns_but_still_creates(self, mock_frappe, sample_settings):
+	def test_no_declared_discount_line_divergence_warns_but_still_creates(self, mock_frappe, sample_settings):
+		"""Legacy-shaped case: discount_percentage 0/absent (not declared) but
+		amount != qty*rate — still warns (see
+		TestCheckLineDivergenceDiscountAware.test_no_discount_amount_diverges_still_warns)."""
 		doc = _make_ocr_import(
 			document_type="Purchase Invoice",
 			subtotal=437.25,
-			items=[_make_item(qty=11, rate=53.00, amount=437.25)],
+			items=[_make_item(qty=11, rate=53.00, discount_percentage=0, amount=437.25)],
 		)
 		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
 
@@ -1418,6 +1491,24 @@ class TestDivergenceWarnings:
 		msg = call.args[0]
 		assert "53.00" in msg or "583.00" in msg
 		assert "437.25" in msg
+
+	def test_declared_and_consistent_discount_line_creates_silently(self, mock_frappe, sample_settings):
+		"""The regression this architect correction exists to prevent, at the
+		full create_purchase_invoice integration level: a properly-declared,
+		internally-consistent discounted line must NOT trigger check 1 (and
+		with a matching subtotal, must not trigger check 2 either) — the
+		draft creates with a plain green message, same as any clean invoice."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			subtotal=437.25,
+			items=[_make_item(qty=11, rate=53.00, discount_percentage=25, amount=437.25)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		call = mock_frappe.msgprint.call_args
+		assert call.kwargs.get("indicator") == "green"
 
 	def test_no_warning_when_amount_matches_qty_times_rate(self, mock_frappe, sample_settings):
 		doc = _make_ocr_import(

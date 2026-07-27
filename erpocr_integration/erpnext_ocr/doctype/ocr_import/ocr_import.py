@@ -225,27 +225,52 @@ def _effective_line_rate(item):
 
 
 def _check_line_divergence(item) -> str | None:
-	"""(D) check 1 — qty * unit_price (the extracted list-price total) vs the
-	extracted `amount`. Fires BY DESIGN on every genuinely discounted line —
-	the point is to tell the reviewer the built rate differs from the printed
-	unit price, not to gate creation (ADR-0002: warn, never block).
+	"""(D) check 1 — is the line internally consistent GIVEN its own stated
+	discount? Compares `qty * rate * (1 - discount_percentage/100)` (the
+	EXPECTED total once the declared discount is applied) against the
+	extracted `amount`, NOT raw `qty * rate` against `amount`.
+
+	v1.10.2 architect correction: the original version compared raw qty*rate
+	vs amount, which fires on EVERY line for a supplier who discounts every
+	line (ElectraHertz) — every invoice would warn on every line, all saying
+	nothing beyond "this line has a discount" (already visible on the OCR
+	record), training operators to click through warnings and destroying the
+	value of check 2 (the document-level check that catches a genuine
+	defect). A discounted line that reconciles with its own declared
+	discount_percentage is NOT a data problem and must be silent.
+
+	Still warns when discount_percentage is 0/absent but amount diverges from
+	qty*rate anyway — that's a legacy record (extracted before this release,
+	so no discount was captured) or an undeclared/mis-keyed discount, and is
+	genuinely worth a reviewer's eye. Also still warns when a DECLARED
+	discount doesn't reconcile with the extracted amount (mis-keyed
+	percentage or a real data problem).
 
 	Returns a message fragment, or None when there's nothing to compare
-	against (`amount` absent/0 — the regression fallback case) or the two
-	are within tolerance.
+	against (`amount` absent/0 — the regression fallback case) or the
+	expected and extracted totals are within tolerance.
 	"""
 	amount = flt(getattr(item, "amount", None))
 	if not amount:
 		return None
 	list_total = flt(item.qty or 1) * flt(item.rate or 0)
-	if not _amounts_diverge(list_total, amount):
+	discount_percentage = flt(getattr(item, "discount_percentage", None))
+	expected_total = list_total * (1 - discount_percentage / 100)
+	if not _amounts_diverge(expected_total, amount):
 		return None
 	desc = getattr(item, "description_ocr", None) or getattr(item, "item_name", None) or "line"
 	return _(
-		"Line '{0}': qty x rate = {1} but the extracted amount is {2} "
-		"(the line was built at a derived rate to match the printed total — "
-		"review for a discount or a data-entry mismatch)."
-	).format(desc, f"{list_total:.2f}", f"{amount:.2f}")
+		"Line '{0}': qty x rate = {1} with a {2}% discount expects {3}, but the "
+		"extracted amount is {4} (the line was built at a derived rate to match "
+		"the printed total — review for a mis-keyed discount or a data-entry "
+		"mismatch)."
+	).format(
+		desc,
+		f"{list_total:.2f}",
+		f"{discount_percentage:g}",
+		f"{expected_total:.2f}",
+		f"{amount:.2f}",
+	)
 
 
 def _check_document_total_divergence(ocr_import) -> str | None:
