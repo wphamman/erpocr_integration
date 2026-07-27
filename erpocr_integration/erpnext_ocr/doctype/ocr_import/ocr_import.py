@@ -176,6 +176,22 @@ def _inherit_ref_fields(target: dict, ref) -> None:
 		target["project"] = project
 
 
+#: Tolerance for the (D) divergence warnings — a rounding-noise-tolerant band,
+#: NOT an exact compare. Deliberately separate from auto_draft.py's
+#: _TOTALS_TOLERANCE_* (that gate is auto-draft-only and must stay decoupled).
+_DIVERGENCE_TOLERANCE_ABS = 0.02
+_DIVERGENCE_TOLERANCE_PCT = 0.005
+
+
+def _amounts_diverge(a: float, b: float) -> bool:
+	"""True when `a` and `b` differ beyond max(R0.02, 0.5% of the larger
+	magnitude) — used by the (D) manual-create divergence warnings (v1.10.2).
+	Loose enough that ERPNext's own qty*rate re-derivation at its working
+	precision (a few cents on a large invoice) never spuriously warns."""
+	tolerance = max(_DIVERGENCE_TOLERANCE_ABS, _DIVERGENCE_TOLERANCE_PCT * max(abs(a), abs(b)))
+	return abs(a - b) > tolerance
+
+
 def _effective_line_total(item) -> float:
 	"""Effective line total for a PI/PR row: the extracted `amount` (the
 	printed, possibly-discounted line total) wins over qty*rate when present
@@ -206,6 +222,50 @@ def _effective_line_rate(item):
 	if qty == 0:
 		return flt(item.rate or 0)
 	return _effective_line_total(item) / qty
+
+
+def _check_line_divergence(item) -> str | None:
+	"""(D) check 1 — qty * unit_price (the extracted list-price total) vs the
+	extracted `amount`. Fires BY DESIGN on every genuinely discounted line —
+	the point is to tell the reviewer the built rate differs from the printed
+	unit price, not to gate creation (ADR-0002: warn, never block).
+
+	Returns a message fragment, or None when there's nothing to compare
+	against (`amount` absent/0 — the regression fallback case) or the two
+	are within tolerance.
+	"""
+	amount = flt(getattr(item, "amount", None))
+	if not amount:
+		return None
+	list_total = flt(item.qty or 1) * flt(item.rate or 0)
+	if not _amounts_diverge(list_total, amount):
+		return None
+	desc = getattr(item, "description_ocr", None) or getattr(item, "item_name", None) or "line"
+	return _(
+		"Line '{0}': qty x rate = {1} but the extracted amount is {2} "
+		"(the line was built at a derived rate to match the printed total — "
+		"review for a discount or a data-entry mismatch)."
+	).format(desc, f"{list_total:.2f}", f"{amount:.2f}")
+
+
+def _check_document_total_divergence(ocr_import) -> str | None:
+	"""(D) check 2 — Sum(effective line total) vs the extracted `subtotal`.
+
+	Independent of any discount handling: catches a self-contradictory OCR
+	record, e.g. a line whose qty/rate/amount were extracted from a
+	DIFFERENT invoice on the same scanned page (live: OCR-IMP-01106 line 3 —
+	qty 4 / R159.00 belonged to invoice D0237213, not D0236754).
+	"""
+	subtotal = flt(getattr(ocr_import, "subtotal", None))
+	if not subtotal:
+		return None
+	line_sum = sum(_effective_line_total(item) for item in ocr_import.items)
+	if not _amounts_diverge(line_sum, subtotal):
+		return None
+	return _(
+		"Sum of line amounts ({0}) does not match the extracted subtotal ({1}) — "
+		"the OCR record may be self-inconsistent; review the line items."
+	).format(f"{line_sum:.2f}", f"{subtotal:.2f}")
 
 
 def _detect_tax_inclusive_rates(ocr_import) -> bool:
@@ -811,6 +871,13 @@ class OCRImport(Document):
 		if not pi_items:
 			frappe.throw(_("No line items to create Purchase Invoice."))
 
+		# (D) Divergence warnings (v1.10.2, ADR-0002: warn, never block) — computed
+		# from the source OCR data, independent of the pi_items already built above.
+		divergence_warnings = [msg for msg in (_check_line_divergence(item) for item in self.items) if msg]
+		doc_divergence = _check_document_total_divergence(self)
+		if doc_divergence:
+			divergence_warnings.append(doc_divergence)
+
 		pi_dict = {
 			"doctype": "Purchase Invoice",
 			"supplier": self.supplier,
@@ -892,12 +959,14 @@ class OCRImport(Document):
 		self.status = "Draft Created"
 		self.save()
 
-		frappe.msgprint(
-			_("Purchase Invoice {0} created as draft.").format(
-				frappe.utils.get_link_to_form("Purchase Invoice", pi.name)
-			),
-			indicator="green",
+		msg = _("Purchase Invoice {0} created as draft.").format(
+			frappe.utils.get_link_to_form("Purchase Invoice", pi.name)
 		)
+		if divergence_warnings:
+			# (D) Never blocks — the draft above is already created. Just tell the
+			# reviewer loudly (ADR-0002).
+			msg += "<br><br>" + "<br>".join(divergence_warnings)
+		frappe.msgprint(msg, indicator="green" if not divergence_warnings else "orange")
 
 		return pi.name
 
@@ -1019,6 +1088,13 @@ class OCRImport(Document):
 				)
 			)
 
+		# (D) Divergence warnings (v1.10.2, ADR-0002: warn, never block) — see
+		# create_purchase_invoice for rationale.
+		divergence_warnings = [msg for msg in (_check_line_divergence(item) for item in self.items) if msg]
+		doc_divergence = _check_document_total_divergence(self)
+		if doc_divergence:
+			divergence_warnings.append(doc_divergence)
+
 		pr_dict = {
 			"doctype": "Purchase Receipt",
 			"supplier": self.supplier,
@@ -1078,6 +1154,7 @@ class OCRImport(Document):
 			warnings.append(_("{0} unmatched row(s) skipped").format(skipped_unmatched))
 		if non_stock_warnings:
 			warnings.append(_("Non-stock items included: {0}").format(", ".join(non_stock_warnings)))
+		warnings.extend(divergence_warnings)
 		if warnings:
 			msg += "<br><br>" + _("Warning: {0}. Review the draft carefully.").format("; ".join(warnings))
 		frappe.msgprint(msg, indicator="green" if not warnings else "orange")

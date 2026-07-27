@@ -8,7 +8,10 @@ import pytest
 from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
 	REF_ITEM_FETCH_FIELDS,
 	OCRImport,
+	_amounts_diverge,
 	_build_taxes_from_template,
+	_check_document_total_divergence,
+	_check_line_divergence,
 	_detect_tax_inclusive_rates,
 	_effective_line_rate,
 	_effective_line_total,
@@ -1383,6 +1386,111 @@ class TestDiscountedLineCreation:
 
 		pi_item = mock_frappe.get_doc.call_args[0][0]["items"][0]
 		assert pi_item["rate"] == 53.00
+
+
+# ---------------------------------------------------------------------------
+# (D) Divergence warnings — never block (ADR-0002)
+# ---------------------------------------------------------------------------
+
+
+class TestDivergenceWarnings:
+	"""v1.10.2 (D): loud, non-blocking warnings at manual create time.
+
+	Check 1 (per line): qty * unit_price vs extracted amount.
+	Check 2 (whole doc): Sum(effective line total) vs extracted subtotal.
+	Both must warn via frappe.msgprint (indicator orange) and the draft must
+	still be created (ADR-0002 — never block manual creation).
+	"""
+
+	def test_line_divergence_warns_but_still_creates(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			subtotal=437.25,
+			items=[_make_item(qty=11, rate=53.00, amount=437.25)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		result = doc.create_purchase_invoice()
+
+		assert result == "PI-00001"  # draft still created
+		call = mock_frappe.msgprint.call_args
+		assert call.kwargs.get("indicator") == "orange"
+		msg = call.args[0]
+		assert "53.00" in msg or "583.00" in msg
+		assert "437.25" in msg
+
+	def test_no_warning_when_amount_matches_qty_times_rate(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			subtotal=850.00,
+			items=[_make_item(qty=10, rate=85.00, amount=850.00)],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		call = mock_frappe.msgprint.call_args
+		assert call.kwargs.get("indicator") == "green"
+
+	def test_no_warning_on_subcent_rounding_noise(self, mock_frappe, sample_settings):
+		"""A one-cent difference (ERPNext's own working-precision rounding) must
+		NOT trigger either divergence warning."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			subtotal=850.01,
+			items=[_make_item(qty=10, rate=85.00, amount=850.01)],  # 1c off qty*rate
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		call = mock_frappe.msgprint.call_args
+		assert call.kwargs.get("indicator") == "green"
+
+	def test_document_total_divergence_warns_but_still_creates(self, mock_frappe, sample_settings):
+		"""The live second defect: a line's amount extracted from a DIFFERENT
+		invoice on the same scanned page — Sum(amount) != subtotal, even
+		though each individual line's qty*rate == its own amount."""
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice",
+			subtotal=1470.75,
+			items=[
+				_make_item(qty=11, rate=53.00, amount=437.25),
+				_make_item(qty=20, rate=53.00, amount=795.00),
+				# Contaminated line: qty/rate/amount from a different invoice.
+				_make_item(qty=4, rate=159.00, amount=636.00, item_code="ITEM-002"),
+			],
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		result = doc.create_purchase_invoice()
+
+		assert result == "PI-00001"  # draft still created
+		call = mock_frappe.msgprint.call_args
+		assert call.kwargs.get("indicator") == "orange"
+		msg = call.args[0]
+		assert "1470.75" in msg
+		assert "1868.25" in msg  # 437.25 + 795.00 + 636.00
+
+	def test_pr_divergence_warns_but_still_creates(self, mock_frappe, sample_settings):
+		doc = _make_ocr_import(
+			document_type="Purchase Receipt",
+			status="Matched",
+			subtotal=437.25,
+			items=[_make_item(qty=11, rate=53.00, amount=437.25)],
+		)
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler(item_is_stock=1)
+		mock_frappe.get_cached_doc.return_value = sample_settings
+		created_pr = MagicMock()
+		created_pr.name = "PR-00001"
+		mock_frappe.get_doc.return_value = created_pr
+		mock_frappe.msgprint = MagicMock()
+
+		result = doc.create_purchase_receipt()
+
+		assert result == "PR-00001"  # draft still created
+		call = mock_frappe.msgprint.call_args
+		assert call.kwargs.get("indicator") == "orange"
 
 
 class TestExtractServicePattern:
