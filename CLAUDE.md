@@ -29,10 +29,10 @@ invariants. Reference it; do not duplicate its rules here.
 - **frappe-agent-architect** — multi-app boundaries (the fleet_management integration, planned starpops_accounts fold-in)
 - **frappe-react-spa** — the starpops_accounts dashboard slated to fold into this app
 - **cloudflare-bot-fight-blocks-spa** — "403 everywhere after login" on the Cloudflare-proxied desk
-- **frappe-impl-scheduler** — the hourly email poll + 15-min Drive polls (scan / DN / fleet)
-- **frappe-impl-integrations** — Gemini API + Google Drive service-account integration
-- **frappe-core-permissions** / **frappe-errors-permissions** — DocPerm shadows, role gating
-- **frappe-impl-controllers** / **frappe-impl-clientscripts** — doctype controllers + desk JS
+- **frappe-scheduler** — the hourly email poll + 15-min Drive polls (scan / DN / fleet)
+- **frappe-integrations** — Gemini API + Google Drive service-account integration
+- **frappe-permissions** — DocPerm shadows, role gating
+- **frappe-controllers** / **frappe-clientscripts** — doctype controllers + desk JS
 - **frappe-testing-unit** — the test suite (`pytest erpocr_integration/tests/`, frappe fully mocked)
 - **ai-handoff** — package a Codex / second-opinion handoff (per the brief-driven workflow)
 
