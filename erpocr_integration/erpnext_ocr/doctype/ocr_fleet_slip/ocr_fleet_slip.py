@@ -448,6 +448,7 @@ class OCRFleetSlip(Document):
 				},
 				fields=["name", "file_url", "file_name"],
 				limit=1,
+				order_by="creation desc",
 			)
 			if files:
 				frappe.get_doc(

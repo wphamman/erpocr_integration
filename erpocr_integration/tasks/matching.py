@@ -465,6 +465,7 @@ def match_service_item(
 				"description_pattern": SUPPLIER_DEFAULT_PATTERN,
 			},
 			fields=["description_pattern", "item_code", "item_name", "expense_account", "cost_center"],
+			order_by="modified desc, name asc",
 			limit_page_length=1,
 			ignore_permissions=True,
 		)

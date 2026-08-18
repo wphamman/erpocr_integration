@@ -781,6 +781,7 @@ def retry_fleet_extraction(ocr_fleet_name: str):
 		},
 		fields=["name", "file_url", "file_name"],
 		limit=1,
+		order_by="creation desc",
 	)
 
 	if files:
@@ -964,6 +965,7 @@ def route_to_invoice_pipeline(ocr_fleet_name: str):
 		},
 		fields=["name", "file_name"],
 		limit=1,
+		order_by="creation desc",
 	)
 	if not files:
 		frappe.throw(_("No scan attachment found on this fleet slip."))

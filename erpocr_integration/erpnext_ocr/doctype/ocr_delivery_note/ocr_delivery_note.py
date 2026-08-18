@@ -364,6 +364,7 @@ class OCRDeliveryNote(Document):
 			},
 			fields=["name", "file_url", "file_name"],
 			limit=1,
+			order_by="creation desc",
 		)
 		if attachments:
 			att = attachments[0]
