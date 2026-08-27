@@ -4,7 +4,7 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.10.2** (product baseline `7d1fa7e` = tag `v1.10.2`; see the v1.10.1/v1.10.2
+**Current through v1.10.3** (product baseline `f45b542` = tag `v1.10.3`; see the v1.10.1–v1.10.3
 delta notes below). Historical context from the v1.10.0 baseline (`39b9562`) follows.
 
 **v1.10.0 provider delta:** the existing
@@ -30,6 +30,15 @@ ordinary OCR-Manager consumer sees today's `Error`-only behaviour unchanged. (b)
 that child table are unaffected, but a consumer recomputing a line total should now read `amount` as
 authoritative rather than `qty × rate` (the same rule this app's own builders adopted). No §4
 Custom-Field or §2c provider-contract change.
+
+**v1.10.3 delta: NONE.** Three internal items — an `/apps` back-link in the `/accounts` SPA header
+(kiosk mode; UI only), removal of `db.commit()` from the two Purchase Invoice `doc_events` handlers
+for fleet slips (v16 R11 — the hooks still fire and still flip the slip's status; they simply no
+longer commit mid-transaction), and `order_by` pinned on five order-dependent queries (v16 R8). No
+method, signature, payload, response, permission, or field change; still 33 methods. **Note for the
+tablet roster:** the three drivers who held `OCR Fleet Slip Reader`/`OCR Fleet Driver` on prod were
+stripped 2026-08-27 — those roles were pre-D0 leftovers; `upload_fleet_slip` keys on plain `Driver`
+(§2c) and is unaffected.
 
 **v1.10.0 ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
 closed for cookie-authenticated requests unless an initialized session CSRF token matches the
