@@ -726,9 +726,12 @@ def update_ocr_fleet_on_submit(doc, method):
 
 	for name in fleet_slips:
 		frappe.db.set_value("OCR Fleet Slip", name, "status", "Completed")
-
-	if fleet_slips:
-		frappe.db.commit()  # nosemgrep
+	# No db.commit() here: this runs INSIDE the Purchase Invoice's own submit
+	# transaction, which Frappe commits at the end of the request. Committing
+	# from a doc_events hook is forbidden on v16 (R11) and was always wrong on
+	# v15 — it would have persisted the slip status even if the PI submit
+	# subsequently rolled back. The sibling handlers in api.py / dn_api.py
+	# never committed; this one was a background-job habit misapplied.
 
 
 def update_ocr_fleet_on_cancel(doc, method):
@@ -749,9 +752,7 @@ def update_ocr_fleet_on_cancel(doc, method):
 		ocr_doc.db_set("document_type", "")
 		ocr_doc.status = "Matched"  # _update_status() will recompute on save
 		ocr_doc.save(ignore_permissions=True)
-
-	if fleet_slips:
-		frappe.db.commit()  # nosemgrep
+	# No db.commit() — same reasoning as update_ocr_fleet_on_submit above.
 
 
 # ── Retry endpoint ──────────────────────────────────────────────

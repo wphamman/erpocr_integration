@@ -2,6 +2,38 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.3] — 2026-08-27
+
+Patch release. Two small items that each earned their place from a portfolio broadcast rather
+than a user report: a kiosk-mode escape hatch for the accounts dashboard, and the v16-readiness
+sweep's only real defects.
+
+### Added
+- **`Apps` back-link in the accounts dashboard's shared header (`TopNav`).** The factory tablets
+  now run Hexnode kiosk mode — no browser chrome, no back button, no URL bar — so an SPA with no
+  in-app route out strands whoever opens it. Three floor drivers hold `OCR Fleet Slip Reader` /
+  `OCR Fleet Driver` on prod and therefore see the OCR Accounts tile (measured read-only
+  2026-08-27). The link is a plain `<a href="/apps">` (a full page load — `/apps` is outside the
+  SPA's `/accounts` basename), deliberately not `history.back()` (empty on a fresh kiosk launch),
+  and lives in the shared chrome so every route carries it. Committed dist rebuilt (ADR-0011).
+
+### Fixed
+- **Removed `frappe.db.commit()` from the two Purchase Invoice `doc_events` handlers for fleet
+  slips** (`update_ocr_fleet_on_submit` / `update_ocr_fleet_on_cancel`). They run inside the PI's
+  own submit/cancel transaction; committing there is forbidden on Frappe v16 (R11) and was wrong on
+  v15 too — the slip status could persist even if the PI submit then rolled back. The six sibling
+  handlers never committed; these two were a background-job convention misapplied to a document
+  hook. Behaviour on a successful submit is identical.
+- **Pinned `order_by` on five order-dependent queries** (v16 R8; commit `15c2a60`). v16 flips the
+  implicit sort default from `modified` to `creation`, so a `limit=1` query without `order_by`
+  silently returns a different row. Four scan-attachment lookups now pin `creation desc` (matching
+  the three sibling lookups that already did); the supplier-default service-mapping lookup pins
+  `modified desc, name asc` (the alias tiers' convention). No behaviour change on v15.
+
+### Not changed
+- Two `/app/login#forgot` literals remain baked into the committed dist (v16 R13 inventory item).
+  Cosmetic on v16 (`/app` → `/desk` reroutes); rides a later release.
+
 ## [1.10.2] — 2026-07-27
 
 Patch release. Fixes a live defect where a per-line invoice discount (ElectraHertz's `%Disc`
