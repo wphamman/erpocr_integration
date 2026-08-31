@@ -48,5 +48,5 @@ production's v0.3.1 case), which is why this is *floor-relevant* and not EXPEDIT
 **Rollback:** re-deploy tag `v1.10.2`.
 
 ---
-**Status:** REQUESTED 2026-08-27. Not yet on the deploy list.
+**Status: DEPLOYED — live on BOTH sites as 1.10.3.** SP probe-verified by the portfolio coordinator 2026-08-28 (`get_versions` 1.10.3; served `index-BzWdz_5o.js` → 200, `"/apps"` ×1); Cactus probe-verified by this architect 2026-08-31, same asset hash. No rollback needed.
 **Amended 2026-08-27 (later): reclassify floor-relevant → ROUTINE.** The three drivers' OCR roles were pre-D0 leftovers and have been stripped on prod (authorised write; see `flag-erpocr_integration-to-portfolio-three-driver-OCR-roles-STRIPPED-…-2026-08-27.md`). No kiosk user can reach the OCR tile any more, so the back-link is defensive. Ride any list; the v16 R8/R11 fixes are the substantive content. Everything else above stands unchanged.
