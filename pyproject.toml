@@ -16,6 +16,13 @@ dependencies = [
 	"google-auth-oauthlib>=0.5.0"
 ]
 
+[tool.bench.frappe-dependencies]
+# ADR-032 (portfolio, 2026-09-01). Press deploys the tracked branch HEAD, so this
+# branch MUST stay <16. The v16 pin lives ONLY on the `version-16` branch, which
+# is kept thin: this key and nothing else. R8-R15 fixes are dual-compatible and
+# land here, never on version-16.
+frappe = ">=15.0.0,<16.0.0"
+
 [build-system]
 requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
