@@ -277,6 +277,7 @@
 			"fieldtype": "Link",
 			"label": "Cost Center",
 			"options": "Cost Center",
+			"ignore_user_permissions": 1,
 			"description": "Applied to every line that doesn't have its own Cost Center. Falls back to OCR Settings default if blank."
 		},
 		{
