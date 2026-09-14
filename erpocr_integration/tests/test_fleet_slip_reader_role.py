@@ -2,7 +2,7 @@
 
 Guards against the most likely regression: someone adding this role to another
 doctype's permissions block and quietly widening its read scope. The role must
-appear in exactly two places in the repo — the Role fixture and the OCR Fleet
+appear in exactly two places in the repo — the Role seed (create-only, install._seed_roles — was a fixture until v1.10.4) and the OCR Fleet
 Slip doctype's permissions array — and must never grant create/delete/submit
 anywhere. Write is granted on OCR Fleet Slip so the reader can resolve
 "Needs Review" records (correct vehicle match, mark No Action) without being
