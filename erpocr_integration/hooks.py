@@ -183,8 +183,15 @@ scheduler_events = {
 # — fixture sync runs unconditionally and breaks install on sites without that app.
 # Fields on core doctypes (the PI/PR/JE → OCR Import back-link) live in
 # install.setup_custom_fields() for the same single-owner reason.
+# Role is deliberately NOT a fixture (removed v1.10.4) — and the
+# `fixtures/role.json` FILE is gone: `import_fixtures` imports every JSON in
+# `fixtures/` regardless of this list, and a fixture import DELETES and
+# RE-INSERTS the doc on every migrate (Frappe Press: every sibling app's
+# deploy migrates the whole site), which silently reverted any operator edit
+# to these roles (2026-09-10 audit: our 3 OCR roles' `creation` reset to a
+# payroll app's deploy). Seeded create-only by `install._seed_roles`
+# (pinned by tests/test_install.py).
 fixtures = [
-	{"dt": "Role", "filters": [["name", "in", ["OCR Manager", "OCR Fleet Slip Reader", "OCR Fleet Driver"]]]},
 	{"dt": "Number Card", "filters": [["module", "=", "ERPNext OCR"]]},
 	{"dt": "Dashboard Chart", "filters": [["module", "=", "ERPNext OCR"]]},
 ]

@@ -9,6 +9,9 @@ Why this lives in code and not in fixtures:
     `options` points at "Fleet Vehicle" raises a meta-resolution error on sites
     that don't have fleet_management installed (see v1.1.5 → v1.1.6 hotfix). Code-
     driven install lets us check first and skip cleanly.
+
+Also seeds the app-owned OCR roles create-only (`_seed_roles`, v1.10.4) — see
+that function's docstring for why a Role fixture was the wrong tool.
 """
 
 from __future__ import annotations
@@ -16,9 +19,57 @@ from __future__ import annotations
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+# App-owned roles (was `fixtures/role.json` until v1.10.4). A Role fixture is
+# DELETED AND RE-INSERTED on every migrate (`import_doc` -> `delete_old_doc`),
+# and on Frappe Press every app's deploy migrates the whole site — so an
+# operator disabling one of these roles, or flipping desk_access, was silently
+# reverted by an unrelated sibling app's deploy (2026-09-10 portfolio audit:
+# our 3 OCR roles' `creation` reset to a payroll app's migrate timestamp).
+# Values match the retired fixture exactly.
+_SEED_ROLES: tuple[dict, ...] = (
+	{
+		"role_name": "OCR Manager",
+		"is_custom": 1,
+		"desk_access": 1,
+		"search_bar": 1,
+		"notifications": 1,
+	},
+	{
+		"role_name": "OCR Fleet Slip Reader",
+		"is_custom": 0,
+		"desk_access": 1,
+		"disabled": 0,
+	},
+	{
+		"role_name": "OCR Fleet Driver",
+		"is_custom": 0,
+		"desk_access": 0,
+		"disabled": 0,
+	},
+)
+
+
+def _seed_roles() -> None:
+	"""Create the app-owned OCR roles if missing. CREATE-ONLY.
+
+	An existing Role (whatever its desk_access / disabled / two_factor_auth /
+	any other operator-tuned field) is never touched — no `.save()`, no field
+	re-assert. This is deliberate: unlike `fixtures/role.json` (removed
+	v1.10.4), which Frappe's `sync_fixtures` deletes and re-inserts on every
+	migrate — including migrates triggered by *other* apps' deploys on shared
+	Frappe Press hosts — this seed only ever fills a gap, never overwrites an
+	operator's edit. See the 2026-09-10 portfolio audit (CLAUDE.md gotcha) and
+	the `starpops_maintenance` v0.3.9 precedent this mirrors.
+	"""
+	for role in _SEED_ROLES:
+		if frappe.db.exists("Role", role["role_name"]):
+			continue
+		frappe.get_doc({"doctype": "Role", **role}).insert(ignore_permissions=True)
+
 
 def after_install() -> None:
 	"""Hook target: `after_install` in hooks.py."""
+	_seed_roles()
 	setup_custom_fields()
 	setup_optional_custom_fields()
 
@@ -26,8 +77,11 @@ def after_install() -> None:
 def after_migrate() -> None:
 	"""Hook target: `after_migrate` in hooks.py.
 
-	Idempotent — safe to run on every migrate.
+	Idempotent — safe to run on every migrate. `_seed_roles` runs first so the
+	roles exist before anything (Custom DocPerm, a future grant) references
+	them.
 	"""
+	_seed_roles()
 	setup_custom_fields()
 	setup_optional_custom_fields()
 
@@ -129,6 +183,7 @@ def setup_optional_custom_fields() -> None:
 						"fieldtype": "Link",
 						"options": "Cost Center",
 						"insert_after": "custom_column_break_ocr",
+						"ignore_user_permissions": 1,
 						"description": "Cost center for expense allocation on fleet slips for this vehicle",
 					},
 				],
