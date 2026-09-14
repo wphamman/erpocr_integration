@@ -86,6 +86,7 @@
 			"fieldtype": "Link",
 			"label": "Cost Center",
 			"options": "Cost Center",
+			"ignore_user_permissions": 1,
 			"description": "Cost Center (optional)"
 		},
 		{

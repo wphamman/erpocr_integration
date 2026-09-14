@@ -2,6 +2,37 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.4] — 2026-09-14
+
+Patch release. Operator-safe seeds: stop a sibling app's deploy from silently reverting
+role edits, and close the other half of the v1.1.1 cost-centre User-Permission fix.
+
+### Fixed
+- **The 3 OCR roles are now seeded create-only instead of shipped as a Role fixture.**
+  `sync_fixtures` re-imports every `fixtures/*.json` with `force=True` on EVERY app's
+  site-migrate (Frappe Press runs a full-site migrate per deploy) — a fixture import
+  deletes and re-inserts the doc, so an operator's edit to `disabled` / `desk_access` /
+  `two_factor_auth` on `OCR Manager` / `OCR Fleet Slip Reader` / `OCR Fleet Driver` was
+  silently reverted by an unrelated sibling app's deploy (2026-09-10 portfolio audit
+  measured our 3 roles' `creation` reset to a payroll app's migrate timestamp). `Has Role`
+  grants happened to survive only because `for_reload` skips `Role.on_trash`. `install._seed_roles`
+  now creates each role only if missing, never re-asserting an existing row; `fixtures/role.json`
+  is deleted and the `Role` entry removed from `hooks.py`'s `fixtures` list.
+- **`ignore_user_permissions: 1` on the 3 remaining ungated `cost_center` Links** (`OCR Import`,
+  `OCR Import Item`, `OCR Service Mapping`) — the unfinished half of the v1.1.1 fix (`cbf639b`),
+  which only reached `OCR Fleet Slip.cost_center`. Without it, a Cost Center User Permission on
+  an OCR Manager/Accounts user silently filtered these lists/reports to only their permitted
+  cost centres, which is not what a doc-level convenience field or a line-level GL-coding field
+  should ever do. `company` fields are deliberately untouched (ruled: stays gated).
+- **`ignore_user_permissions: 1` on the planted `Fleet Vehicle.custom_cost_center`** Custom Field
+  (`install.setup_optional_custom_fields`) — prod already carries this via a manual 2026-08-31 fix;
+  this makes a fresh install (the v16 test site) match without a manual step.
+
+No behaviour change on prod today: the 3 roles already exist and are untouched by this seed: the
+live `custom_cost_center` field is already `1` from the manual fix; and only 19 of 1257 OCR
+Imports carry a cost centre at all, so the User-Permission gap had limited blast radius so far —
+this closes it before it does.
+
 ## [1.10.3] — 2026-08-27
 
 Patch release. Two small items that each earned their place from a portfolio broadcast rather

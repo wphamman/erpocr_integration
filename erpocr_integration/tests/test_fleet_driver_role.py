@@ -14,6 +14,9 @@ import glob
 import json
 import os
 
+from erpocr_integration import hooks
+from erpocr_integration.install import _SEED_ROLES
+
 APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROLE_NAME = "OCR Fleet Driver"
 
@@ -28,22 +31,23 @@ def _doctype_jsons():
 	return [p for p in glob.glob(pattern) if not p.endswith(("_list.json", "_dashboard.json"))]
 
 
-def test_role_fixture_exists():
-	"""Role fixture must define OCR Fleet Driver. desk_access=0 — drivers use the
-	shell SPA + the whitelisted API, never the ERPNext Desk."""
-	roles = _load_json(os.path.join(APP_ROOT, "fixtures", "role.json"))
-	entry = next((r for r in roles if r.get("role_name") == ROLE_NAME), None)
-	assert entry is not None, f"{ROLE_NAME} missing from fixtures/role.json"
-	assert entry.get("doctype") == "Role"
+def test_role_seeded_create_only_not_fixtured():
+	"""v1.10.4: role is app-owned + seeded create-only, not fixture-delivered —
+	a Role fixture is deleted and re-inserted on every sibling app's migrate,
+	silently reverting operator edits. desk_access=0 — drivers use the shell
+	SPA + the whitelisted API, never the ERPNext Desk."""
+	assert not os.path.exists(os.path.join(APP_ROOT, "fixtures", "role.json"))
+	entry = next((r for r in _SEED_ROLES if r.get("role_name") == ROLE_NAME), None)
+	assert entry is not None, f"{ROLE_NAME} missing from install._SEED_ROLES"
 	assert entry.get("disabled") == 0
 	assert entry.get("desk_access") == 0, "driver role must not have Desk access"
 
 
-def test_hooks_fixtures_include_role():
-	"""hooks.py must export this role in its Role fixture filter."""
-	with open(os.path.join(APP_ROOT, "hooks.py")) as f:
-		content = f.read()
-	assert ROLE_NAME in content, f"{ROLE_NAME} must appear in hooks.py fixtures filter"
+def test_hooks_fixtures_do_not_include_role():
+	"""hooks.py must no longer export a Role fixture (v1.10.4) — roles are
+	seeded create-only by install._seed_roles instead."""
+	dts = {f.get("dt") if isinstance(f, dict) else f for f in hooks.fixtures}
+	assert "Role" not in dts
 
 
 def test_fleet_slip_grants_create_and_if_owner_read_only():
