@@ -4,7 +4,7 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.10.3** (product baseline `f45b542` = tag `v1.10.3`; see the v1.10.1–v1.10.3
+**Current through v1.10.4** (product baseline = tag `v1.10.4`, pending; see the v1.10.1–v1.10.4
 delta notes below). Historical context from the v1.10.0 baseline (`39b9562`) follows.
 
 **v1.10.0 provider delta:** the existing
@@ -39,6 +39,16 @@ method, signature, payload, response, permission, or field change; still 33 meth
 tablet roster:** the three drivers who held `OCR Fleet Slip Reader`/`OCR Fleet Driver` on prod were
 stripped 2026-08-27 — those roles were pre-D0 leftovers; `upload_fleet_slip` keys on plain `Driver`
 (§2c) and is unaffected.
+
+**v1.10.4 delta: no method change (still 33); ONE property change consumers may notice.** (a) The three
+OCR roles are now **seeded create-only** in `after_install`/`after_migrate` instead of shipped as
+`fixtures/role.json` — a Role fixture was delete+reinserted on every sibling app's Press migrate,
+reverting operator edits to the role docs. Same three roles, same values; nothing to mirror.
+(b) `cost_center` on `OCR Import` / `OCR Import Item` / `OCR Service Mapping` and the planted
+`Fleet Vehicle.custom_cost_center` now carry **`ignore_user_permissions: 1`** (as `OCR Fleet Slip.cost_center`
+already did) — a Cost Center User Permission no longer filters those lists for its holder. A consumer that
+was (unknowingly) relying on that filtering as a scoping mechanism should say so; `company` remains a
+deliberate, ungated single-company boundary.
 
 **v1.10.0 ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
 closed for cookie-authenticated requests unless an initialized session CSRF token matches the
@@ -212,7 +222,7 @@ on OCR-built fuel/toll PIs:
 - Backfill: `patches/v1_0_5/backfill_fleet_pi_vehicle.py`.
 - If `fleet_management` is absent, the field doesn't exist and population is skipped silently.
 
-## 5. Roles (shipped via `fixtures/role.json`)
+## 5. Roles (seeded create-only by `install._seed_roles` — NOT a fixture since v1.10.4)
 - **OCR Manager** — operations: review imports, create documents.
 - **OCR Fleet Slip Reader** — read + write (no create/delete) on fleet slip data (Desk review).
 - **OCR Fleet Driver** (P4) — **create on OCR Fleet Slip ONLY**, reads `if_owner`-scoped, no
