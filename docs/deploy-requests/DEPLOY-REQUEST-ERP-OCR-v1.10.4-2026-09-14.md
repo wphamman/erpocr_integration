@@ -46,4 +46,4 @@ Grok 4.5 SHIP. 916 → **926 tests**, ruff clean. CI on `b9a7f13`: see status li
 **Rollback:** re-deploy tag `v1.10.3`.
 
 ---
-**Status:** REQUESTED 2026-09-14. Not yet on the deploy list.
+**Status:** DEPLOYED — both sites 2026-09-14 21:18 SAST (DEPLOY-LIST-2026-09-14 rev3, item 5). Coordinator probe-verified 2026-09-15; architect re-probed both sites 2026-09-16 (authorised read-only): get_versions 1.10.4, OCR roles' `creation` unchanged through the migrate, `cost_center` iup=1 live on OCR Import + Item.
