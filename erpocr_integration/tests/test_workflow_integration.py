@@ -5,11 +5,12 @@ verifying guard behavior across document types and the full PO→PR→PI chain.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
 from erpocr_integration.api import (
+	_learn_from_submitted_document,
 	get_open_purchase_orders,
 	get_purchase_receipts_for_po,
 	match_po_items,
@@ -785,3 +786,487 @@ class TestDocEventHooks:
 		update_ocr_import_on_submit(doc, "on_submit")
 
 		mock_frappe.get_all.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Submit-time learning — v1.11.0, Fix A / Q18
+# ---------------------------------------------------------------------------
+
+
+def _make_submitted_line(**overrides):
+	"""A minimal submitted PI/PR line (SimpleNamespace, real ERPNext field names)."""
+	defaults = dict(
+		description="Test Item",
+		item_code="ITEM-001",
+		item_name="Test Item",
+		expense_account="",
+		cost_center="",
+	)
+	defaults.update(overrides)
+	return SimpleNamespace(**defaults)
+
+
+def _set_default_item(mock_frappe, default_item=""):
+	"""Configure OCR Settings.default_item for _learn_from_submitted_document."""
+	settings = SimpleNamespace(default_item=default_item)
+	settings.get = lambda key, default=None: getattr(settings, key, default)
+	mock_frappe.get_cached_doc.return_value = settings
+
+
+def _get_doc_side_effect(ocr_import_doc):
+	"""frappe.get_doc side_effect: retrieval calls return the prepared fixture,
+	dict-based insert() calls (alias/mapping creation) get a fresh MagicMock."""
+
+	def handler(first, *rest):
+		if first == "OCR Import":
+			return ocr_import_doc
+		if isinstance(first, str):
+			# e.g. frappe.get_doc("OCR Service Mapping", existing_name) — an
+			# UPDATE of an existing mapping row.
+			return MagicMock()
+		return MagicMock()
+
+	return handler
+
+
+def _dict_insert_calls(mock_frappe, doctype):
+	"""All frappe.get_doc({...}) calls (insert-a-new-record shape) for `doctype`."""
+	return [
+		call
+		for call in mock_frappe.get_doc.call_args_list
+		if isinstance(call.args[0], dict) and call.args[0].get("doctype") == doctype
+	]
+
+
+class TestSubmitTimeLearning:
+	"""Fix A / Q18 (v1.11.0): learn supplier + item mappings from the SUBMITTED
+	PI/PR — the strongest human-validated signal, stronger than an operator
+	silently accepting a pre-filled Suggested match (which on_update's
+	Confirmed-only gate never sees). See api._learn_from_submitted_document."""
+
+	def _ocr_import(self, **overrides):
+		defaults = dict(
+			supplier="Acme Trading",
+			supplier_name_ocr="ACME TRADNG LTD",
+			supplier_match_status="Suggested",
+			items=[],
+		)
+		defaults.update(overrides)
+		return _make_ocr_import(**defaults)
+
+	# -- Supplier learning --------------------------------------------------
+
+	def test_supplier_learned_when_suggested(self, mock_frappe):
+		ocr_import = self._ocr_import(supplier_match_status="Suggested")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None  # no existing alias
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		alias_calls = _dict_insert_calls(mock_frappe, "OCR Supplier Alias")
+		assert len(alias_calls) == 1
+		assert alias_calls[0].args[0]["ocr_text"] == "ACME TRADNG LTD"
+		assert alias_calls[0].args[0]["supplier"] == "Acme Trading"
+
+	def test_supplier_learned_when_unmatched(self, mock_frappe):
+		ocr_import = self._ocr_import(supplier_match_status="Unmatched")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert len(_dict_insert_calls(mock_frappe, "OCR Supplier Alias")) == 1
+
+	def test_supplier_not_learned_when_auto_matched(self, mock_frappe):
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Supplier Alias") == []
+
+	def test_supplier_not_learned_when_confirmed(self, mock_frappe):
+		ocr_import = self._ocr_import(supplier_match_status="Confirmed")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Supplier Alias") == []
+
+	def test_supplier_taken_from_doc_not_ocr_import(self, mock_frappe):
+		"""The OCR Import's own `supplier` field is the record's CURRENT best
+		guess — the submitted doc's supplier is the ground truth to learn,
+		which may differ (the operator can change supplier on the PI draft
+		after OCR Import creation)."""
+		ocr_import = self._ocr_import(supplier="Wrong Supplier", supplier_match_status="Suggested")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Correct Supplier",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		alias_calls = _dict_insert_calls(mock_frappe, "OCR Supplier Alias")
+		assert alias_calls[0].args[0]["supplier"] == "Correct Supplier"
+
+	def test_supplier_alias_correction(self, mock_frappe):
+		ocr_import = self._ocr_import(supplier_match_status="Suggested")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = "Old Supplier"  # existing alias points elsewhere
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		mock_frappe.db.set_value.assert_any_call(
+			"OCR Supplier Alias", "ACME TRADNG LTD", {"supplier": "Acme Trading", "source": "Auto"}
+		)
+
+	def test_je_submit_learns_nothing(self, mock_frappe):
+		je = SimpleNamespace(doctype="Journal Entry", name="JE-001")
+
+		_learn_from_submitted_document(je, "OCR-IMP-00001")
+
+		mock_frappe.get_doc.assert_not_called()
+
+	def test_pr_submit_also_learns(self, mock_frappe):
+		"""Purchase Receipt submit is listed alongside PI in field_map/spec."""
+		ocr_import = self._ocr_import(supplier_match_status="Suggested")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pr = SimpleNamespace(
+			doctype="Purchase Receipt",
+			name="PR-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pr, "OCR-IMP-00001")
+
+		assert len(_dict_insert_calls(mock_frappe, "OCR Supplier Alias")) == 1
+
+	# -- Item learning --------------------------------------------------
+
+	def test_default_item_line_learns_mapping_only(self, mock_frappe):
+		_set_default_item(mock_frappe, default_item="ITEM-DEFAULT")
+		row = _make_item(
+			description_ocr="Misc Charge",
+			match_status="Suggested",
+			item_code="",
+		)
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(
+			description="Misc Charge",
+			item_code="ITEM-DEFAULT",
+			expense_account="5000 - Misc - TC",
+			cost_center="Main - TC",
+		)
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Item Alias") == []
+		assert len(_dict_insert_calls(mock_frappe, "OCR Service Mapping")) == 1
+
+	def test_default_item_line_without_expense_account_learns_nothing(self, mock_frappe):
+		_set_default_item(mock_frappe, default_item="ITEM-DEFAULT")
+		row = _make_item(description_ocr="Misc Charge", match_status="Suggested", item_code="")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(description="Misc Charge", item_code="ITEM-DEFAULT", expense_account="")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Item Alias") == []
+		assert _dict_insert_calls(mock_frappe, "OCR Service Mapping") == []
+
+	def test_normal_item_learns_alias_and_mapping(self, mock_frappe):
+		_set_default_item(mock_frappe, default_item="")
+		row = _make_item(description_ocr="Bracket 40mm", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(
+			description="Bracket 40mm",
+			item_code="ITEM-A",
+			expense_account="5000 - COGS - TC",
+			cost_center="Main - TC",
+		)
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		alias_calls = _dict_insert_calls(mock_frappe, "OCR Item Alias")
+		mapping_calls = _dict_insert_calls(mock_frappe, "OCR Service Mapping")
+		assert len(alias_calls) == 1
+		assert alias_calls[0].args[0]["item_code"] == "ITEM-A"
+		assert alias_calls[0].args[0]["supplier"] == "Acme Trading"
+		assert len(mapping_calls) == 1
+
+	def test_normal_item_without_expense_account_learns_alias_only(self, mock_frappe):
+		_set_default_item(mock_frappe, default_item="")
+		row = _make_item(description_ocr="Bracket 40mm", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(description="Bracket 40mm", item_code="ITEM-A", expense_account="")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert len(_dict_insert_calls(mock_frappe, "OCR Item Alias")) == 1
+		assert _dict_insert_calls(mock_frappe, "OCR Service Mapping") == []
+
+	def test_auto_matched_item_row_not_relearned(self, mock_frappe):
+		"""Only Suggested rows are eligible — Auto Matched/Confirmed rows
+		already learned via on_update (or need no learning at all)."""
+		_set_default_item(mock_frappe, default_item="")
+		row = _make_item(description_ocr="Bracket 40mm", match_status="Auto Matched", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(
+			description="Bracket 40mm", item_code="ITEM-A", expense_account="5000 - COGS - TC"
+		)
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Item Alias") == []
+		assert _dict_insert_calls(mock_frappe, "OCR Service Mapping") == []
+
+	def test_ambiguous_description_on_submitted_doc_skipped(self, mock_frappe):
+		"""Two submitted lines share the OCR row's description — can't tell
+		which one corresponds, so the row is skipped silently."""
+		_set_default_item(mock_frappe, default_item="")
+		row = _make_item(description_ocr="Duplicate Item", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line1 = _make_submitted_line(description="Duplicate Item", item_code="ITEM-A")
+		line2 = _make_submitted_line(description="Duplicate Item", item_code="ITEM-B")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line1, line2],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Item Alias") == []
+		assert _dict_insert_calls(mock_frappe, "OCR Service Mapping") == []
+
+	def test_ambiguous_ocr_rows_skipped(self, mock_frappe):
+		"""Two OCR Import rows share the same description_ocr — the row is
+		skipped even though the submitted doc has a unique matching line."""
+		_set_default_item(mock_frappe, default_item="")
+		row1 = _make_item(description_ocr="Duplicate Item", match_status="Suggested", item_code="ITEM-A")
+		row2 = _make_item(description_ocr="Duplicate Item", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row1, row2])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(description="Duplicate Item", item_code="ITEM-A")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Item Alias") == []
+
+	def test_no_matching_line_on_doc_skipped(self, mock_frappe):
+		_set_default_item(mock_frappe, default_item="")
+		row = _make_item(description_ocr="Vanished Item", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Auto Matched", items=[row])
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		line = _make_submitted_line(description="Something Else", item_code="ITEM-A")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[line],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Item Alias") == []
+
+	# -- Isolation ------------------------------------------------------
+
+	def test_learning_exception_logged_submit_still_completes(self, mock_frappe):
+		mock_frappe.get_all.return_value = ["OCR-IMP-00001"]
+		mock_frappe.get_doc.side_effect = Exception("boom")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		update_ocr_import_on_submit(pi, "on_submit")
+
+		mock_frappe.db.set_value.assert_any_call("OCR Import", "OCR-IMP-00001", "status", "Completed")
+		mock_frappe.log_error.assert_called_once()
+		assert mock_frappe.log_error.call_args.kwargs["title"] == "OCR Submit Learning Failed"
+
+	def test_no_db_commit_in_learning_path(self, mock_frappe):
+		"""Isolation (Fix A point 3): learning must never call frappe.db.commit
+		itself — the caller's transaction owns that."""
+		ocr_import = self._ocr_import(supplier_match_status="Suggested")
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		mock_frappe.db.commit.assert_not_called()
+
+	def test_savepoint_rollback_on_learning_exception_after_partial_write(self, mock_frappe):
+		"""Review item 1: a learning failure AFTER a write already happened
+		(the supplier upsert succeeds, item processing then raises) must roll
+		back to a per-import savepoint — never ship a half-written alias when
+		the caller's outer transaction commits. The Completed status write
+		happens BEFORE the savepoint is taken and must not be undone by it."""
+		row = _make_item(description_ocr="Bracket 40mm", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Suggested", items=[row])
+		mock_frappe.get_all.return_value = ["OCR-IMP-00001"]
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None  # no existing supplier alias
+		# Item processing (reached only after the supplier alias write) blows
+		# up on the OCR Settings lookup.
+		mock_frappe.get_cached_doc.side_effect = Exception("boom in item processing")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		update_ocr_import_on_submit(pi, "on_submit")
+
+		# The supplier alias write happened before the failure.
+		assert len(_dict_insert_calls(mock_frappe, "OCR Supplier Alias")) == 1
+		# Rolled back to THIS import's own savepoint name.
+		mock_frappe.db.rollback.assert_called_once_with(save_point="ocr_submit_learning_OCR-IMP-00001")
+		mock_frappe.log_error.assert_called_once()
+		assert mock_frappe.log_error.call_args.kwargs["title"] == "OCR Submit Learning Failed"
+		# The Completed status write is NOT rolled back — it happens BEFORE
+		# the savepoint, verified by call order on the shared frappe mock.
+		set_completed = call.db.set_value("OCR Import", "OCR-IMP-00001", "status", "Completed")
+		savepoint_call = call.db.savepoint("ocr_submit_learning_OCR-IMP-00001")
+		rollback_call = call.db.rollback(save_point="ocr_submit_learning_OCR-IMP-00001")
+		calls = mock_frappe.mock_calls
+		idx_set = calls.index(set_completed)
+		idx_sp = calls.index(savepoint_call)
+		idx_rb = calls.index(rollback_call)
+		assert idx_set < idx_sp < idx_rb
+
+	def test_auto_drafted_record_skips_learning(self, mock_frappe):
+		"""Review item 2: auto_draft only fires on high-confidence (Auto
+		Matched/Confirmed) matches — there is nothing Suggested left to learn,
+		so an auto-drafted OCR Import must never train an alias."""
+		ocr_import = self._ocr_import(supplier_match_status="Suggested", auto_drafted=1)
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Supplier Alias") == []

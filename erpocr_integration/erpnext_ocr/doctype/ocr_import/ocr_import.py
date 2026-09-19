@@ -488,6 +488,196 @@ def _build_taxes_from_template(
 	return tax_template, taxes
 
 
+def _is_ignorable_zero_line(item) -> bool:
+	"""True when a zero-value OCR row is safe to ignore for readiness / confidence /
+	PI-building purposes (v1.11.0, Fix B / Q18).
+
+	Some suppliers print a genuine R0 line (e.g. a haulier's return leg, on every
+	invoice) that Gemini faithfully extracts as a second row: rate 0, amount 0,
+	usually the default_item with no expense_account. That row used to block
+	BOTH the Matched-readiness gate (`_update_status` — a non-stock item with no
+	expense_account routes to Needs Review) and the auto-draft confidence gate
+	(`auto_draft._is_high_confidence`), forcing an operator to delete it by hand
+	before every create.
+
+	ALL of the following must hold:
+	  - `rate == 0` AND `amount == 0` — a genuine R0 print, not merely unpriced.
+	    A row with a real `amount` but `rate` 0 (e.g. a lump-sum line) still
+	    counts as real.
+	  - no PO/PR reference. OCR Import Item carries a SINGLE field
+	    (`purchase_order_item`) that create_purchase_invoice reads to build the
+	    PI dict's `po_detail` key — there is no separate `po_detail` source
+	    field on this child table, just the one that feeds both PI and PR
+	    builders — plus `pr_detail`. A row tied to a real PO/PR line is a real
+	    transaction line, never noise.
+	  - `item_code` is blank, OR resolves to a non-stock Item. A genuinely FREE
+	    stock item (amount 0, rate 0) still needs a real receipt/invoice line —
+	    inventory quantity moved — so it is NEVER ignorable. A `item_code` that
+	    does NOT resolve at all (the Item record is missing — `get_value`
+	    returns None, not `0`) is treated as NOT ignorable too (review item,
+	    v1.11.0): only an explicit, existing, non-stock Item earns the skip —
+	    a dangling/renamed item_code must surface for review, not vanish.
+	"""
+	if flt(getattr(item, "rate", None)) != 0:
+		return False
+	if flt(getattr(item, "amount", None)) != 0:
+		return False
+	if getattr(item, "purchase_order_item", None) or getattr(item, "pr_detail", None):
+		return False
+	item_code = (getattr(item, "item_code", None) or "").strip()
+	if not item_code:
+		return True
+	is_stock = frappe.db.get_value("Item", item_code, "is_stock_item")
+	if is_stock is None:
+		return False  # Item record missing/lookup failed — treat as real, not noise
+	return not is_stock
+
+
+def _upsert_supplier_alias(ocr_text: str, supplier: str) -> None:
+	"""Save (or correct) an OCR-text -> Supplier alias for future auto-matching.
+
+	Upserts: a later confirmation/observation with a different supplier UPDATES
+	the existing alias instead of being silently dropped — otherwise the first
+	mapping wins forever and a wrong alias keeps auto-matching at tier-1
+	confidence (high enough to auto-draft). Alias controllers are pass-only, so
+	db.set_value (one round-trip) is safe for the update.
+
+	Module-level (v1.11.0, Fix A / Q18) so both `OCRImport.on_update` (the
+	Confirmed-status path) and `api._learn_from_submitted_document` (submit-time
+	learning) share one implementation instead of duplicating the upsert logic.
+	"""
+	ocr_text = (ocr_text or "").strip()
+	if not ocr_text or not supplier:
+		return
+
+	# One read answers both "exists?" (None = no row; supplier is required so a
+	# row never carries NULL) and "changed?".
+	existing_supplier = frappe.db.get_value("OCR Supplier Alias", ocr_text, "supplier")
+	if existing_supplier is None:
+		frappe.get_doc(
+			{
+				"doctype": "OCR Supplier Alias",
+				"ocr_text": ocr_text,
+				"supplier": supplier,
+				"source": "Auto",
+			}
+		).insert(ignore_permissions=True)
+	elif existing_supplier != supplier:
+		frappe.db.set_value("OCR Supplier Alias", ocr_text, {"supplier": supplier, "source": "Auto"})
+
+
+def _upsert_item_alias(ocr_text: str, supplier: str, item_code: str, allow_update: bool = True) -> None:
+	"""Save (or correct) an OCR-text -> Item alias for future auto-matching.
+
+	Same upsert reasoning as `_upsert_supplier_alias`. `allow_update=False` (a
+	re-save/observation that didn't itself change anything) still inserts a
+	missing alias but never rewrites an existing one — otherwise a later,
+	unrelated save/observation could silently revert a newer curated alias.
+
+	Supplier-scoped (v1.8.0, Q7c): when `supplier` is set, the correction/insert
+	targets ONLY that supplier's row — a confirm for supplier A can never
+	clobber the mapping supplier B relies on. Blank supplier stays the global
+	fallback tier.
+
+	Module-level (v1.11.0, Fix A / Q18) — see `_upsert_supplier_alias`.
+	"""
+	ocr_text = (ocr_text or "").strip()
+	if not ocr_text or not item_code:
+		return
+
+	supplier = (supplier or "").strip()
+	if supplier:
+		filters = {"ocr_text": ocr_text, "supplier": supplier}
+	else:
+		filters = {"ocr_text": ocr_text, "supplier": ["is", "not set"]}
+
+	# order_by is load-bearing (R8): duplicates are possible now that the
+	# ocr_text unique index is gone. Corrections must target the SAME row
+	# match_item's read returns (most recently modified), or a correction
+	# could land on a row the matcher never surfaces.
+	existing = frappe.get_all(
+		"OCR Item Alias",
+		filters=filters,
+		fields=["name", "item_code"],
+		order_by="modified desc, name asc",
+		limit_page_length=1,
+		ignore_permissions=True,
+	)
+	if not existing:
+		frappe.get_doc(
+			{
+				"doctype": "OCR Item Alias",
+				"ocr_text": ocr_text,
+				"supplier": supplier,
+				"item_code": item_code,
+				"source": "Auto",
+			}
+		).insert(ignore_permissions=True)
+	elif allow_update and existing[0].item_code != item_code:
+		frappe.db.set_value("OCR Item Alias", existing[0].name, {"item_code": item_code, "source": "Auto"})
+
+
+def _upsert_service_mapping(
+	description: str,
+	supplier: str,
+	item_code: str,
+	item_name: str,
+	expense_account: str,
+	cost_center: str,
+	company: str,
+) -> None:
+	"""Save (or correct) a description-pattern -> item + GL account + cost
+	center service mapping so a future invoice line auto-codes (and can
+	auto-draft).
+
+	Module-level (v1.11.0, Fix A / Q18), explicit-parameter contract (mirrors
+	Q9's `_build_taxes_from_template`) rather than taking an OCR Import Item
+	row directly — lets a submitted PI/PR *line* (submit-time learning) feed
+	this the same way a confirmed OCR Import row does.
+	"""
+	description = (description or "").strip()
+	if not description or not item_code or not expense_account:
+		return
+
+	# Extract a reusable pattern (strips dates, months, years)
+	pattern = _extract_service_pattern(description)
+
+	# Check if a mapping already exists for this pattern + company + supplier
+	existing = frappe.db.get_value(
+		"OCR Service Mapping",
+		{
+			"description_pattern": pattern,
+			"company": company,
+			"supplier": supplier or "",  # Empty string for NULL check
+		},
+		"name",
+	)
+
+	if existing:
+		doc = frappe.get_doc("OCR Service Mapping", existing)
+		doc.item_code = item_code
+		doc.item_name = item_name
+		doc.expense_account = expense_account
+		doc.cost_center = cost_center
+		doc.supplier = supplier
+		doc.source = "Auto"
+		doc.save(ignore_permissions=True)
+	else:
+		frappe.get_doc(
+			{
+				"doctype": "OCR Service Mapping",
+				"description_pattern": pattern,
+				"item_code": item_code,
+				"item_name": item_name,
+				"expense_account": expense_account,
+				"cost_center": cost_center,
+				"company": company,
+				"supplier": supplier,
+				"source": "Auto",
+			}
+		).insert(ignore_permissions=True)
+
+
 class OCRImport(Document):
 	def before_save(self):
 		self._update_status()
@@ -511,7 +701,15 @@ class OCRImport(Document):
 		all_items_matched = True
 		all_items_ready = True  # Ready includes having expense_account for service items
 
-		for item in self.items:
+		# v1.11.0 (Fix B / Q18): a trailing zero-value line (no PO/PR ref,
+		# item_code blank or non-stock — see _is_ignorable_zero_line) doesn't
+		# count against readiness — UNLESS it's the only line on the record, in
+		# which case fall back to evaluating every row exactly as before (an
+		# all-zero record reaches the same outcome it always did).
+		non_ignorable_items = [item for item in self.items if not _is_ignorable_zero_line(item)]
+		items_to_check = non_ignorable_items if non_ignorable_items else self.items
+
+		for item in items_to_check:
 			# Check if item is matched
 			if item.match_status == "Unmatched" and not item.item_code:
 				all_items_matched = False
@@ -629,145 +827,41 @@ class OCRImport(Document):
 	def _save_supplier_alias(self):
 		"""Save (or correct) the supplier alias for future auto-matching.
 
-		Upserts: a later confirmation with a different supplier UPDATES the
-		existing alias instead of being silently dropped — otherwise the first
-		mapping wins forever and a wrong alias keeps auto-matching at
-		tier-1 confidence (high enough to auto-draft). Alias controllers are
-		pass-only, so db.set_value (one round-trip) is safe for the update.
+		Thin wrapper over module-level `_upsert_supplier_alias` (v1.11.0 — the
+		submit-time learning path in api.py shares the same upsert logic).
 		Guarded by on_update's has_value_changed("supplier") check, so only a
 		deliberate change in THIS save can rewrite an existing alias.
 		"""
-		ocr_text = self.supplier_name_ocr.strip()
-		if not ocr_text:
-			return
-
-		# One read answers both "exists?" (None = no row; supplier is required
-		# so a row never carries NULL) and "changed?".
-		existing_supplier = frappe.db.get_value("OCR Supplier Alias", ocr_text, "supplier")
-		if existing_supplier is None:
-			frappe.get_doc(
-				{
-					"doctype": "OCR Supplier Alias",
-					"ocr_text": ocr_text,
-					"supplier": self.supplier,
-					"source": "Auto",
-				}
-			).insert(ignore_permissions=True)
-		elif existing_supplier != self.supplier:
-			frappe.db.set_value("OCR Supplier Alias", ocr_text, {"supplier": self.supplier, "source": "Auto"})
+		_upsert_supplier_alias(self.supplier_name_ocr, self.supplier)
 
 	def _save_item_alias(self, item, allow_update=True):
 		"""Save (or correct) the item alias for future auto-matching.
 
-		Upserts for the same reason as _save_supplier_alias — a user correcting
-		a description→item mapping must take effect on the next invoice.
-		`allow_update=False` (a re-save where this row did NOT change) still
-		inserts a missing alias but never rewrites an existing one — otherwise
-		any later save of a stale still-Confirmed record would silently revert
-		a newer curated alias.
-
-		v1.8.0 (Q7c): learning is SUPPLIER-SCOPED when the parent supplier is
-		known — the new row (or correction) applies only to this supplier, so
-		confirming "Bracket 40mm" → ITEM-A for supplier A can no longer clobber
-		the mapping supplier B relies on. Global rows (all pre-v1.8.0 aliases,
-		plus confirms without a supplier) are never rewritten by a
-		supplier-scoped confirm — they stay the fallback tier.
+		Thin wrapper over module-level `_upsert_item_alias` (v1.11.0 — shared
+		with the submit-time learning path in api.py). `allow_update=False` (a
+		re-save where this row did NOT change) still inserts a missing alias
+		but never rewrites an existing one — otherwise any later save of a
+		stale still-Confirmed record would silently revert a newer curated
+		alias.
 		"""
-		ocr_text = item.description_ocr.strip()
-		if not ocr_text:
-			return
-
-		supplier = (self.supplier or "").strip()
-		if supplier:
-			filters = {"ocr_text": ocr_text, "supplier": supplier}
-		else:
-			filters = {"ocr_text": ocr_text, "supplier": ["is", "not set"]}
-
-		# order_by is load-bearing (R8): duplicates are possible now that the
-		# ocr_text unique index is gone. Corrections must target the SAME row
-		# match_item's read returns (most recently modified), or a correction
-		# could land on a row the matcher never surfaces.
-		existing = frappe.get_all(
-			"OCR Item Alias",
-			filters=filters,
-			fields=["name", "item_code"],
-			order_by="modified desc, name asc",
-			limit_page_length=1,
-			ignore_permissions=True,
-		)
-		if not existing:
-			frappe.get_doc(
-				{
-					"doctype": "OCR Item Alias",
-					"ocr_text": ocr_text,
-					"supplier": supplier,
-					"item_code": item.item_code,
-					"source": "Auto",
-				}
-			).insert(ignore_permissions=True)
-		elif allow_update and existing[0].item_code != item.item_code:
-			frappe.db.set_value(
-				"OCR Item Alias", existing[0].name, {"item_code": item.item_code, "source": "Auto"}
-			)
+		_upsert_item_alias(item.description_ocr, self.supplier, item.item_code, allow_update=allow_update)
 
 	def _save_service_mapping(self, item):
+		"""Save service mapping for future auto-matching.
+
+		Thin wrapper over module-level `_upsert_service_mapping` (v1.11.0 —
+		shared with the submit-time learning path in api.py).
 		"""
-		Save service mapping for future auto-matching.
-
-		When user manually selects:
-		- Item code (e.g., ITEM001)
-		- Expense account (e.g., 5200 - Subscription Expenses)
-		- Cost center (optional)
-		- Supplier (optional, for supplier-specific mappings)
-
-		Create a mapping so future invoices with similar descriptions auto-fill these fields.
-		"""
-		description = item.description_ocr.strip()
-		if not description or not item.item_code or not item.expense_account:
-			return
-
-		# Extract a reusable pattern (strips dates, months, years)
-		pattern = _extract_service_pattern(description)
-
 		company = self.get("company") or frappe.defaults.get_user_default("Company")
-		supplier = self.supplier  # Link to supplier for supplier-specific mappings
-
-		# Check if a mapping already exists for this pattern + company + supplier
-		existing = frappe.db.get_value(
-			"OCR Service Mapping",
-			{
-				"description_pattern": pattern,
-				"company": company,
-				"supplier": supplier or "",  # Empty string for NULL check
-			},
-			"name",
+		_upsert_service_mapping(
+			item.description_ocr,
+			self.supplier,
+			item.item_code,
+			item.item_name,
+			item.expense_account,
+			item.cost_center,
+			company,
 		)
-
-		if existing:
-			# Update existing mapping
-			doc = frappe.get_doc("OCR Service Mapping", existing)
-			doc.item_code = item.item_code
-			doc.item_name = item.item_name
-			doc.expense_account = item.expense_account
-			doc.cost_center = item.cost_center
-			doc.supplier = supplier
-			doc.source = "Auto"
-			doc.save(ignore_permissions=True)
-		else:
-			# Create new mapping
-			frappe.get_doc(
-				{
-					"doctype": "OCR Service Mapping",
-					"description_pattern": pattern,
-					"item_code": item.item_code,
-					"item_name": item.item_name,
-					"expense_account": item.expense_account,
-					"cost_center": item.cost_center,
-					"company": company,
-					"supplier": supplier,
-					"source": "Auto",
-				}
-			).insert(ignore_permissions=True)
 
 	@frappe.whitelist(methods=["POST"])
 	def create_purchase_invoice(self):
@@ -847,8 +941,16 @@ class OCRImport(Document):
 			):
 				pr_items_by_code.setdefault(pr_item.item_code, []).append(pr_item)
 
+		# v1.11.0 (Fix B / Q18): drop ignorable zero-value rows (see
+		# _is_ignorable_zero_line) from the built PI — mirrors what an operator
+		# does by hand today (deletes the row before creating). Only when the
+		# record has at least one REAL row — an all-zero record behaves exactly
+		# as before (still throws "No line items" below, unchanged).
+		non_ignorable_items = [item for item in self.items if not _is_ignorable_zero_line(item)]
+		items_to_build = non_ignorable_items if non_ignorable_items else self.items
+
 		pi_items = []
-		for item in self.items:
+		for item in items_to_build:
 			pi_item = {
 				"qty": item.qty or 1,
 				# v1.10.2: derive rate from the extracted (possibly discounted) amount,
@@ -1020,8 +1122,10 @@ class OCRImport(Document):
 		# to write directly to DB, bypassing save() which would re-trigger the overwrite.
 		# When description_ocr is empty we still honour a user-edited item_name; only
 		# a raw product code (item_name == item_code) is skipped so the Item master
-		# description wins in that case.
-		for pi_item, ocr_item in zip(pi.items, self.items, strict=False):
+		# description wins in that case. Zip against items_to_build (not
+		# self.items) — a v1.11.0 zero-value row dropped from pi_items would
+		# otherwise misalign this restore against the wrong ERPNext row.
+		for pi_item, ocr_item in zip(pi.items, items_to_build, strict=False):
 			ocr_desc = _resolve_ocr_description(ocr_item)
 			if ocr_desc and ocr_desc != pi_item.item_name:
 				pi_item.db_set({"item_name": ocr_desc[:140], "description": ocr_desc})
