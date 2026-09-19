@@ -1,0 +1,177 @@
+<title>Star Pops Expense Rulebook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
+<style>
+:root{
+  --ground:#F5F7F4; --paper:#FFFFFF; --ink:#1B2420; --muted:#5B6863; --rule:#D8DED9;
+  --accent:#2E6A55; --accent-soft:#E3EFE9; --warn:#9A5518; --warn-soft:#F6EADF; --bad:#9B2F2F; --bad-soft:#F5E3E3;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#121715; --paper:#19201D; --ink:#E4EBE7; --muted:#9AA8A1; --rule:#2B3531;
+    --accent:#7FC3A8; --accent-soft:#1F3129; --warn:#E0A56E; --warn-soft:#342719; --bad:#E58F8F; --bad-soft:#3A2020;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#121715; --paper:#19201D; --ink:#E4EBE7; --muted:#9AA8A1; --rule:#2B3531;
+  --accent:#7FC3A8; --accent-soft:#1F3129; --warn:#E0A56E; --warn-soft:#342719; --bad:#E58F8F; --bad-soft:#3A2020;
+}
+body{background:var(--ground);color:var(--ink);font:15px/1.6 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;padding-inline:16px;padding-block:32px 64px}
+main{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+h1,h2{font-family:"Source Serif 4",Georgia,serif;text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:34px}
+h2{font-size:23px;padding-bottom:8px;border-bottom:1px solid var(--rule)}
+h3{font-size:15px;margin:0;font-weight:600}
+p{margin:0;max-width:66ch}
+section{display:flex;flex-direction:column;gap:14px}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.meta{color:var(--muted);font-size:13px}
+.answer{background:var(--paper);border:1px solid var(--rule);border-left:4px solid var(--accent);padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.answer p{font-size:16px}
+code,.gl{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:13px}
+.gl{color:var(--muted);white-space:nowrap}
+.tw{overflow-x:auto;background:var(--paper);border:1px solid var(--rule)}
+table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:500}
+tr:last-child td{border-bottom:0}
+td.n{text-align:right;white-space:nowrap}
+.hl td{background:var(--accent-soft)}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.hi{background:var(--accent-soft);color:var(--accent)}
+.md{background:var(--warn-soft);color:var(--warn)}
+.lo{background:var(--bad-soft);color:var(--bad)}
+ul,ol{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:6px;max-width:66ch}
+.note{font-size:13px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.box{background:var(--paper);border:1px solid var(--rule);padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.box .big{font-family:"Source Serif 4",Georgia,serif;font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+
+<main>
+<header style="display:flex;flex-direction:column;gap:8px">
+  <div class="eyebrow">erpocr_integration · research for Willie and the accountant · 2026-09-19</div>
+  <h1>Can Star Pops' expense-account rules be learned from history?</h1>
+  <p class="meta">Source: the Star Pops bench restore (OCR imports 2026-02-20 to 2026-06-09), read-only. Test month 2026-05-05 to 2026-06-04, the same as jev_lab eval #1. No person's name, vehicle registration or amount appears on this page.</p>
+</header>
+
+<div class="answer">
+  <div class="eyebrow">Answer</div>
+  <p><strong>Mostly yes, provided the rules keep learning from every posted invoice.</strong> Learned that way, simple rules code about two lines in three at roughly 94% accuracy. That is ready to review with the accountant.</p>
+  <p>The remaining third is mainly repair parts. Their account depends on which asset was repaired, and the invoice does not say. No rule can deduce that. It needs a fact from somewhere else.</p>
+  <p>Rules frozen on history before 5 May do poorly. That month's spending mix changed sharply, and a frozen rulebook cannot see accounts it has barely met.</p>
+</div>
+
+<section>
+  <h2>What the numbers say</h2>
+  <div class="grid">
+    <div class="box"><span class="eyebrow">Coded by rules</span><span class="big">65%</span><span class="note">of test-month lines, at 94.5% right</span></div>
+    <div class="box"><span class="eyebrow">Supplier's usual account</span><span class="big">76–78%</span><span class="note">right, when learned up to each invoice</span></div>
+    <div class="box"><span class="eyebrow">Needs a missing fact</span><span class="big">81</span><span class="note">of the 128 lines both methods miss</span></div>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>Method, scored on 590 test-month lines</th><th class="n">Lines covered</th><th class="n">Right when covered</th></tr></thead>
+    <tbody>
+      <tr><td>Rules frozen on history before 5 May</td><td class="n">26.6%</td><td class="n">79.0%</td></tr>
+      <tr><td>Supplier's usual account, frozen before 5 May</td><td class="n">all</td><td class="n">23.4%</td></tr>
+      <tr class="hl"><td>Rules learning from all history up to each invoice: high-confidence tiers</td><td class="n">64.9%</td><td class="n">94.5%</td></tr>
+      <tr><td>Supplier's usual account, learning up to each invoice</td><td class="n">all</td><td class="n">75.9%</td></tr>
+      <tr><td>Rules first, then the supplier's usual account</td><td class="n">all</td><td class="n">78.3%</td></tr>
+      <tr><td>erpocr's service mappings today (jev_lab's measurement)</td><td class="n">7.7%</td><td class="n">97.6%</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">The rule tiers, in order: a stock item always posts to Stock Received but not Billed (22 lines, 100% right). Next, a word that has always meant one account for that supplier (217 lines, 93.5%). Then a supplier that only ever uses one account (144 lines, 95.1%). Last, a word that means one account across several suppliers (26 lines, 69%), which is too weak to trust.</p>
+  <p class="note"><strong>Why frozen rules fail this month.</strong> Travel Expenses – Local had 17 lines before 5 May and 201 in the test month. Entertainment went from 0 to 13. 36 of the month's 85 suppliers had never appeared before. A rulebook learned once and then frozen cannot predict that. One learning continuously picks it up within days.</p>
+  <p class="note"><strong>jev_lab reported 52% for "the supplier's usual account".</strong> That figure does not reproduce here. Learning only from OCR invoices, up to each invoice, gives 77.8%. The difference is probably in how the history was cut, and jev_lab has been asked to reconcile it.</p>
+</section>
+
+<section>
+  <h2>Draft rulebook</h2>
+  <p>One line per account, largest first. Each rule is what the history shows, not a policy. Confidence reflects how consistently the words and suppliers stayed with that account. The accountant should confirm or correct each one.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Account</th><th>What gets booked here</th><th>Confidence</th></tr></thead>
+    <tbody>
+      <tr><td>Repairs and Maintenance Buildings<br><span class="gl">4350/000</span></td><td>Building materials and hardware: cement and concrete mix, paint bases and rollers, steel tube, square and channel, wall fittings. Hardware stores, paint and steel suppliers. <em>Not</em> pump or machine parts.</td><td><span class="pill md">Medium</span><br><span class="note">shares suppliers with Machinery</span></td></tr>
+      <tr><td>Travel Expenses – Local<br><span class="gl">4650/010</span></td><td>Food and drinks bought on the road: supermarket and fast-food till slips (energy drinks, burgers, chicken, pies). About 70% of lines come from one supermarket chain.</td><td><span class="pill hi">High</span><br><span class="note">keywords 100% consistent</span></td></tr>
+      <tr><td>Transport Expenses<br><span class="gl">4150/000</span></td><td>Fleet tracking subscriptions (92 of 139 lines, one supplier) and truck-dealer charges.</td><td><span class="pill hi">High</span><br><span class="note">"subscription" 92 of 95</span></td></tr>
+      <tr><td>Repairs and Maintenance Machinery<br><span class="gl">4350/010</span></td><td>Pump, pipe and plant parts: solvent cement, clamps, adaptors, elbows, bearings.</td><td><span class="pill md">Medium</span><br><span class="note">overlaps Buildings and Small Tools</span></td></tr>
+      <tr><td>Cleaning and Sanitation<br><span class="gl">3250/000</span></td><td>Cleaning chemicals and consumables: dish liquid, pine gel, refuse bags, toilet paper, pest control.</td><td><span class="pill hi">High</span></td></tr>
+      <tr><td>Repairs and maintenance – MV<br><span class="gl">4650/030</span></td><td>Vehicle parts and services: filters, oil, grease, brakes. Engineering shops and truck dealers.</td><td><span class="pill md">Medium</span><br><span class="note">filters and oil also go to Forklift</span></td></tr>
+      <tr><td>Forklift Expenses<br><span class="gl">4175/010</span></td><td>Forklift parts, service and LPG gas cylinders.</td><td><span class="pill md">Medium</span><br><span class="note">"forklift" 9 of 9; gas and filters shared</span></td></tr>
+      <tr><td>Health &amp; Safety Expenses<br><span class="gl">3270/000</span></td><td>Protective equipment: dust masks, gloves, fire extinguisher service, hair caps.</td><td><span class="pill hi">High</span><br><span class="note">mops also appear here; see questions</span></td></tr>
+      <tr><td>Small Tools &amp; Equipment<br><span class="gl">4360/000</span></td><td>Tools and small equipment from hardware and welding suppliers. No word reliably marks these lines.</td><td><span class="pill lo">Low</span></td></tr>
+      <tr><td>Repairs and maintenance general<br><span class="gl">4350/020</span></td><td>Electrical and battery items from two main suppliers. No lines at all in the test month.</td><td><span class="pill lo">Low</span><br><span class="note">possibly retired in practice</span></td></tr>
+      <tr><td>Printing &amp; Stationery<br><span class="gl">4200/000</span></td><td>Printer ink, paper, pens.</td><td><span class="pill hi">High</span></td></tr>
+      <tr><td>Workers Uniforms and Clothing<br><span class="gl">4190/000</span></td><td>Garment rental and navy workwear, mostly one supplier.</td><td><span class="pill hi">High</span></td></tr>
+      <tr><td>Utilities Rates and Taxes<br><span class="gl">3650/000</span></td><td>Landlord recharges for rates, levies and electricity.</td><td><span class="pill md">Medium</span><br><span class="note">water on the same bills; see questions</span></td></tr>
+      <tr><td>Stock Received but not Billed<br><span class="gl">9000/001</span></td><td>Raw-material stock items (sodium benzoate, citric acid, sugar). A system rule: stock items always land here.</td><td><span class="pill hi">High</span><br><span class="note">28 of 28</span></td></tr>
+      <tr><td>Security Expenses<br><span class="gl">4560/000</span></td><td>Armed response and alarm monitoring.</td><td><span class="pill hi">High</span></td></tr>
+      <tr><td>Cost of Sales<br><span class="gl">2000/004</span></td><td>Mixed lines from truck, gas and cleaning suppliers. No clear pattern.</td><td><span class="pill lo">Low</span><br><span class="note">ask the accountant</span></td></tr>
+      <tr><td>Telephone / Internet Expenses<br><span class="gl">4600/000 · 4600/002</span></td><td>Mobile contracts to Telephone. Fibre lines to Internet.</td><td><span class="pill md">Medium</span><br><span class="note">same supplier splits both ways</span></td></tr>
+      <tr><td>Transport Expenses – Subcontractors<br><span class="gl">4150/001</span></td><td>Contracted trips between the Star Pops sites, almost all one haulier.</td><td><span class="pill hi">High</span></td></tr>
+      <tr><td>Rent Paid · Water Consumption<br><span class="gl">4300/000 · 2120/000</span></td><td>Landlord rent lines; water lines on landlord and municipal bills.</td><td><span class="pill hi">High</span></td></tr>
+      <tr><td>Entertainment<br><span class="gl">3700/000</span></td><td>All 13 lines are from one pub, all in the test month.</td><td><span class="pill md">Medium</span><br><span class="note">one supplier, no history</span></td></tr>
+      <tr><td>Rounding Differences<br><span class="gl">2000/006</span></td><td>Rounding lines printed by one packaging supplier.</td><td><span class="pill hi">High</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Why the rest can't be deduced</h2>
+  <p>Rules first, then the supplier's usual account, still got 128 test-month lines wrong. They split three ways.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Kind of miss</th><th class="n">Lines</th><th>What would fix it</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Needs a fact: which asset.</strong> The guess landed in the right repair family but on the wrong asset account (Buildings, Machinery, vehicle, forklift, general, small tools).</td><td class="n">65</td><td>An asset on the invoice. The best source is the maintenance work order the purchase was for, from <code>starpops_maintenance</code>. Next best is the uploader, or a vehicle registration printed on the slip.</td></tr>
+      <tr><td><strong>Needs a fact: who or why.</strong> Food and drink lines whose account depends on the trip, a staff event or a guest.</td><td class="n">16</td><td>Whether the purchase happened on a trip. The driver app knows the trip; the uploader knows the context.</td></tr>
+      <tr><td><strong>Learnable.</strong> A new supplier, or new wording from a known one.</td><td class="n">38</td><td>More history. These rules fix themselves once the supplier has posted once or twice.</td></tr>
+      <tr><td><strong>Inconsistent posting.</strong> The same supplier and the same wording went to two accounts before.</td><td class="n">9</td><td>An accountant ruling. See the questions below.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Questions for the accountant</h2>
+  <p>In the whole history, 32 supplier-and-wording groups (142 lines) were posted to more than one account. These are the pairs involved, most lines first. For each: is the split deliberate, and if so, what decides it?</p>
+  <ol>
+    <li>Repairs and maintenance (vehicles) vs Transport Expenses. 18 lines.</li>
+    <li>Forklift Expenses vs Travel Expenses – Local. 15 lines. Almost certainly a slip on one side.</li>
+    <li>Internet Expenses vs Telephone Expenses, same supplier. 12 lines.</li>
+    <li>Cleaning and Sanitation vs Health &amp; Safety, for mops, gloves and similar. 11 lines.</li>
+    <li>Repairs Machinery vs Small Tools &amp; Equipment. 10 lines.</li>
+    <li>Repairs Buildings vs Repairs Machinery. 10 lines. The same "which asset" question as above.</li>
+    <li>Utilities Rates and Taxes vs Water Consumption, on landlord bills. 9 lines.</li>
+    <li>Manufacturing Consumables vs Rounding Differences. 8 lines.</li>
+    <li>Repairs and maintenance (vehicles) vs Travel Expenses – Local. 6 lines.</li>
+    <li>Transport Expenses vs Travel Expenses – Local. 6 lines.</li>
+    <li>Repairs Buildings vs Repairs and maintenance (vehicles). 6 lines.</li>
+    <li>Forklift Expenses vs Fuel and Lubricants. 5 lines.</li>
+  </ol>
+  <p>Two account-level questions as well. Is <span class="gl">4350/020</span> Repairs and maintenance general still in use? It had no lines in the test month. And what belongs in <span class="gl">2000/004</span> Cost of Sales from these suppliers?</p>
+</section>
+
+<section>
+  <h2>ITEM001 and SER001: practice against policy</h2>
+  <p>The stated policy is ITEM001 for non-stock goods and SER001 for services. In practice nearly everything is ITEM001. 230 lines worded as a service (labour, hire, rental, subscription, fees, call-outs, repairs, transport) all went on ITEM001. SER001 appears on only 8 lines, all subcontracted transport.</p>
+  <p>This does not affect which expense account a line lands on, because the account is chosen per line. It does matter for any report that splits goods from services, and for any future rule keyed on the item. <strong>Decide which is right:</strong> enforce the policy from a date, or retire SER001 and say so.</p>
+</section>
+
+<section>
+  <h2>What this means for auto-draft</h2>
+  <p>Today erpocr learns an expense account only for the exact wording of a confirmed line. That is why it reaches just 8% of lines. The rules above generalise across wording and still learn continuously, and they would code two lines in three.</p>
+  <p>This page proposes nothing to build. Once the accountant has confirmed or corrected the rules, any change to erpocr's matching gets its own plan and review.</p>
+</section>
+
+<section>
+  <h2>Method and limits</h2>
+  <ul>
+    <li><strong>Lines:</strong> every line of a submitted purchase invoice created from an OCR import. The test month has 590 such lines. jev_lab's eval uses 534, because it keeps only lines it could pair with the OCR text.</li>
+    <li><strong>Extra history:</strong> 4,797 non-OCR purchase-invoice lines posted before the test month. They barely change the result.</li>
+    <li><strong>Rules:</strong> a word, or a supplier and word, qualifies when at least 90% of its history went to one account, with at least two or three lines behind it. Words are three letters or more, with common words removed.</li>
+    <li><strong>Privacy:</strong> all line-level data stayed inside the bench container. Only counts, account names, company names and product words left it.</li>
+    <li><strong>Limits:</strong> Star Pops only, one test month. Account splits between repair families are judged by account group, so a few "needs a fact" lines may really be slips.</li>
+  </ul>
+</section>
+</main>
