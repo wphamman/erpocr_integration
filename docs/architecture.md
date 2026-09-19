@@ -81,6 +81,7 @@ Statement Pipeline: Drive scan → classifier routes to statement → Gemini API
 | `erpocr_integration/public/js/ocr_fleet_slip.js` | Fleet client: Create PI button, vehicle config display, status intro, unauthorized warning |
 | `erpocr_integration/statement_api.py` | Statement background processing (`statement_gemini_process`), reconciliation orchestration, `rereconcile_statement` |
 | `erpocr_integration/stats_api.py` | Role-gated aggregation endpoint (`get_ocr_stats`) backing the OCR Stats page |
+| `erpocr_integration/tasks/jev_shadow.py` | Q17 (v1.12.0): opt-in Jev shadow trial — asks TypeSafe Jev to pick a supplier and records it beside the matcher's own pick, blind (permlevel-1) and write-only-to-its-own-fields |
 
 ### DocTypes
 | DocType | Type | Purpose |
@@ -155,6 +156,26 @@ Pending → Extracting → Reconciled → Reviewed / Error
 - **Review actions** (`ocr_statement.js`): **Re-Reconcile** (after correcting the matched supplier) → `rereconcile_statement`; **Mark Reviewed** → `mark_reviewed`.
 - **Statement auto-refresh**: Purchase Invoice `on_submit`/`on_cancel` re-runs reconciliation (on the `short` queue) for any OCR Statement in status "Reconciled" for that supplier; Reviewed statements untouched; failures never block PI submit.
 
+### Jev Shadow Trial (Q17, v1.12.0 — invoice pipeline only)
+
+Opt-in, off by default (`OCR Settings.enable_jev_shadow`). On every extraction, `api.gemini_process`
+enqueues `tasks/jev_shadow.run_jev_shadow` (on the `short` queue) alongside — never instead of —
+the existing matcher. It asks the TypeSafe Jev API to pick a supplier for the OCR Import and
+records the answer in a dedicated **permlevel-1, System Manager read-only** section on OCR Import
+(`jev_status`, `jev_supplier`, `jev_probability`, `jev_cost_usd`, …) plus a snapshot of OUR
+matcher's own pick (`jev_matcher_supplier` / `jev_matcher_status`) taken **before auto-draft
+runs**. The trial is deliberately **blind** — OCR Manager (the operator role) has no permlevel-1
+grant, so nothing about it is visible in normal review, and it never writes `supplier`,
+`supplier_match_status`, `status`, `items`, or any auto-draft field. A budget cap
+(`jev_monthly_budget_usd`) and an own-company guard (an OCR misread of the buyer's own letterhead
+must never become a Jev "candidate") bound the trial's cost and inputs; any API failure or timeout
+is recorded as `jev_status = Error` and swallowed — it can never affect extraction, matching, or
+auto-draft. Candidate generation (`tasks/matching.py::supplier_candidates`) is a live-data port of
+jev_lab's own scoring, kept deliberately separate from `match_supplier`/`match_supplier_fuzzy` so
+it can never influence today's matching. Scope: invoice pipeline only — DN, fleet, and statement
+are untouched. See [docs/architecture/OPEN-QUESTIONS.md](architecture/OPEN-QUESTIONS.md) Q17 for
+the full ruling and what "replace the current matcher" would require.
+
 ### Cross-app integration (fleet_management) — summary
 OCR runs **standalone or alongside `fleet_management`** — neither app imports nor depends on the
 other; integration is bidirectional via ERPNext Custom Fields, runtime feature-detected, so
@@ -213,6 +234,11 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Fleet Expense Account**: Default expense account for non-fleet-card vehicle PIs
 - **Enable Auto-Draft**: Opt-in (off by default) — auto-draft high-confidence matches (see [implementation-patterns.md](implementation-patterns.md))
 - **Enable Fleet Card Auto-Record**: Opt-in (off by default) — auto-complete high-confidence Fleet Card slips via `mark_recorded()` (v1.8.0; see *OCR Fleet Slip Workflow*). Never creates a Purchase Invoice.
+- **Enable Jev Shadow Trial**: Opt-in (off by default, v1.12.0) — record TypeSafe Jev's supplier pick alongside today's matcher's pick, for later comparison. See *Jev Shadow Trial* below.
+- **TypeSafe API Key**: TypeSafe API key (Password), only used when the shadow trial is on.
+- **Jev Model**: Pinned model version (default `jev-1.13.0`) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
+- **Jev Monthly Budget (USD)**: Hard cap on Jev API spend per calendar month (default 2.0). Once this month's summed `jev_cost_usd` reaches it, the shadow job records `Skipped` and stops calling until next month.
+- **Jev Timeout (seconds)**: Request timeout for the Jev API call (default 20).
 
 ## Deployment
 

@@ -56,7 +56,20 @@
 		"error_log",
 		"no_action_reason",
 		"section_break_raw",
-		"raw_payload"
+		"raw_payload",
+		"section_break_jev",
+		"jev_status",
+		"jev_supplier",
+		"jev_choice_none",
+		"jev_probability",
+		"jev_model",
+		"column_break_jev",
+		"jev_matcher_supplier",
+		"jev_matcher_status",
+		"jev_candidate_count",
+		"jev_cost_usd",
+		"jev_run_at",
+		"jev_note"
 	],
 	"fields": [
 		{
@@ -404,6 +417,99 @@
 			"fieldtype": "Code",
 			"label": "Raw Payload",
 			"options": "JSON",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"collapsible": 1,
+			"fieldname": "section_break_jev",
+			"fieldtype": "Section Break",
+			"label": "Jev shadow (experiment)",
+			"description": "Q17 shadow trial: TypeSafe Jev's supplier pick, recorded alongside today's matcher for later comparison. Never used by matching or auto-draft. Visible to System Manager only — this trial is blind."
+		},
+		{
+			"fieldname": "jev_status",
+			"fieldtype": "Select",
+			"label": "Jev Status",
+			"options": "\nDone\nSkipped\nError",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_supplier",
+			"fieldtype": "Data",
+			"label": "Jev Supplier",
+			"description": "Data, not Link — a later supplier rename/delete must never break saving this import.",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_choice_none",
+			"fieldtype": "Check",
+			"label": "Jev Choice: None",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_probability",
+			"fieldtype": "Float",
+			"label": "Jev Probability",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_model",
+			"fieldtype": "Data",
+			"label": "Jev Model",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "column_break_jev",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "jev_matcher_supplier",
+			"fieldtype": "Data",
+			"label": "Matcher Supplier (snapshot)",
+			"description": "Our own matcher's supplier pick, snapshotted at enqueue time (before auto-draft) — the fixed comparison point for this trial.",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_matcher_status",
+			"fieldtype": "Data",
+			"label": "Matcher Status (snapshot)",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_candidate_count",
+			"fieldtype": "Int",
+			"label": "Jev Candidate Count",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_cost_usd",
+			"fieldtype": "Float",
+			"label": "Jev Cost (USD)",
+			"precision": "6",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_run_at",
+			"fieldtype": "Datetime",
+			"label": "Jev Run At",
+			"read_only": 1,
+			"permlevel": 1
+		},
+		{
+			"fieldname": "jev_note",
+			"fieldtype": "Small Text",
+			"label": "Jev Note",
+			"description": "Skip reason or error message. Never contains the TypeSafe API key.",
 			"read_only": 1,
 			"permlevel": 1
 		}

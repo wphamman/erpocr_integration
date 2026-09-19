@@ -2,6 +2,48 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-09-19
+
+Minor release. Q17 shadow trial: TypeSafe Jev's supplier pick is now recorded ALONGSIDE today's
+matcher's pick on every invoice extraction, for later comparison — zero behaviour change while
+off (the default), and blind even when on.
+
+### Added
+- **Jev shadow trial (`tasks/jev_shadow.py`), opt-in via `OCR Settings.enable_jev_shadow` (off by
+  default).** After matching completes in `api.gemini_process` — independent of whether
+  auto-draft is on — each created OCR Import is enqueued (on the `short` queue) for
+  `run_jev_shadow`, carrying a snapshot of OUR matcher's own pick (`supplier` /
+  `supplier_match_status`) taken BEFORE auto-draft runs. The job asks TypeSafe's Jev API
+  (`POST https://api.typesafe.ai/v1/systemone`, wire format confirmed against the vendored SDK
+  source) to pick a supplier from up to 10 candidates (`tasks/matching.py::supplier_candidates`,
+  a live-data port of jev_lab's own candidate scoring, kept fully separate from
+  `match_supplier`/`match_supplier_fuzzy` — it cannot influence today's matching) and records the
+  answer.
+- **New OCR Import fields, ALL permlevel-1 / System Manager read only (blind to OCR Manager, the
+  operator role):** `jev_status`, `jev_supplier` (Data, not Link — a later supplier
+  rename/delete must never break saving the import), `jev_choice_none`, `jev_probability`,
+  `jev_cost_usd`, `jev_model`, `jev_matcher_supplier`/`jev_matcher_status` (the pre-auto-draft
+  snapshot), `jev_candidate_count`, `jev_note`, `jev_run_at`. Written exclusively via
+  `frappe.db.set_value(update_modified=False)` — never `doc.save()` — and never touching
+  `supplier`/`supplier_match_status`/`status`/`items`/any auto-draft field.
+- **New OCR Settings fields** (collapsible "Jev shadow trial (experiment)" section):
+  `enable_jev_shadow`, `typesafe_api_key`, `jev_model` (default `jev-1.13.0`, pinned — never
+  `jev-latest`), `jev_monthly_budget_usd` (default 2.0 — a hard cap; once this calendar month's
+  summed `jev_cost_usd` reaches it, the job records `Skipped` and makes no call), and
+  `jev_timeout_seconds` (default 20).
+- **Guards, all skip-before-call (no API cost):** blank `supplier_name_ocr`; the monthly budget
+  reached; an own-company match (the printed name looks like one of our own `Company` records —
+  OCR sometimes reads the buyer's letterhead instead of the supplier's); zero enabled Supplier
+  candidates. Any HTTP error, timeout, or malformed/incomplete response is recorded as
+  `jev_status = Error` and swallowed — never affects extraction, matching, or auto-draft. The
+  TypeSafe API key is never stored in a field or written to `frappe.log_error` on any failure
+  path (`_sanitize` strips it from exception text first).
+
+### Test plan
+1002 tests (968 → +34: candidate generation, the shadow job's every gate/success/error path with
+explicit key-leak assertions, and the `gemini_process` enqueue wiring incl. the pre-auto-draft
+snapshot and enqueue-failure isolation).
+
 ## [1.11.0] — 2026-09-19
 
 Minor release. Two well-bounded auto-draft learning holes identified by a live read-only probe
