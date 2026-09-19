@@ -390,3 +390,20 @@
   which caught the qty-0 derivation gap and the tax-inclusivity trap above.
 - **Pointer:** commit range `348fe49..78ce969`; `_effective_line_total` / `_effective_line_rate` /
   `_check_line_divergence` / `_check_document_total_divergence` in `ocr_import.py`.
+
+## ADR-0022 — The submitted document is a learning signal; zero-value non-stock lines are noise
+- **Status:** Accepted 2026-09-19 · shipped v1.11.0 (Q18)
+- **Context:** Auto-draft landed on 11–17% of imports. Learning fired only on an explicit field change to
+  `Confirmed`, so an operator who accepted a correct pre-filled fuzzy match taught nothing and the same name
+  returned 'Suggested' forever. Separately, a haulier's R0 return-leg line blocked readiness and auto-draft on
+  every invoice; operators deleted it by hand each time.
+- **Decision:** (1) Submitting an OCR-linked PI/PR is a human confirmation: learn supplier alias and item/service
+  mappings from the submitted document for matches that were not already Auto Matched/Confirmed, skipping
+  auto-drafted records, inside a per-import savepoint so learning can never fail the submit. (2) A line with
+  rate 0 and amount 0, no PO/PR link, and a blank or existing non-stock item is ignorable for readiness, the
+  auto-draft gate and the PI builder — but only when a real line exists.
+- **Consequences:** Aliases now accumulate from normal work. A wrong PI that is submitted also teaches (the same
+  risk any confirm carries; corrections upsert). Savepoint names must be plain identifiers (bench-caught), and
+  learning text respects the 140-char Data limit. Correcting Auto Matched aliases that a submitted document
+  contradicts is deliberately NOT done yet.
+
