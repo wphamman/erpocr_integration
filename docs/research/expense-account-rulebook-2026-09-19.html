@@ -59,32 +59,34 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 <div class="answer">
   <div class="eyebrow">Answer</div>
-  <p><strong>Mostly yes, provided the rules keep learning from every posted invoice.</strong> Learned that way, simple rules code about two lines in three at roughly 94% accuracy. That is ready to review with the accountant.</p>
-  <p>The remaining third is mainly repair parts. Their account depends on which asset was repaired, and the invoice does not say. No rule can deduce that. It needs a fact from somewhere else.</p>
+  <p><strong>Partly. Rules that keep learning from every posted invoice code a little under half of all lines at about 93% accuracy.</strong> That is measured the honest way: at the moment the invoice is imported, using only invoices already posted by then. The rules are ready to review with the accountant.</p>
+  <p class="note"><strong>Corrected 2026-09-19, same day.</strong> The first version of this page said 65% at 94.5%. That figure let an invoice learn from invoices imported before it but posted after it, which is information erpocr would not have yet. jev_lab spotted the mismatch. The figures below now use the import-time cut.</p>
+  <p>The biggest group left is repair parts. Their account depends on which asset was repaired, and the invoice does not say. No rule can deduce that. It needs a fact from somewhere else.</p>
   <p>Rules frozen on history before 5 May do poorly. That month's spending mix changed sharply, and a frozen rulebook cannot see accounts it has barely met.</p>
 </div>
 
 <section>
   <h2>What the numbers say</h2>
   <div class="grid">
-    <div class="box"><span class="eyebrow">Coded by rules</span><span class="big">65%</span><span class="note">of test-month lines, at 94.5% right</span></div>
-    <div class="box"><span class="eyebrow">Supplier's usual account</span><span class="big">76–78%</span><span class="note">right, when learned up to each invoice</span></div>
-    <div class="box"><span class="eyebrow">Needs a missing fact</span><span class="big">81</span><span class="note">of the 128 lines both methods miss</span></div>
+    <div class="box"><span class="eyebrow">Coded by rules</span><span class="big">46%</span><span class="note">of test-month lines, at 92.6% right</span></div>
+    <div class="box"><span class="eyebrow">Supplier's usual account</span><span class="big">50%</span><span class="note">right, from history posted before each import</span></div>
+    <div class="box"><span class="eyebrow">No supplier history yet</span><span class="big">29%</span><span class="note">of lines, when the invoice is imported</span></div>
   </div>
   <div class="tw"><table>
     <thead><tr><th>Method, scored on 590 test-month lines</th><th class="n">Lines covered</th><th class="n">Right when covered</th></tr></thead>
     <tbody>
       <tr><td>Rules frozen on history before 5 May</td><td class="n">26.6%</td><td class="n">79.0%</td></tr>
       <tr><td>Supplier's usual account, frozen before 5 May</td><td class="n">all</td><td class="n">23.4%</td></tr>
-      <tr class="hl"><td>Rules learning from all history up to each invoice: high-confidence tiers</td><td class="n">64.9%</td><td class="n">94.5%</td></tr>
-      <tr><td>Supplier's usual account, learning up to each invoice</td><td class="n">all</td><td class="n">75.9%</td></tr>
-      <tr><td>Rules first, then the supplier's usual account</td><td class="n">all</td><td class="n">78.3%</td></tr>
+      <tr class="hl"><td>Rules learning from everything posted before each import: high-confidence tiers</td><td class="n">45.9%</td><td class="n">92.6%</td></tr>
+      <tr><td>Supplier's usual account, from everything posted before each import</td><td class="n">all</td><td class="n">49.5%</td></tr>
+      <tr><td>Rules first, then the supplier's usual account</td><td class="n">all</td><td class="n">52.9%</td></tr>
       <tr><td>erpocr's service mappings today (jev_lab's measurement)</td><td class="n">7.7%</td><td class="n">97.6%</td></tr>
     </tbody>
   </table></div>
-  <p class="note">The rule tiers, in order: a stock item always posts to Stock Received but not Billed (22 lines, 100% right). Next, a word that has always meant one account for that supplier (217 lines, 93.5%). Then a supplier that only ever uses one account (144 lines, 95.1%). Last, a word that means one account across several suppliers (26 lines, 69%), which is too weak to trust.</p>
+  <p class="note">The rule tiers, in order: a stock item always posts to Stock Received but not Billed (100% right). Next, a word that has always meant one account for that supplier. Then a supplier that only ever uses one account. Last, a word that means one account across several suppliers, which is too weak to trust and is left out of the high-confidence figure.</p>
+  <p class="note"><strong>Why "at import time" matters.</strong> An invoice is typically posted about three days after it is imported. By the time it is imported, 29% of its lines come from a supplier with no posted history at all. Nothing learned from history can code those lines. That is the real ceiling for auto-draft.</p>
   <p class="note"><strong>Why frozen rules fail this month.</strong> Travel Expenses – Local had 17 lines before 5 May and 201 in the test month. Entertainment went from 0 to 13. 36 of the month's 85 suppliers had never appeared before. A rulebook learned once and then frozen cannot predict that. One learning continuously picks it up within days.</p>
-  <p class="note"><strong>jev_lab reported 52% for "the supplier's usual account".</strong> That figure does not reproduce here. Learning only from OCR invoices, up to each invoice, gives 77.8%. The difference is probably in how the history was cut, and jev_lab has been asked to reconcile it.</p>
+  <p class="note"><strong>Agrees with jev_lab.</strong> jev_lab measured 51.9% for "the supplier's usual account" at import time on its 534 paired lines. This page's 49.5% on all 590 lines is the same measurement.</p>
 </section>
 
 <section>
@@ -120,7 +122,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 <section>
   <h2>Why the rest can't be deduced</h2>
-  <p>Rules first, then the supplier's usual account, still got 128 test-month lines wrong. They split three ways.</p>
+  <p>These counts come from the first, too-generous cut, so the total is smaller than today's real miss count. The proportions still show where misses come from: the "which asset" problem dominates the misses that history cannot fix. At import time, the largest extra group is simply suppliers with no history yet.</p>
   <div class="tw"><table>
     <thead><tr><th>Kind of miss</th><th class="n">Lines</th><th>What would fix it</th></tr></thead>
     <tbody>
@@ -160,7 +162,7 @@ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 <section>
   <h2>What this means for auto-draft</h2>
-  <p>Today erpocr learns an expense account only for the exact wording of a confirmed line. That is why it reaches just 8% of lines. The rules above generalise across wording and still learn continuously, and they would code two lines in three.</p>
+  <p>Today erpocr learns an expense account only for the exact wording of a confirmed line. That is why it reaches just 8% of lines. The rules above generalise across wording and would code a little under half, at about 93%. Release v1.11.0 already makes erpocr learn from every submitted invoice, which feeds exactly this kind of history.</p>
   <p>This page proposes nothing to build. Once the accountant has confirmed or corrected the rules, any change to erpocr's matching gets its own plan and review.</p>
 </section>
 
