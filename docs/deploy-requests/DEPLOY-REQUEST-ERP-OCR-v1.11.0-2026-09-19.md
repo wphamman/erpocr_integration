@@ -46,4 +46,4 @@ Final smoke: 15/15 checks PASS, incl. 17 service mappings learned from 5 real re
 **Rollback:** re-deploy tag `v1.10.4`.
 
 ---
-**Status:** SUPERSEDED 2026-09-19 by the cumulative v1.12.0 request — deploy v1.12.0 instead.
+**Status:** ON DEPLOY-LIST-2026-09-19 (both sites), coordinator 15:58 SAST.
