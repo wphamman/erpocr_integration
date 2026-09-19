@@ -533,6 +533,25 @@ def _is_ignorable_zero_line(item) -> bool:
 	return not is_stock
 
 
+#: `ocr_text` (both alias doctypes) and `description_pattern` are Data fields:
+#: Frappe throws CharacterLengthExceededError past 140 chars, which used to abort
+#: the whole learning write (bench-caught 2026-09-19 on a 200-char cable line).
+_LEARN_TEXT_MAX = 140
+
+
+def _fit_service_pattern(pattern: str) -> str:
+	"""Trim a service pattern to the field length at a word boundary.
+
+	Safe for matching: `match_service_item` tests `pattern in description`, and a
+	word-boundary prefix of a normalized description is still a substring of it.
+	(Aliases are exact-match, so they are SKIPPED when too long, never trimmed.)
+	"""
+	if len(pattern) <= _LEARN_TEXT_MAX:
+		return pattern
+	cut = pattern[:_LEARN_TEXT_MAX]
+	return cut.rsplit(" ", 1)[0] if " " in cut else cut
+
+
 def _upsert_supplier_alias(ocr_text: str, supplier: str) -> None:
 	"""Save (or correct) an OCR-text -> Supplier alias for future auto-matching.
 
@@ -547,8 +566,8 @@ def _upsert_supplier_alias(ocr_text: str, supplier: str) -> None:
 	learning) share one implementation instead of duplicating the upsert logic.
 	"""
 	ocr_text = (ocr_text or "").strip()
-	if not ocr_text or not supplier:
-		return
+	if not ocr_text or not supplier or len(ocr_text) > _LEARN_TEXT_MAX:
+		return  # too long for the name field; an exact-match alias cannot be trimmed
 
 	# One read answers both "exists?" (None = no row; supplier is required so a
 	# row never carries NULL) and "changed?".
@@ -582,8 +601,8 @@ def _upsert_item_alias(ocr_text: str, supplier: str, item_code: str, allow_updat
 	Module-level (v1.11.0, Fix A / Q18) — see `_upsert_supplier_alias`.
 	"""
 	ocr_text = (ocr_text or "").strip()
-	if not ocr_text or not item_code:
-		return
+	if not ocr_text or not item_code or len(ocr_text) > _LEARN_TEXT_MAX:
+		return  # too long for the Data field; an exact-match alias cannot be trimmed
 
 	supplier = (supplier or "").strip()
 	if supplier:
@@ -640,7 +659,7 @@ def _upsert_service_mapping(
 		return
 
 	# Extract a reusable pattern (strips dates, months, years)
-	pattern = _extract_service_pattern(description)
+	pattern = _fit_service_pattern(_extract_service_pattern(description))
 
 	# Check if a mapping already exists for this pattern + company + supplier
 	existing = frappe.db.get_value(

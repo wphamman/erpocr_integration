@@ -3169,3 +3169,48 @@ class TestBuildTaxesExplicitArgs:
 		mock_frappe.get_cached_doc.return_value = self._actual_template()
 		_name, taxes = _build_taxes_from_template("9 - Import with Std VAT", "Test Company", 100.0, True)
 		assert taxes[0]["included_in_print_rate"] == 0
+
+
+class TestLearningTextLength:
+	"""Alias `ocr_text` and `description_pattern` are 140-char Data fields; past
+	that Frappe throws CharacterLengthExceededError and the whole learning write
+	aborted (bench-caught 2026-09-19 on a long cable description)."""
+
+	def test_short_pattern_unchanged(self):
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import _fit_service_pattern
+
+		assert _fit_service_pattern("pro plan") == "pro plan"
+
+	def test_long_pattern_trimmed_at_word_boundary_and_still_a_substring(self):
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import _fit_service_pattern
+
+		long = " ".join(["insulation cable voltage rating"] * 10)
+		out = _fit_service_pattern(long)
+		assert len(out) <= 140
+		assert long.startswith(out)
+		assert not out.endswith(" ")
+		assert long[len(out)] == " "  # cut falls on a word boundary
+
+	def test_too_long_supplier_alias_is_skipped(self, mock_frappe):
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import _upsert_supplier_alias
+
+		_upsert_supplier_alias("X" * 141, "Some Supplier")
+		mock_frappe.get_doc.assert_not_called()
+		mock_frappe.db.set_value.assert_not_called()
+
+	def test_too_long_item_alias_is_skipped(self, mock_frappe):
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import _upsert_item_alias
+
+		mock_frappe.get_all = MagicMock(return_value=[])
+		_upsert_item_alias("Y" * 141, "Some Supplier", "ITEM-A")
+		mock_frappe.get_doc.assert_not_called()
+		mock_frappe.db.set_value.assert_not_called()
+
+	def test_140_char_alias_still_written(self, mock_frappe):
+		from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import _upsert_supplier_alias
+
+		mock_frappe.db.get_value.return_value = None
+		new_doc = MagicMock()
+		mock_frappe.get_doc.return_value = new_doc
+		_upsert_supplier_alias("Z" * 140, "Some Supplier")
+		new_doc.insert.assert_called_once_with(ignore_permissions=True)

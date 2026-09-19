@@ -814,7 +814,7 @@ def update_ocr_import_on_submit(doc, method):
 		filters={field: doc.name, "status": "Draft Created"},
 		pluck="name",
 	)
-	for name in ocr_imports:
+	for idx, name in enumerate(ocr_imports):
 		frappe.db.set_value("OCR Import", name, "status", "Completed")
 
 		# Isolation (Fix A point 3; savepoint added on review): learning must
@@ -826,7 +826,11 @@ def update_ocr_import_on_submit(doc, method):
 		# tasks/auto_record.py (grep `savepoint`) — so a learning failure
 		# rolls back only the learning writes, never the Completed status.
 		# No frappe.db.commit() here — the caller's transaction owns that.
-		savepoint = f"ocr_submit_learning_{name}"
+		# The savepoint NAME is interpolated unquoted into `SAVEPOINT <name>` by
+		# frappe.db.savepoint — a record name like OCR-IMP-00957 is a MariaDB syntax
+		# error that aborts the whole submit (bench-caught 2026-09-19; the mock
+		# could not see it). Use the loop index, never a document name.
+		savepoint = f"ocr_submit_learning_{idx}"
 		frappe.db.savepoint(savepoint)
 		try:
 			_learn_from_submitted_document(doc, name)

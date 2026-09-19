@@ -5,7 +5,7 @@ verifying guard behavior across document types and the full PO→PR→PI chain.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -1211,6 +1211,26 @@ class TestSubmitTimeLearning:
 
 		mock_frappe.db.commit.assert_not_called()
 
+	def test_savepoint_names_are_sql_safe_identifiers(self, mock_frappe):
+		"""frappe.db.savepoint interpolates the name UNQUOTED into `SAVEPOINT <name>`.
+		A document name (OCR-IMP-00957) contains hyphens -> MariaDB 1064 -> the PI
+		submit aborts. Bench-caught 2026-09-19; pin names to [A-Za-z0-9_]."""
+		import re
+
+		from erpocr_integration import api
+
+		mock_frappe.get_all.return_value = ["OCR-IMP-00957", "OCR-IMP-00958"]
+		doc = MagicMock()
+		doc.doctype = "Purchase Invoice"
+		doc.name = "ACC-PINV-2026-00001"
+		with patch.object(api, "_learn_from_submitted_document"):
+			api.update_ocr_import_on_submit(doc, "on_submit")
+		names = [c.args[0] for c in mock_frappe.db.savepoint.call_args_list]
+		assert len(names) == 2
+		assert len(set(names)) == 2
+		for n in names:
+			assert re.fullmatch(r"[A-Za-z0-9_]+", n), n
+
 	def test_savepoint_rollback_on_learning_exception_after_partial_write(self, mock_frappe):
 		"""Review item 1: a learning failure AFTER a write already happened
 		(the supplier upsert succeeds, item processing then raises) must roll
@@ -1238,14 +1258,14 @@ class TestSubmitTimeLearning:
 		# The supplier alias write happened before the failure.
 		assert len(_dict_insert_calls(mock_frappe, "OCR Supplier Alias")) == 1
 		# Rolled back to THIS import's own savepoint name.
-		mock_frappe.db.rollback.assert_called_once_with(save_point="ocr_submit_learning_OCR-IMP-00001")
+		mock_frappe.db.rollback.assert_called_once_with(save_point="ocr_submit_learning_0")
 		mock_frappe.log_error.assert_called_once()
 		assert mock_frappe.log_error.call_args.kwargs["title"] == "OCR Submit Learning Failed"
 		# The Completed status write is NOT rolled back — it happens BEFORE
 		# the savepoint, verified by call order on the shared frappe mock.
 		set_completed = call.db.set_value("OCR Import", "OCR-IMP-00001", "status", "Completed")
-		savepoint_call = call.db.savepoint("ocr_submit_learning_OCR-IMP-00001")
-		rollback_call = call.db.rollback(save_point="ocr_submit_learning_OCR-IMP-00001")
+		savepoint_call = call.db.savepoint("ocr_submit_learning_0")
+		rollback_call = call.db.rollback(save_point="ocr_submit_learning_0")
 		calls = mock_frappe.mock_calls
 		idx_set = calls.index(set_completed)
 		idx_sp = calls.index(savepoint_call)

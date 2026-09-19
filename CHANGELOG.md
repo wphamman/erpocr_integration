@@ -9,6 +9,8 @@ Minor release. Two well-bounded auto-draft learning holes identified by a live r
 every invoice from one haulier blocked both readiness and auto-draft confidence.
 
 ### Fixed
+- **Bench-caught before release (architect smoke, 2026-09-19):** the submit-learning savepoint name embedded the OCR Import name; `OCR-IMP-…` hyphens are a MariaDB syntax error in `SAVEPOINT <name>`, which would have failed every OCR-linked PI/PR submit. Now uses the loop index, with a regression test pinning names to `[A-Za-z0-9_]`.
+- **Learning text over 140 characters** no longer aborts learning (pre-existing on the confirm-on-save path too): service patterns are trimmed at a word boundary; exact-match aliases that would not fit are skipped.
 - **Fix A — learn from the SUBMITTED document, not just an explicit Confirmed click.**
   `OCRImport.on_update` only saved a supplier/item alias when the operator changed a field to
   `Confirmed` in that save — an operator who accepted a correct pre-filled fuzzy (`Suggested`)
