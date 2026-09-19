@@ -791,7 +791,15 @@ def retry_gemini_extraction(ocr_import: str):
 
 
 def update_ocr_import_on_submit(doc, method):
-	"""Hook: when a PI/PR/JE is submitted, mark the linked OCR Import as Completed."""
+	"""Hook: when a PI/PR/JE is submitted, mark the linked OCR Import as Completed.
+
+	Also runs submit-time learning (v1.11.0, Fix A / Q18): the submitted
+	document is the strongest human-validated signal available — stronger than
+	an operator accepting a pre-filled "Suggested" match without ever touching
+	it, which `OCRImport.on_update`'s Confirmed-only gate never sees (that hole
+	is why the same printed supplier name kept returning "Suggested" forever).
+	See `_learn_from_submitted_document`.
+	"""
 	field_map = {
 		"Purchase Invoice": "purchase_invoice",
 		"Purchase Receipt": "purchase_receipt",
@@ -808,6 +816,135 @@ def update_ocr_import_on_submit(doc, method):
 	)
 	for name in ocr_imports:
 		frappe.db.set_value("OCR Import", name, "status", "Completed")
+
+		# Isolation (Fix A point 3): learning must never block or fail the
+		# submit. No frappe.db.commit() here — the caller's transaction owns
+		# that; a learning row this function writes rides the same commit as
+		# everything else on_submit, and a failure here never undoes the
+		# status update above.
+		try:
+			_learn_from_submitted_document(doc, name)
+		except Exception:
+			frappe.log_error(
+				title="OCR Submit Learning Failed",
+				message=(f"OCR Import {name} / {doc.doctype} {doc.name}\n{frappe.get_traceback()}"),
+			)
+
+
+def _learn_from_submitted_document(doc, ocr_import_name):
+	"""Learn supplier + item mappings from a submitted PI/PR (v1.11.0, Fix A / Q18).
+
+	`OCRImport.on_update` only learns when the OPERATOR explicitly changes a
+	field to "Confirmed" — an operator who accepts a correct pre-filled fuzzy
+	("Suggested") match without touching it teaches nothing, so the same
+	printed name/description returns "Suggested" forever. The submitted
+	document is the strongest signal available: whatever supplier/item ended
+	up on it is what the human validated, Suggested or not.
+
+	Journal Entry has neither `supplier` nor comparable `items` — the
+	`field_map` in `update_ocr_import_on_submit` already routes it here only
+	for the status update; this function is a deliberate no-op for it (and for
+	any doctype without a resolvable `supplier`).
+	"""
+	if doc.doctype not in ("Purchase Invoice", "Purchase Receipt"):
+		return
+
+	supplier = (getattr(doc, "supplier", None) or "").strip()
+	if not supplier:
+		return
+
+	from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+		_upsert_item_alias,
+		_upsert_service_mapping,
+		_upsert_supplier_alias,
+	)
+
+	ocr_import = frappe.get_doc("OCR Import", ocr_import_name)
+
+	# 1. Supplier alias — only when the record's OWN supplier match wasn't
+	# already a strong signal: "Auto Matched" means an alias/exact match
+	# already produced it (nothing new to learn), "Confirmed" means on_update
+	# already saved it (would just re-write the same row). Anything weaker
+	# (Suggested / Unmatched / blank) means the operator accepted or picked a
+	# supplier that on_update never learned from.
+	ocr_supplier_name = (ocr_import.supplier_name_ocr or "").strip()
+	if ocr_supplier_name and ocr_import.supplier_match_status not in ("Auto Matched", "Confirmed"):
+		_upsert_supplier_alias(ocr_supplier_name, supplier)
+
+	# 2. Item rows — only "Suggested" rows (Auto Matched/Confirmed already
+	# learned; Unmatched carries no item_code signal to learn FROM on this OCR
+	# row, so it's out of scope here — see kickoff spec). Skip the OCR Settings
+	# lookup entirely when there are no rows to evaluate.
+	default_item = ""
+	if ocr_import.items:
+		default_item = (frappe.get_cached_doc("OCR Settings").get("default_item") or "").strip()
+
+	# Build a description -> line map + a count map on the SUBMITTED doc, and a
+	# count map on the OCR Import's own rows. A description that appears more
+	# than once on either side is ambiguous — which submitted line corresponds
+	# to which OCR row can't be determined — so both counts must be exactly 1.
+	doc_desc_counts: dict[str, int] = {}
+	doc_lines_by_desc: dict[str, object] = {}
+	for line in doc.items:
+		desc = (getattr(line, "description", None) or "").strip()
+		if not desc:
+			continue
+		doc_desc_counts[desc] = doc_desc_counts.get(desc, 0) + 1
+		doc_lines_by_desc.setdefault(desc, line)
+
+	ocr_desc_counts: dict[str, int] = {}
+	for row in ocr_import.items:
+		desc = (row.description_ocr or "").strip()
+		if not desc:
+			continue
+		ocr_desc_counts[desc] = ocr_desc_counts.get(desc, 0) + 1
+
+	for row in ocr_import.items:
+		if row.match_status != "Suggested":
+			continue
+		desc = (row.description_ocr or "").strip()
+		if not desc:
+			continue
+		if ocr_desc_counts.get(desc, 0) != 1:
+			continue  # duplicated among this OCR Import's own rows — ambiguous
+		if doc_desc_counts.get(desc, 0) != 1:
+			continue  # 0 or >1 matching lines on the submitted doc — ambiguous/no match
+
+		line = doc_lines_by_desc[desc]
+		line_item_code = (getattr(line, "item_code", None) or "").strip()
+		if not line_item_code:
+			continue
+
+		line_expense_account = getattr(line, "expense_account", None)
+		line_cost_center = getattr(line, "cost_center", None)
+
+		if line_item_code == default_item:
+			# Catch-all item: a description->item alias is useless (the item is
+			# always the default). But the GL coding IS worth learning — same
+			# rule as on_update's default-item branch.
+			if line_expense_account:
+				_upsert_service_mapping(
+					desc,
+					supplier,
+					line_item_code,
+					getattr(line, "item_name", None),
+					line_expense_account,
+					line_cost_center,
+					doc.company,
+				)
+			continue
+
+		_upsert_item_alias(desc, supplier, line_item_code, allow_update=True)
+		if line_expense_account:
+			_upsert_service_mapping(
+				desc,
+				supplier,
+				line_item_code,
+				getattr(line, "item_name", None),
+				line_expense_account,
+				line_cost_center,
+				doc.company,
+			)
 
 
 def update_ocr_import_on_cancel(doc, method):

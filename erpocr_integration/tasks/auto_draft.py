@@ -104,8 +104,22 @@ def _is_high_confidence(ocr_import) -> tuple[bool, str]:
 	if not ocr_import.items:
 		return False, "No items extracted"
 
-	# All items must be high-confidence matched
-	for item in ocr_import.items:
+	# v1.11.0 (Fix B / Q18): a trailing zero-value line (rate 0, amount 0, no
+	# PO/PR ref, item_code blank or non-stock — see _is_ignorable_zero_line)
+	# doesn't count against confidence — a haulier's R0 return-leg row used to
+	# block auto-draft on an otherwise fully-matched invoice. Still requires at
+	# least one REAL (non-ignorable) item; an all-zero record is unverifiable
+	# and must not auto-draft.
+	from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
+		_is_ignorable_zero_line,
+	)
+
+	real_items = [item for item in ocr_import.items if not _is_ignorable_zero_line(item)]
+	if not real_items:
+		return False, "No items extracted"
+
+	# All (non-ignorable) items must be high-confidence matched
+	for item in real_items:
 		if item.match_status not in _HIGH_CONFIDENCE_STATUSES:
 			return False, f"Item '{item.description_ocr or '?'}' match is '{item.match_status}'"
 		if not item.item_code:

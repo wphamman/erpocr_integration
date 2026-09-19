@@ -16,6 +16,7 @@ from erpocr_integration.erpnext_ocr.doctype.ocr_import.ocr_import import (
 	_effective_line_rate,
 	_effective_line_total,
 	_extract_service_pattern,
+	_is_ignorable_zero_line,
 	_resolve_ocr_description,
 )
 
@@ -1067,6 +1068,160 @@ class TestUpdateStatus:
 		doc = _make_ocr_import(status="Error")
 		doc._update_status()
 		assert doc.status == "Error"
+
+
+# ---------------------------------------------------------------------------
+# _is_ignorable_zero_line — v1.11.0, Fix B / Q18
+# ---------------------------------------------------------------------------
+
+
+class TestIsIgnorableZeroLine:
+	"""Truth table for the zero-value-line helper: rate/amount/PO-PR refs/stock."""
+
+	def test_zero_rate_zero_amount_blank_item_code_is_ignorable(self, mock_frappe):
+		item = _make_item(rate=0, amount=0, item_code="", purchase_order_item=None, pr_detail=None)
+		assert _is_ignorable_zero_line(item) is True
+
+	def test_zero_rate_zero_amount_non_stock_item_is_ignorable(self, mock_frappe):
+		mock_frappe.db.get_value.return_value = 0  # is_stock_item = 0
+		item = _make_item(rate=0, amount=0, item_code="ITEM-NS", purchase_order_item=None, pr_detail=None)
+		assert _is_ignorable_zero_line(item) is True
+
+	def test_zero_rate_zero_amount_stock_item_is_not_ignorable(self, mock_frappe):
+		mock_frappe.db.get_value.return_value = 1  # is_stock_item = 1 — a genuinely FREE stock item
+		item = _make_item(rate=0, amount=0, item_code="ITEM-STOCK", purchase_order_item=None, pr_detail=None)
+		assert _is_ignorable_zero_line(item) is False
+
+	def test_purchase_order_ref_blocks_ignorable(self, mock_frappe):
+		item = _make_item(rate=0, amount=0, item_code="", purchase_order_item="po-item-row-1", pr_detail=None)
+		assert _is_ignorable_zero_line(item) is False
+
+	def test_pr_ref_blocks_ignorable(self, mock_frappe):
+		item = _make_item(rate=0, amount=0, item_code="", purchase_order_item=None, pr_detail="pr-item-row-1")
+		assert _is_ignorable_zero_line(item) is False
+
+	def test_nonzero_rate_blocks_ignorable(self, mock_frappe):
+		item = _make_item(rate=5, amount=0, item_code="", purchase_order_item=None, pr_detail=None)
+		assert _is_ignorable_zero_line(item) is False
+
+	def test_nonzero_amount_blocks_ignorable(self, mock_frappe):
+		item = _make_item(rate=0, amount=50, item_code="", purchase_order_item=None, pr_detail=None)
+		assert _is_ignorable_zero_line(item) is False
+
+
+# ---------------------------------------------------------------------------
+# _update_status — zero-value lines (v1.11.0, Fix B / Q18)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateStatusZeroValueLines:
+	def test_reaches_matched_with_trailing_ignorable_zero_row(self, mock_frappe):
+		"""A haulier's R0 return-leg row (no PO/PR ref, non-stock) must not
+		block an otherwise-ready record from reaching Matched."""
+		mock_frappe.db.get_value.return_value = 0  # is_stock_item = 0 for the zero row's lookup
+		real_item = _make_item(item_code="ITEM-001", expense_account="5000 - COGS - TC")
+		zero_item = _make_item(
+			item_code="ITEM-DEFAULT",
+			match_status="Suggested",
+			rate=0,
+			amount=0,
+			expense_account="",
+			purchase_order_item=None,
+			pr_detail=None,
+		)
+		doc = _make_ocr_import(status="Needs Review", supplier="Test Supplier", items=[real_item, zero_item])
+		doc._update_status()
+		assert doc.status == "Matched"
+
+	def test_all_zero_rows_unchanged_from_today(self, mock_frappe):
+		"""When EVERY row is ignorable, behave exactly as before an all-zero,
+		unmatched record still needs review."""
+		mock_frappe.db.get_value.return_value = 0
+		zero_item = _make_item(
+			item_code="",
+			match_status="Unmatched",
+			rate=0,
+			amount=0,
+			expense_account="",
+			purchase_order_item=None,
+			pr_detail=None,
+		)
+		doc = _make_ocr_import(status="Needs Review", supplier="Test Supplier", items=[zero_item])
+		doc._update_status()
+		assert doc.status == "Needs Review"
+
+
+# ---------------------------------------------------------------------------
+# create_purchase_invoice — zero-value lines (v1.11.0, Fix B / Q18)
+# ---------------------------------------------------------------------------
+
+
+class TestCreatePurchaseInvoiceZeroLines:
+	"""Ignorable zero-value rows are dropped from the built PI — mirrors what
+	an operator does by hand today (deletes the row before creating)."""
+
+	def test_zero_row_omitted_from_pi(self, mock_frappe, sample_settings):
+		real_item = _make_item()  # item_code="ITEM-001", rate=500, amount=500 (defaults)
+		zero_item = _make_item(
+			item_code="",
+			rate=0,
+			amount=0,
+			description_ocr="Return Leg",
+			match_status="Suggested",
+			purchase_order_item=None,
+			pr_detail=None,
+		)
+		doc = _make_ocr_import(document_type="Purchase Invoice", items=[real_item, zero_item])
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert len(pi_dict["items"]) == 1
+		assert pi_dict["items"][0]["item_code"] == "ITEM-001"
+
+	def test_zero_value_stock_item_kept(self, mock_frappe, sample_settings):
+		"""A genuinely FREE stock item (rate 0, amount 0) still needs a real
+		line — inventory quantity moved — so it is never dropped."""
+		free_stock_item = _make_item(
+			item_code="ITEM-FREE", rate=0, amount=0, purchase_order_item=None, pr_detail=None
+		)
+		doc = _make_ocr_import(document_type="Purchase Invoice", items=[free_stock_item])
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+		mock_frappe.db.get_value.side_effect = _db_get_value_handler(item_is_stock=1)
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert len(pi_dict["items"]) == 1
+		assert pi_dict["items"][0]["item_code"] == "ITEM-FREE"
+
+	def test_zero_row_with_po_ref_kept(self, mock_frappe, sample_settings):
+		"""A zero-value row tied to a real PO reference is never ignorable — a
+		row a real transaction line references is never noise."""
+		po_zero_item = _make_item(item_code="ITEM-001", rate=0, amount=0, purchase_order_item="po-item-row-1")
+		doc = _make_ocr_import(
+			document_type="Purchase Invoice", purchase_order="PO-00001", items=[po_zero_item]
+		)
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert len(pi_dict["items"]) == 1
+		assert pi_dict["items"][0]["purchase_order"] == "PO-00001"
+
+	def test_all_zero_rows_unchanged_from_today(self, mock_frappe, sample_settings):
+		"""When EVERY row is ignorable, behave exactly as before — the PI still
+		builds (now an all-zero line), same as pre-Fix-B."""
+		zero_item = _make_item(item_code="", rate=0, amount=0, purchase_order_item=None, pr_detail=None)
+		doc = _make_ocr_import(document_type="Purchase Invoice", items=[zero_item])
+		_setup_frappe_for_create(mock_frappe, sample_settings, "PI-00001")
+
+		doc.create_purchase_invoice()
+
+		pi_dict = mock_frappe.get_doc.call_args[0][0]
+		assert len(pi_dict["items"]) == 1
 
 
 # ---------------------------------------------------------------------------
