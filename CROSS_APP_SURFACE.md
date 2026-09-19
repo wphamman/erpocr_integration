@@ -4,9 +4,20 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.11.0** (product baseline = tag `v1.10.4`, LIVE on both sites since 2026-09-14; v1.11.0 not yet
-deployed as of this writing — see the v1.10.1–v1.11.0 delta notes below). Historical context from the v1.10.0
-baseline (`39b9562`) follows.
+**Current through v1.12.0** (product baseline = tag `v1.10.4`, LIVE on both sites since 2026-09-14; v1.11.0/v1.12.0
+not yet deployed as of this writing — see the v1.10.1–v1.12.0 delta notes below). Historical context from the
+v1.10.0 baseline (`39b9562`) follows.
+
+**v1.12.0 delta (Q17 — Jev shadow trial): no new or changed WHITELISTED method (still 33); ONE new outbound
+HTTP dependency, no inbound surface change.** `tasks/jev_shadow.py` (enqueued from `api.gemini_process`, never
+called directly) makes an outbound `POST https://api.typesafe.ai/v1/systemone` when
+`OCR Settings.enable_jev_shadow` is on — a NEW third-party processor this app sends data to (supplier name as
+printed, VAT number if present, candidate supplier names/aliases), gated off by default and by Willie's
+2026-09-19 POPIA/vendor clearance recorded in Q17. No new field is READABLE by any existing consumer at
+permlevel 0 — the new `jev_*` fields on OCR Import are permlevel-1, System Manager read only (OCR Manager,
+the role any cross-app integration would realistically read through, has no permlevel-1 grant). Nothing is
+ever written to `supplier`/`supplier_match_status`/`status`/`items`/any auto-draft field, so this delta is
+invisible to `fleet_management` and the `starpops_accounts` dashboard.
 
 **v1.10.0 provider delta:** the existing
 `upload_fleet_slip` write now has the explicit cookie-CSRF invariant below; no method, signature,

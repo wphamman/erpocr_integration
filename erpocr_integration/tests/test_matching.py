@@ -1166,3 +1166,145 @@ class TestMatchingShapeEndToEnd:
 		# "Delivery 15/01/2026" → stripped → "delivery" (1 content token, should NOT fallback)
 		result = _extract_service_pattern("Delivery 15/01/2026")
 		assert result == "delivery"
+
+
+# ---------------------------------------------------------------------------
+# supplier_candidates (Q17 / v1.12.0 — Jev shadow trial candidate generation)
+# ---------------------------------------------------------------------------
+
+
+class TestSupplierCandidates:
+	def _setup(self, mock_frappe, suppliers, aliases=None):
+		"""suppliers: [(name, supplier_name, tax_id)]. aliases: [(supplier, ocr_text)]."""
+		supplier_data = [
+			SimpleNamespace(name=s[0], supplier_name=s[1], tax_id=s[2] if len(s) > 2 else None)
+			for s in suppliers
+		]
+		alias_data = [SimpleNamespace(supplier=a[0], ocr_text=a[1]) for a in (aliases or [])]
+
+		def get_all_side_effect(doctype, **kwargs):
+			if doctype == "Supplier":
+				return supplier_data
+			if doctype == "OCR Supplier Alias":
+				return alias_data
+			return []
+
+		mock_frappe.get_all = MagicMock(side_effect=get_all_side_effect)
+
+	def test_empty_printed_name_returns_no_candidates(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(mock_frappe, suppliers=[("SUP-001", "Acme Trading (Pty) Ltd", None)])
+		assert supplier_candidates("", None) == []
+		assert supplier_candidates(None, None) == []
+
+	def test_ranking_best_match_first(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(
+			mock_frappe,
+			suppliers=[
+				("SUP-001", "Acme Trading (Pty) Ltd", None),
+				("SUP-002", "Completely Different Co", None),
+			],
+		)
+		candidates = supplier_candidates("Acme Trading Pty Ltd", None)
+		assert candidates[0]["name"] == "SUP-001"
+		assert candidates[0]["score"] > candidates[1]["score"]
+
+	def test_alias_contributes_to_score(self, mock_frappe):
+		"""A supplier whose registered name is a poor match but whose learned alias
+		is an exact match should outrank a registered-name-only supplier."""
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(
+			mock_frappe,
+			suppliers=[
+				("SUP-001", "Official Registered Name CC", None),
+				("SUP-002", "Somewhat Similar Traders", None),
+			],
+			aliases=[("SUP-001", "Quickie Traders Express")],
+		)
+		candidates = supplier_candidates("Quickie Traders Express", None)
+		top = candidates[0]
+		assert top["name"] == "SUP-001"
+		assert top["score"] == pytest.approx(1.0)
+		assert top["aliases"] == ["Quickie Traders Express"]
+
+	def test_exact_tax_id_hit_ranks_first(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(
+			mock_frappe,
+			suppliers=[
+				("SUP-001", "Totally Unrelated Name", "4123456789"),
+				("SUP-002", "Zzz Nothing Like The Printed Name", None),
+			],
+		)
+		candidates = supplier_candidates("Nothing Like Either Registered Name", "4123456789")
+		assert candidates[0]["name"] == "SUP-001"
+		assert candidates[0]["score"] == 2.0
+
+	def test_tax_id_short_digit_run_not_treated_as_exact(self, mock_frappe):
+		"""Fewer than 6 digits is too weak to trust as an exact tax-ID hit."""
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(mock_frappe, suppliers=[("SUP-001", "Some Supplier", "12345")])
+		candidates = supplier_candidates("Totally Different Printed Name", "12345")
+		assert candidates[0]["score"] != 2.0
+
+	def test_disabled_suppliers_excluded(self, mock_frappe):
+		"""Disabled suppliers never reach supplier_candidates — the get_all filter
+		(disabled=0) is asserted, not re-simulated in Python."""
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(mock_frappe, suppliers=[("SUP-001", "Acme Trading (Pty) Ltd", None)])
+		supplier_candidates("Acme Trading", None)
+		call = next(c for c in mock_frappe.get_all.call_args_list if c.args[0] == "Supplier")
+		assert call.kwargs["filters"] == {"disabled": 0}
+
+	def test_k_limit(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		suppliers = [(f"SUP-{i:03d}", f"Supplier Number {i}", None) for i in range(15)]
+		self._setup(mock_frappe, suppliers=suppliers)
+		candidates = supplier_candidates("Supplier Number 7", None, k=3)
+		assert len(candidates) == 3
+
+	def test_one_query_per_table(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(
+			mock_frappe,
+			suppliers=[(f"SUP-{i:03d}", f"Supplier {i}", None) for i in range(5)],
+			aliases=[("SUP-001", "Alt Name")],
+		)
+		supplier_candidates("Supplier 3", None)
+		doctypes_queried = [c.args[0] for c in mock_frappe.get_all.call_args_list]
+		assert doctypes_queried.count("Supplier") == 1
+		assert doctypes_queried.count("OCR Supplier Alias") == 1
+
+	def test_sorted_by_score_desc_then_name(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(
+			mock_frappe,
+			suppliers=[
+				("SUP-B", "Zzz No Match At All", None),
+				("SUP-A", "Zzz No Match At All", None),
+			],
+		)
+		candidates = supplier_candidates("Zzz No Match At All", None)
+		# Tied score -> name ascending
+		assert [c["name"] for c in candidates] == ["SUP-A", "SUP-B"]
+
+	def test_aliases_sorted_and_unique(self, mock_frappe):
+		from erpocr_integration.tasks.matching import supplier_candidates
+
+		self._setup(
+			mock_frappe,
+			suppliers=[("SUP-001", "Acme", None)],
+			aliases=[("SUP-001", "Zeta"), ("SUP-001", "Alpha"), ("SUP-001", "Alpha")],
+		)
+		candidates = supplier_candidates("Acme", None)
+		assert candidates[0]["aliases"] == ["Alpha", "Zeta"]

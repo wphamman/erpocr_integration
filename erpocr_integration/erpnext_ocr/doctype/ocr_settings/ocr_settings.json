@@ -41,7 +41,14 @@
 		"column_break_fleet",
 		"fleet_default_supplier",
 		"fleet_expense_account",
-		"enable_fleet_auto_record"
+		"enable_fleet_auto_record",
+		"section_break_jev",
+		"enable_jev_shadow",
+		"typesafe_api_key",
+		"column_break_jev",
+		"jev_model",
+		"jev_monthly_budget_usd",
+		"jev_timeout_seconds"
 	],
 	"fields": [
 		{
@@ -299,6 +306,54 @@
 			"label": "Enable Fleet Card Auto-Record",
 			"default": "0",
 			"description": "Automatically Mark Recorded high-confidence Fleet Card slips (confirmed vehicle + complete recon data). Low-confidence slips stay in Matched for manual review. Never creates a Purchase Invoice."
+		},
+		{
+			"fieldname": "section_break_jev",
+			"fieldtype": "Section Break",
+			"label": "Jev shadow trial (experiment)",
+			"collapsible": 1,
+			"description": "Q17: records TypeSafe Jev's supplier pick alongside today's matcher on every extraction, for later comparison. Blind — never used for matching, auto-draft, or anything operator-visible. Off by default."
+		},
+		{
+			"fieldname": "enable_jev_shadow",
+			"fieldtype": "Check",
+			"label": "Enable Jev Shadow Trial",
+			"default": "0",
+			"description": "When on, every extraction also asks TypeSafe Jev to pick a supplier and records the answer in permlevel-1 fields on OCR Import (System Manager only). Never changes matching, auto-draft, or any operator-visible field."
+		},
+		{
+			"fieldname": "typesafe_api_key",
+			"fieldtype": "Password",
+			"label": "TypeSafe API Key",
+			"depends_on": "eval:doc.enable_jev_shadow"
+		},
+		{
+			"fieldname": "column_break_jev",
+			"fieldtype": "Column Break"
+		},
+		{
+			"fieldname": "jev_model",
+			"fieldtype": "Data",
+			"label": "Jev Model",
+			"default": "jev-1.13.0",
+			"description": "Pinned model version — never 'jev-latest' (a model bump mid-trial would confound the comparison).",
+			"depends_on": "eval:doc.enable_jev_shadow"
+		},
+		{
+			"fieldname": "jev_monthly_budget_usd",
+			"fieldtype": "Float",
+			"label": "Jev Monthly Budget (USD)",
+			"default": "2.0",
+			"precision": "2",
+			"description": "Soft cap on Jev API spend per calendar month. Once this month's summed jev_cost_usd reaches it, the shadow job records Skipped and makes no further calls until next month (concurrent jobs can overshoot by a few calls at ~US$0.0002 each — acceptable, not worth locking). Set to 0 (or leave unset) to disable the trial entirely — every job records Skipped and never calls Jev.",
+			"depends_on": "eval:doc.enable_jev_shadow"
+		},
+		{
+			"fieldname": "jev_timeout_seconds",
+			"fieldtype": "Int",
+			"label": "Jev Timeout (seconds)",
+			"default": "20",
+			"depends_on": "eval:doc.enable_jev_shadow"
 		}
 	],
 	"index_web_pages_for_search": 1,

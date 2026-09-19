@@ -473,3 +473,84 @@ def match_service_item(
 			return _service_mapping_result(default_rows[0])
 
 	return None
+
+
+# ---------------------------------------------------------------------------
+# Jev shadow trial (Q17, v1.12.0) — candidate generation only.
+#
+# supplier_candidates() is consumed EXCLUSIVELY by tasks/jev_shadow.py. It does
+# not feed match_supplier / match_supplier_fuzzy above and must not change their
+# behaviour. Ported from jev_lab's own candidate generator
+# (evals/eval1_erpocr/jevlab/candidates.py::supplier_candidates / _key) — that
+# exact scoring is what Q17's 94% top-1 figure was measured with, so the fold
+# (_jev_key) is kept byte-for-byte rather than reusing normalize_for_matching,
+# and the eval's time-cut (candidates "as of" a historical date) is dropped:
+# live data has no such cutoff, everything enabled right now is a fair
+# candidate.
+# ---------------------------------------------------------------------------
+
+_JEV_SUFFIX = re.compile(r"\b(pty|ltd|limited|cc|inc|t a|trading as|the)\b")
+
+
+def _jev_key(name: str) -> str:
+	"""Normalize a name for Jev candidate scoring (mirrors jev_lab's `_key`)."""
+	text = re.sub(r"[^\w\s]+", " ", (name or "").lower())
+	return re.sub(r"\s+", " ", _JEV_SUFFIX.sub(" ", text)).strip()
+
+
+def supplier_candidates(printed_name: str, tax_id: str | None, k: int = 10) -> list[dict]:
+	"""Top-K enabled Supplier candidates for the Jev shadow trial.
+
+	Score = best SequenceMatcher ratio of `_jev_key(printed_name)` against the
+	supplier's own `name`, `supplier_name`, and each of its learned
+	`OCR Supplier Alias.ocr_text` rows. An exact digits-only tax-ID hit
+	(>=6 digits, both sides) short-circuits to score 2.0 so it always ranks
+	first. Sorted by (-score, name); top k.
+
+	One frappe.get_all per table (Supplier, OCR Supplier Alias) — no
+	per-supplier queries.
+
+	Returns:
+	    [{"name", "supplier_name", "aliases", "score"}], best first. Empty
+	    list when printed_name is blank or no suppliers are enabled.
+	"""
+	if not (printed_name or "").strip():
+		return []
+
+	aliases: dict[str, list[str]] = {}
+	for row in frappe.get_all(
+		"OCR Supplier Alias",
+		fields=["supplier", "ocr_text"],
+		limit_page_length=0,
+		ignore_permissions=True,
+	):
+		if row.ocr_text:
+			aliases.setdefault(row.supplier, []).append(row.ocr_text)
+
+	want = _jev_key(printed_name)
+	tax = re.sub(r"\D", "", tax_id or "")
+
+	scored = []
+	for s in frappe.get_all(
+		"Supplier",
+		filters={"disabled": 0},
+		fields=["name", "supplier_name", "tax_id"],
+		limit_page_length=0,
+		ignore_permissions=True,
+	):
+		supplier_aliases = sorted(set(aliases.get(s.name, [])))
+		names = [n for n in (s.name, s.supplier_name, *supplier_aliases) if n]
+		score = max((SequenceMatcher(None, want, _jev_key(n)).ratio() for n in names), default=0.0)
+		if tax and len(tax) >= 6 and re.sub(r"\D", "", getattr(s, "tax_id", None) or "") == tax:
+			score = 2.0  # exact tax-ID hit ranks first (mirrors jev_lab)
+		scored.append(
+			{
+				"name": s.name,
+				"supplier_name": s.supplier_name,
+				"aliases": supplier_aliases,
+				"score": score,
+			}
+		)
+
+	scored.sort(key=lambda c: (-c["score"], c["name"]))
+	return scored[:k]

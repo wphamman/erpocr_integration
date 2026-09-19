@@ -286,6 +286,11 @@ def gemini_process(
 		# Process each invoice and collect all created OCR Import names
 		placeholder_doc = frappe.get_doc("OCR Import", ocr_import_name)
 		all_ocr_import_names = []
+		# Snapshot of OUR matcher's pick per import, taken here (before
+		# auto-draft runs below) — the fixed comparison point for the Jev
+		# shadow trial (Q17). Threaded through to run_jev_shadow so a later
+		# operator edit to the live fields never overwrites the snapshot.
+		jev_matcher_snapshot: dict[str, dict] = {}
 		for idx, extracted_data in enumerate(invoice_list):
 			if idx == 0:
 				ocr_import = placeholder_doc
@@ -314,8 +319,36 @@ def gemini_process(
 				ocr_import.insert(ignore_permissions=True)
 
 			all_ocr_import_names.append(ocr_import.name)
+			jev_matcher_snapshot[ocr_import.name] = {
+				"supplier": ocr_import.supplier,
+				"supplier_match_status": ocr_import.supplier_match_status,
+			}
 
 		frappe.db.commit()
+
+		# Jev shadow trial (Q17, v1.12.0): enqueue ONE shadow job per created
+		# import, independent of auto-draft (runs whether it's on or off) and
+		# BEFORE it below, using the pre-auto-draft matcher snapshot captured
+		# in the loop above. A disabled trial (the default) costs one settings
+		# read and nothing else — jev_shadow.run_jev_shadow itself also checks
+		# enable_jev_shadow, but skipping the enqueue loop entirely here avoids
+		# even queuing dead jobs on every extraction at both sites.
+		if getattr(settings, "enable_jev_shadow", 0):
+			for doc_name in all_ocr_import_names:
+				snapshot = jev_matcher_snapshot.get(doc_name, {})
+				try:
+					frappe.enqueue(
+						"erpocr_integration.tasks.jev_shadow.run_jev_shadow",
+						queue="short",
+						ocr_import_name=doc_name,
+						matcher_supplier=snapshot.get("supplier"),
+						matcher_status=snapshot.get("supplier_match_status"),
+					)
+				except Exception:
+					frappe.log_error(
+						title="Jev Shadow Enqueue Failed",
+						message=f"Failed to enqueue Jev shadow for {doc_name}\n{frappe.get_traceback()}",
+					)
 
 		# Drive scan: move file to archive AFTER successful processing
 		if existing_drive_file_id:
