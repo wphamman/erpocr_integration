@@ -345,7 +345,7 @@
 			"label": "Jev Monthly Budget (USD)",
 			"default": "2.0",
 			"precision": "2",
-			"description": "Hard cap on Jev API spend per calendar month. Once this month's summed jev_cost_usd reaches it, the shadow job records Skipped and makes no further calls until next month.",
+			"description": "Soft cap on Jev API spend per calendar month. Once this month's summed jev_cost_usd reaches it, the shadow job records Skipped and makes no further calls until next month (concurrent jobs can overshoot by a few calls at ~US$0.0002 each — acceptable, not worth locking). Set to 0 (or leave unset) to disable the trial entirely — every job records Skipped and never calls Jev.",
 			"depends_on": "eval:doc.enable_jev_shadow"
 		},
 		{

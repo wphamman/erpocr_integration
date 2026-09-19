@@ -207,6 +207,7 @@ def reset_frappe_mock():
 	_frappe_mock.db.get_value.return_value = None
 	_frappe_mock.db.get_value.side_effect = None
 	_frappe_mock.db.set_value.reset_mock()
+	_frappe_mock.db.set_value.side_effect = None  # reset_mock() does not clear side_effect
 	_frappe_mock.db.exists.reset_mock()
 	_frappe_mock.db.exists.return_value = False
 	_frappe_mock.db.exists.side_effect = None

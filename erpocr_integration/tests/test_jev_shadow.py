@@ -151,6 +151,30 @@ class TestRunJevShadowGates:
 		assert updates["jev_status"] == "Skipped"
 		assert "budget" in updates["jev_note"].lower()
 
+	def test_budget_zero_skips_no_call(self, mock_frappe):
+		"""Budget <= 0 means 'make no calls at all' (Terra/Grok review) — a
+		blank/zero setting is disabled, not unlimited."""
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		mock_frappe.get_cached_doc = MagicMock(return_value=_make_settings(jev_monthly_budget_usd=0))
+		mock_frappe.get_doc = MagicMock(return_value=_make_ocr_import())
+		with patch("erpocr_integration.tasks.jev_shadow.requests.post") as mock_post:
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+		mock_post.assert_not_called()
+		updates = _updates_from_set_value(mock_frappe)
+		assert updates["jev_status"] == "Skipped"
+		assert "budget" in updates["jev_note"].lower()
+
+	def test_budget_negative_skips_no_call(self, mock_frappe):
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		mock_frappe.get_cached_doc = MagicMock(return_value=_make_settings(jev_monthly_budget_usd=-1.0))
+		mock_frappe.get_doc = MagicMock(return_value=_make_ocr_import())
+		with patch("erpocr_integration.tasks.jev_shadow.requests.post") as mock_post:
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+		mock_post.assert_not_called()
+		assert _updates_from_set_value(mock_frappe)["jev_status"] == "Skipped"
+
 	def test_budget_not_reached_proceeds(self, mock_frappe):
 		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
 
@@ -248,6 +272,42 @@ class TestRunJevShadowSuccess:
 		assert updates["jev_status"] == "Done"
 		assert updates["jev_supplier"] == ""
 		assert updates["jev_choice_none"] == 1
+
+	def test_success_missing_usage_leaves_cost_blank_not_zero(self, mock_frappe):
+		"""A response missing `usage` (Terra/Grok review) is still Done — we got
+		a usable choice — but cost is UNKNOWN, not free: jev_cost_usd stays
+		None (not 0), and jev_note records why, so it's auditable."""
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		payload = {
+			"model": "jev-1.13.0",
+			"answers": {"supplier": {"choice": "SUP-001", "probabilities": {"SUP-001": 0.75}}},
+			# no "usage" key at all
+		}
+		with patch("erpocr_integration.tasks.jev_shadow.requests.post", return_value=_fake_response(payload)):
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+
+		updates = _updates_from_set_value(mock_frappe)
+		assert updates["jev_status"] == "Done"
+		assert updates["jev_cost_usd"] is None
+		assert "usage" in updates["jev_note"].lower()
+
+	def test_success_usage_present_but_no_input_tokens_leaves_cost_blank(self, mock_frappe):
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		payload = {
+			"model": "jev-1.13.0",
+			"answers": {"supplier": {"choice": "SUP-001", "probabilities": {"SUP-001": 0.75}}},
+			"usage": {},  # present but no input_tokens
+		}
+		with patch("erpocr_integration.tasks.jev_shadow.requests.post", return_value=_fake_response(payload)):
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+
+		updates = _updates_from_set_value(mock_frappe)
+		assert updates["jev_status"] == "Done"
+		assert updates["jev_cost_usd"] is None
 
 	def test_update_modified_false(self, mock_frappe):
 		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
@@ -385,3 +445,90 @@ class TestRunJevShadowErrors:
 		updates = _updates_from_set_value(mock_frappe)
 		assert API_KEY not in updates["jev_note"]
 		assert "[redacted]" in updates["jev_note"]
+
+
+class TestRunJevShadowNeverRaises:
+	"""Terra/Grok review (v1.12.0, item 1): ANY exception outside the HTTP call
+	itself — settings/doc load, budget sum, candidate generation, or even
+	`_finish`'s own db.set_value/commit — must never escape `run_jev_shadow`.
+	An escaped exception reaches RQ's own handler, which calls
+	`frappe.get_traceback(with_context=True)` and dumps frame locals (including
+	`api_key`, wherever it might be bound) — a key-leak vector independent of
+	anything this module logs itself. The backstop must still ATTEMPT to
+	record `jev_status = Error`, and must never let the key reach any
+	`frappe.log_error` call."""
+
+	def _setup(self, mock_frappe):
+		mock_frappe.get_cached_doc = MagicMock(return_value=_make_settings())
+		mock_frappe.get_doc = MagicMock(return_value=_make_ocr_import())
+
+	def test_exception_in_candidate_generation_does_not_escape(self, mock_frappe):
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		with patch(
+			"erpocr_integration.tasks.jev_shadow.supplier_candidates",
+			side_effect=RuntimeError(f"DB exploded near key {API_KEY}"),
+		):
+			# Must not raise.
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+
+		# jev_status Error was attempted via the backstop's db.set_value.
+		set_value_calls = mock_frappe.db.set_value.call_args_list
+		assert any(
+			c.args[0] == "OCR Import" and c.args[2].get("jev_status") == "Error" for c in set_value_calls
+		)
+		for c in mock_frappe.log_error.call_args_list:
+			assert API_KEY not in str(c)
+		for c in set_value_calls:
+			assert API_KEY not in str(c)
+
+	def test_exception_in_finish_does_not_escape(self, mock_frappe):
+		"""_finish's own frappe.db.set_value/commit raising must still be
+		swallowed and turned into a best-effort Error write attempt."""
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		# Every db.set_value call raises — including the very first _finish
+		# call AND the backstop's own retry. The job must still not raise.
+		mock_frappe.db.set_value = MagicMock(side_effect=RuntimeError("db is down"))
+
+		# Must not raise, even though every write attempt fails.
+		run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+
+		# The backstop must have ATTEMPTED a write (even though it failed).
+		assert mock_frappe.db.set_value.called
+		for c in mock_frappe.log_error.call_args_list:
+			assert API_KEY not in str(c)
+
+	def test_backstop_never_calls_get_traceback(self, mock_frappe):
+		"""The backstop must log a static message, never a real traceback —
+		get_traceback(with_context=True) is exactly the frame-locals-dumping
+		call this defence exists to avoid triggering ourselves. `get_traceback`
+		is a session-wide mock with no per-test reset (other tests/modules may
+		legitimately call it), so assert on the DELTA this call causes, not an
+		absolute call count."""
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		before = mock_frappe.get_traceback.call_count
+		with patch(
+			"erpocr_integration.tasks.jev_shadow.supplier_candidates",
+			side_effect=RuntimeError("boom"),
+		):
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+		assert mock_frappe.get_traceback.call_count == before
+
+	def test_unanticipated_exception_still_writes_generic_error_note(self, mock_frappe):
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		with patch(
+			"erpocr_integration.tasks.jev_shadow.supplier_candidates",
+			side_effect=RuntimeError("boom"),
+		):
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+		set_value_calls = mock_frappe.db.set_value.call_args_list
+		error_calls = [c for c in set_value_calls if c.args[2].get("jev_status") == "Error"]
+		assert error_calls
+		assert "unhandled" in error_calls[0].args[2].get("jev_note", "").lower()

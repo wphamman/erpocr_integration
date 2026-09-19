@@ -10,16 +10,30 @@ same accuracy for much cheaper." See docs/architecture/OPEN-QUESTIONS.md Q17
 for the full ruling.
 
 Hard invariants (ruled, not negotiable without a new Q17 decision):
-  - Blind: OCR Manager never sees these fields (permlevel 1, System Manager
-    read only on OCR Import — see ocr_import.json).
+  - Blind: OCR Manager never sees these fields — HIDDEN on the form (not just
+    permlevel 1: on the prod-copy bench 2 of 3 OCR Managers also hold System
+    Manager, so permlevel alone would not keep the trial blind there; see
+    ocr_import.json — the Jev section break, its column breaks, and every
+    jev_* field all carry `hidden: 1` AND `permlevel: 1` AND (fields)
+    `read_only: 1`). The data stays readable via API/DB for scoring.
   - Off by default; opt-in via OCR Settings.enable_jev_shadow.
   - Never writes `supplier`, `supplier_match_status`, `status`, `items`, or
     any auto-draft field. Writes ONLY its own jev_* fields, via
     frappe.db.set_value(update_modified=False) — never doc.save().
   - A Jev failure or timeout is recorded and swallowed — it must never affect
-    matching, auto-draft, or extraction.
+    matching, auto-draft, or extraction. The whole job must NEVER raise
+    (Terra/Grok review, v1.12.0) — see run_jev_shadow's outer wrapper.
   - The API key and request headers must NEVER appear in a stored field or a
-    log entry.
+    log entry, INCLUDING via an uncaught exception's traceback/frame-locals
+    dump (RQ's own handler calls frappe.get_traceback(with_context=True) on
+    anything that escapes a job, and api_key is not on frappe's header-
+    redaction list — a traceback dump is as real a leak vector as a bad
+    string). Two independent defences: (1) run_jev_shadow's own frame never
+    binds the key at all — only the small `_typesafe_post`/`_has_api_key`
+    helpers ever call settings.get_password("typesafe_api_key"), and their
+    frames are gone by the time control returns; (2) the outer wrapper never
+    calls frappe.get_traceback() or logs an exception object/str(exc) — only
+    a fixed, static message.
 """
 
 from difflib import SequenceMatcher
@@ -48,6 +62,11 @@ _NONE = "none"
 _OWN_COMPANY_RATIO = 0.9
 
 _MAX_NOTE_LENGTH = 500
+
+
+class _JevRequestError(Exception):
+	"""Raised only by _typesafe_post, already carrying a message that has been
+	sanitized (API key stripped) and length-capped. Safe to log/store as-is."""
 
 
 def _supplier_question(candidates: list[dict]) -> dict:
@@ -106,7 +125,12 @@ def _own_company_guard(printed_name: str) -> bool:
 
 def _month_spend_usd() -> float:
 	"""Sum of `jev_cost_usd` already spent this calendar month, across all OCR
-	Imports. Month boundary is a plain string slice of frappe.utils.today()
+	Imports. `flt(None)` -> 0.0, so a Done record with unknown cost (missing
+	`usage` in the response — see run_jev_shadow) contributes 0 to the sum:
+	an honest "we don't know", not a false "this call was free", but it does
+	mean the budget check can under-count when responses are missing usage.
+
+	Month boundary is a plain string slice of frappe.utils.today()
 	("YYYY-MM-DD" -> "YYYY-MM-01") rather than frappe.utils.get_first_day —
 	conftest's mock doesn't cover that function, and CLAUDE.md's standing
 	gotcha is to never lean on an unfamiliar framework function the wholesale
@@ -122,34 +146,47 @@ def _month_spend_usd() -> float:
 	return sum(flt(r.jev_cost_usd) for r in rows)
 
 
-def _sanitize(message: str, api_key: str | None) -> str:
-	"""Strip the API key (if it somehow ended up in an exception string, e.g. an
-	SDK error echoing a bad request) and cap length before it's ever stored or
-	logged."""
-	text = message or ""
-	if api_key:
-		text = text.replace(api_key, "[redacted]")
-	return text[:_MAX_NOTE_LENGTH]
+def _has_api_key(settings) -> bool:
+	"""Read-and-discard existence check — returns a bool only, never the key
+	itself, so the key's lifetime here is a single expression."""
+	return bool(settings.get_password("typesafe_api_key"))
 
 
-def run_jev_shadow(ocr_import_name: str, matcher_supplier: str | None, matcher_status: str | None) -> None:
-	"""Ask TypeSafe Jev to pick a supplier for `ocr_import_name` and record the
-	answer beside today's matcher's pick. See module docstring for invariants.
+def _typesafe_post(settings, body: dict, timeout: float) -> dict:
+	"""Make the actual HTTP call. `api_key` lives ONLY in this frame, for the
+	shortest possible window: read here, used here in the header, gone when
+	this function returns. Any failure (HTTP error, timeout, connection error,
+	malformed JSON) is caught HERE — while the key is still in scope to redact
+	against — and re-raised as `_JevRequestError` with an already-sanitized,
+	length-capped message. The caller (run_jev_shadow) never sees `api_key`
+	and never needs to sanitize against it again."""
+	api_key = settings.get_password("typesafe_api_key")
+	try:
+		response = requests.post(
+			_TYPESAFE_URL,
+			json=body,
+			headers={"Authorization": f"Bearer {api_key}"},
+			timeout=timeout,
+		)
+		response.raise_for_status()
+		return response.json()
+	except Exception as exc:
+		text = f"{type(exc).__name__}: {exc}"
+		if api_key:
+			text = text.replace(api_key, "[redacted]")
+		raise _JevRequestError(text[:_MAX_NOTE_LENGTH]) from None
 
-	Args:
-	    ocr_import_name: the OCR Import to annotate.
-	    matcher_supplier / matcher_status: OUR matcher's pick, snapshotted by the
-	        caller BEFORE auto-draft runs (gemini_process) — the fixed comparison
-	        point for this trial. Always written, regardless of what follows.
-	"""
+
+def _run_jev_shadow_inner(
+	ocr_import_name: str, matcher_supplier: str | None, matcher_status: str | None
+) -> None:
+	"""The real logic — see run_jev_shadow for the outer safety wrapper."""
 	frappe.set_user("Administrator")
 
 	settings = frappe.get_cached_doc("OCR Settings")
 	if not getattr(settings, "enable_jev_shadow", 0):
 		return
-
-	api_key = settings.get_password("typesafe_api_key")
-	if not api_key:
+	if not _has_api_key(settings):
 		return
 
 	ocr_import = frappe.get_doc("OCR Import", ocr_import_name)
@@ -169,17 +206,32 @@ def run_jev_shadow(ocr_import_name: str, matcher_supplier: str | None, matcher_s
 		_finish({"jev_status": "Skipped", "jev_note": "supplier_name_ocr is blank"})
 		return
 
+	# Budget <= 0 means "make no calls at all" (Terra/Grok review) — a blank or
+	# zero setting is far more likely an unconfigured field than an intentional
+	# unlimited-spend authorization.
 	budget = flt(getattr(settings, "jev_monthly_budget_usd", 0))
-	if budget > 0:
-		spent = _month_spend_usd()
-		if spent >= budget:
-			_finish(
-				{
-					"jev_status": "Skipped",
-					"jev_note": f"Monthly Jev budget reached (${spent:.4f} spent >= ${budget:.2f} cap)",
-				}
-			)
-			return
+	if budget <= 0:
+		_finish(
+			{
+				"jev_status": "Skipped",
+				"jev_note": "Jev monthly budget is not set (<= 0) — shadow trial makes no calls",
+			}
+		)
+		return
+
+	# SOFT cap (Terra/Grok review): this is a read-then-act check with no lock,
+	# so concurrent shadow jobs can each pass it before any of their cost is
+	# committed. Worst realistic overshoot is a handful of extra calls at
+	# ~US$0.0002 each — accepted, not worth a lock on a diagnostic trial.
+	spent = _month_spend_usd()
+	if spent >= budget:
+		_finish(
+			{
+				"jev_status": "Skipped",
+				"jev_note": f"Monthly Jev budget reached (${spent:.4f} spent >= ${budget:.2f} cap)",
+			}
+		)
+		return
 
 	if _own_company_guard(printed_name):
 		_finish(
@@ -203,22 +255,35 @@ def run_jev_shadow(ocr_import_name: str, matcher_supplier: str | None, matcher_s
 	body = {"state": state, "model": model, "questions": {"supplier": question}}
 
 	try:
-		response = requests.post(
-			_TYPESAFE_URL,
-			json=body,
-			headers={"Authorization": f"Bearer {api_key}"},
-			timeout=timeout,
-		)
-		response.raise_for_status()
-		payload = response.json()
+		payload = _typesafe_post(settings, body, timeout)
+	except _JevRequestError as exc:
+		# Message is ALREADY sanitized + capped by _typesafe_post — api_key is
+		# not in scope in this frame at all.
+		note = str(exc)
+		try:
+			frappe.log_error(title="Jev Shadow Failed", message=f"OCR Import {ocr_import_name}: {note}")
+		except Exception:
+			pass
+		_finish({"jev_status": "Error", "jev_note": note})
+		return
 
+	try:
 		answer = payload["answers"]["supplier"]
 		choice = answer["choice"]
 		probabilities = answer.get("probabilities") or {}
 		probability = max((flt(p) for p in probabilities.values()), default=0.0)
-		usage = payload.get("usage") or {}
-		input_tokens = flt(usage.get("input_tokens") or 0)
-		cost_usd = input_tokens * _PRICE_PER_MTOK / 1e6
+		usage = payload.get("usage")
+		input_tokens = usage.get("input_tokens") if usage else None
+		if input_tokens is None:
+			# Missing usage (Terra/Grok review): still Done — we DID get a
+			# usable choice — but cost is genuinely UNKNOWN, not free. Leave
+			# jev_cost_usd blank rather than 0 so the budget sum's under-count
+			# (see _month_spend_usd) is at least auditable via jev_note.
+			cost_usd = None
+			note = "Done; usage missing from response — cost unknown"
+		else:
+			cost_usd = flt(input_tokens) * _PRICE_PER_MTOK / 1e6
+			note = ""
 		is_none = choice == _NONE
 
 		_finish(
@@ -231,16 +296,82 @@ def run_jev_shadow(ocr_import_name: str, matcher_supplier: str | None, matcher_s
 				"jev_model": payload.get("model") or model,
 				"jev_candidate_count": len(candidates),
 				"jev_run_at": now_datetime(),
-				"jev_note": "",
+				"jev_note": note,
 			}
 		)
 	except Exception as exc:
-		note = _sanitize(f"{type(exc).__name__}: {exc}", api_key)
+		# payload came back with a 2xx status and valid JSON, but a key we
+		# expect is missing/mistyped — api_key was never in scope in this
+		# frame, so str(exc) here cannot carry it.
+		note = str(exc)[:_MAX_NOTE_LENGTH]
 		try:
-			frappe.log_error(
-				title="Jev Shadow Failed",
-				message=f"OCR Import {ocr_import_name}: {note}",
-			)
+			frappe.log_error(title="Jev Shadow Failed", message=f"OCR Import {ocr_import_name}: {note}")
 		except Exception:
-			pass  # never let logging itself break the shadow job
+			pass
 		_finish({"jev_status": "Error", "jev_note": note})
+
+
+def run_jev_shadow(ocr_import_name: str, matcher_supplier: str | None, matcher_status: str | None) -> None:
+	"""Ask TypeSafe Jev to pick a supplier for `ocr_import_name` and record the
+	answer beside today's matcher's pick. See module docstring for invariants.
+
+	Args:
+	    ocr_import_name: the OCR Import to annotate.
+	    matcher_supplier / matcher_status: OUR matcher's pick, snapshotted by the
+	        caller BEFORE auto-draft runs (gemini_process) — the fixed comparison
+	        point for this trial. Always written, regardless of what follows.
+
+	This function itself does nothing but call `_run_jev_shadow_inner` inside a
+	try/except — see the module docstring's "must NEVER raise" invariant and
+	`_record_unexpected_failure` for why.
+	"""
+	try:
+		_run_jev_shadow_inner(ocr_import_name, matcher_supplier, matcher_status)
+	except Exception:
+		_record_unexpected_failure(ocr_import_name)
+
+
+def _record_unexpected_failure(ocr_import_name: str) -> None:
+	"""Last-resort backstop (Terra/Grok review, v1.12.0). Every ANTICIPATED
+	failure inside `_run_jev_shadow_inner` is already caught close to its
+	source and turned into a sanitized `jev_status = Error` write. This
+	function only runs for an UNANTICIPATED exception — a bad OCR Settings
+	doctype, a DB hiccup inside `_finish` itself, a broken `frappe.get_doc`,
+	etc. Such an exception must NEVER be allowed to propagate out of
+	`run_jev_shadow`: RQ's own uncaught-exception handler calls
+	`frappe.log_error(..., frappe.get_traceback(with_context=True))`, which
+	dumps LOCAL VARIABLES for every frame in the traceback — `api_key` is not
+	on frappe's header-redaction list, so an escaped exception is a live
+	key-leak vector on its own, independent of anything this module does with
+	its own logging. We therefore never call `frappe.get_traceback()` here and
+	never pass the caught exception object (or even `str(exc)`, which could
+	carry text from a frame we don't control) anywhere in this function — only
+	a fixed, static string, so nothing here can possibly carry the key
+	regardless of which frame the original exception came from.
+
+	Best-effort on both fronts (per the review, in this order): first attempt
+	to record the Error status on the OCR Import; then attempt to write the
+	Error Log entry. Either or both may fail (e.g. the DB connection itself is
+	the problem) — silently swallowed, because at this point there is nothing
+	safe left to do but return.
+	"""
+	try:
+		frappe.db.set_value(
+			"OCR Import",
+			ocr_import_name,
+			{"jev_status": "Error", "jev_note": "Unhandled exception (see Error Log)"},
+			update_modified=False,
+		)
+		frappe.db.commit()  # nosemgrep
+	except Exception:
+		pass
+	try:
+		frappe.log_error(
+			title="Jev Shadow Failed",
+			message=(
+				f"Unhandled exception in run_jev_shadow for {ocr_import_name} "
+				"(message withheld — see the job/queue logs, never the API key)."
+			),
+		)
+	except Exception:
+		pass

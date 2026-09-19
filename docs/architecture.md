@@ -161,16 +161,22 @@ Pending → Extracting → Reconciled → Reviewed / Error
 Opt-in, off by default (`OCR Settings.enable_jev_shadow`). On every extraction, `api.gemini_process`
 enqueues `tasks/jev_shadow.run_jev_shadow` (on the `short` queue) alongside — never instead of —
 the existing matcher. It asks the TypeSafe Jev API to pick a supplier for the OCR Import and
-records the answer in a dedicated **permlevel-1, System Manager read-only** section on OCR Import
-(`jev_status`, `jev_supplier`, `jev_probability`, `jev_cost_usd`, …) plus a snapshot of OUR
-matcher's own pick (`jev_matcher_supplier` / `jev_matcher_status`) taken **before auto-draft
-runs**. The trial is deliberately **blind** — OCR Manager (the operator role) has no permlevel-1
-grant, so nothing about it is visible in normal review, and it never writes `supplier`,
-`supplier_match_status`, `status`, `items`, or any auto-draft field. A budget cap
-(`jev_monthly_budget_usd`) and an own-company guard (an OCR misread of the buyer's own letterhead
-must never become a Jev "candidate") bound the trial's cost and inputs; any API failure or timeout
-is recorded as `jev_status = Error` and swallowed — it can never affect extraction, matching, or
-auto-draft. Candidate generation (`tasks/matching.py::supplier_candidates`) is a live-data port of
+records the answer in a dedicated section on OCR Import (`jev_status`, `jev_supplier`,
+`jev_probability`, `jev_cost_usd`, …) plus a snapshot of OUR matcher's own pick
+(`jev_matcher_supplier` / `jev_matcher_status`) taken **before auto-draft runs**. The trial is
+deliberately **blind** — every field and the section/column breaks that hold them carry
+`hidden: 1` (not just permlevel: on the prod-copy bench several OCR Managers also hold System
+Manager, so permlevel alone would not hide it from them; permlevel 1 + read-only stay as
+defence-in-depth), so nothing about it is visible on the form, and it never writes `supplier`,
+`supplier_match_status`, `status`, `items`, or any auto-draft field. A SOFT budget cap
+(`jev_monthly_budget_usd` — read-then-act, no lock; `<= 0` disables the trial entirely) and an
+own-company guard (an OCR misread of the buyer's own letterhead must never become a Jev
+"candidate") bound the trial's cost and inputs; any API failure, timeout, or genuinely
+unanticipated exception is recorded as `jev_status = Error` and swallowed — `run_jev_shadow` is
+built to NEVER raise (an outer backstop catches anything the normal error paths miss, without
+ever calling `frappe.get_traceback()` or logging a raw exception, since a dumped traceback's
+frame-locals are as real a key-leak vector as a bad log message) — it can never affect
+extraction, matching, or auto-draft. Candidate generation (`tasks/matching.py::supplier_candidates`) is a live-data port of
 jev_lab's own scoring, kept deliberately separate from `match_supplier`/`match_supplier_fuzzy` so
 it can never influence today's matching. Scope: invoice pipeline only — DN, fleet, and statement
 are untouched. See [docs/architecture/OPEN-QUESTIONS.md](architecture/OPEN-QUESTIONS.md) Q17 for
@@ -237,7 +243,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Enable Jev Shadow Trial**: Opt-in (off by default, v1.12.0) — record TypeSafe Jev's supplier pick alongside today's matcher's pick, for later comparison. See *Jev Shadow Trial* below.
 - **TypeSafe API Key**: TypeSafe API key (Password), only used when the shadow trial is on.
 - **Jev Model**: Pinned model version (default `jev-1.13.0`) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
-- **Jev Monthly Budget (USD)**: Hard cap on Jev API spend per calendar month (default 2.0). Once this month's summed `jev_cost_usd` reaches it, the shadow job records `Skipped` and stops calling until next month.
+- **Jev Monthly Budget (USD)**: Soft cap on Jev API spend per calendar month (default 2.0; read-then-act, no lock — concurrent jobs can overshoot by a few calls at ~US$0.0002 each). Once this month's summed `jev_cost_usd` reaches it, the shadow job records `Skipped` and stops calling until next month. `0` (or unset) disables the trial entirely — every job Skips, no calls ever made.
 - **Jev Timeout (seconds)**: Request timeout for the Jev API call (default 20).
 
 ## Deployment
