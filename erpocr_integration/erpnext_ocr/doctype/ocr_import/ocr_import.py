@@ -512,7 +512,11 @@ def _is_ignorable_zero_line(item) -> bool:
 	    transaction line, never noise.
 	  - `item_code` is blank, OR resolves to a non-stock Item. A genuinely FREE
 	    stock item (amount 0, rate 0) still needs a real receipt/invoice line —
-	    inventory quantity moved — so it is NEVER ignorable.
+	    inventory quantity moved — so it is NEVER ignorable. A `item_code` that
+	    does NOT resolve at all (the Item record is missing — `get_value`
+	    returns None, not `0`) is treated as NOT ignorable too (review item,
+	    v1.11.0): only an explicit, existing, non-stock Item earns the skip —
+	    a dangling/renamed item_code must surface for review, not vanish.
 	"""
 	if flt(getattr(item, "rate", None)) != 0:
 		return False
@@ -524,6 +528,8 @@ def _is_ignorable_zero_line(item) -> bool:
 	if not item_code:
 		return True
 	is_stock = frappe.db.get_value("Item", item_code, "is_stock_item")
+	if is_stock is None:
+		return False  # Item record missing/lookup failed — treat as real, not noise
 	return not is_stock
 
 

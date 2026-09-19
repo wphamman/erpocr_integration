@@ -817,14 +817,22 @@ def update_ocr_import_on_submit(doc, method):
 	for name in ocr_imports:
 		frappe.db.set_value("OCR Import", name, "status", "Completed")
 
-		# Isolation (Fix A point 3): learning must never block or fail the
-		# submit. No frappe.db.commit() here — the caller's transaction owns
-		# that; a learning row this function writes rides the same commit as
-		# everything else on_submit, and a failure here never undoes the
-		# status update above.
+		# Isolation (Fix A point 3; savepoint added on review): learning must
+		# never block or fail the submit, AND a partial learning write (e.g.
+		# the supplier upsert succeeds, the item upsert then raises) must not
+		# ship an inconsistent alias/mapping row when the caller's outer
+		# transaction commits. Per-import savepoint AFTER the status write
+		# above — same pattern as fleet_api.bulk_mark_recorded /
+		# tasks/auto_record.py (grep `savepoint`) — so a learning failure
+		# rolls back only the learning writes, never the Completed status.
+		# No frappe.db.commit() here — the caller's transaction owns that.
+		savepoint = f"ocr_submit_learning_{name}"
+		frappe.db.savepoint(savepoint)
 		try:
 			_learn_from_submitted_document(doc, name)
 		except Exception:
+			frappe.db.rollback(save_point=savepoint)
+			frappe.clear_messages()
 			frappe.log_error(
 				title="OCR Submit Learning Failed",
 				message=(f"OCR Import {name} / {doc.doctype} {doc.name}\n{frappe.get_traceback()}"),
@@ -860,6 +868,16 @@ def _learn_from_submitted_document(doc, ocr_import_name):
 	)
 
 	ocr_import = frappe.get_doc("OCR Import", ocr_import_name)
+
+	# Auto-drafted records never reach a "Suggested" match — auto_draft only
+	# fires on high-confidence (Auto Matched/Confirmed) supplier + every item
+	# (see tasks/auto_draft._is_high_confidence), so there is nothing this
+	# function could learn from that on_update/tier matching didn't already
+	# capture. Skipping here makes "unattended creation never trains aliases"
+	# an explicit, testable rule rather than an accident of the confidence
+	# gate (review item, v1.11.0).
+	if getattr(ocr_import, "auto_drafted", None):
+		return
 
 	# 1. Supplier alias — only when the record's OWN supplier match wasn't
 	# already a strong signal: "Auto Matched" means an alias/exact match

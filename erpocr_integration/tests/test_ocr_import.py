@@ -1092,6 +1092,16 @@ class TestIsIgnorableZeroLine:
 		item = _make_item(rate=0, amount=0, item_code="ITEM-STOCK", purchase_order_item=None, pr_detail=None)
 		assert _is_ignorable_zero_line(item) is False
 
+	def test_missing_item_is_not_ignorable(self, mock_frappe):
+		"""An item_code that doesn't resolve (the Item record is missing/
+		renamed — get_value returns None, not 0) must NOT be treated as
+		ignorable — only an explicit, EXISTING, non-stock Item earns the skip
+		(review item, v1.11.0). A dangling item_code must surface for review,
+		not silently vanish from the built PI / readiness check."""
+		mock_frappe.db.get_value.return_value = None  # Item record missing
+		item = _make_item(rate=0, amount=0, item_code="ITEM-GONE", purchase_order_item=None, pr_detail=None)
+		assert _is_ignorable_zero_line(item) is False
+
 	def test_purchase_order_ref_blocks_ignorable(self, mock_frappe):
 		item = _make_item(rate=0, amount=0, item_code="", purchase_order_item="po-item-row-1", pr_detail=None)
 		assert _is_ignorable_zero_line(item) is False

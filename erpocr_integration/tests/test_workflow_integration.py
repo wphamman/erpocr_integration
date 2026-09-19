@@ -5,7 +5,7 @@ verifying guard behavior across document types and the full PO→PR→PI chain.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -1210,3 +1210,63 @@ class TestSubmitTimeLearning:
 		_learn_from_submitted_document(pi, "OCR-IMP-00001")
 
 		mock_frappe.db.commit.assert_not_called()
+
+	def test_savepoint_rollback_on_learning_exception_after_partial_write(self, mock_frappe):
+		"""Review item 1: a learning failure AFTER a write already happened
+		(the supplier upsert succeeds, item processing then raises) must roll
+		back to a per-import savepoint — never ship a half-written alias when
+		the caller's outer transaction commits. The Completed status write
+		happens BEFORE the savepoint is taken and must not be undone by it."""
+		row = _make_item(description_ocr="Bracket 40mm", match_status="Suggested", item_code="ITEM-A")
+		ocr_import = self._ocr_import(supplier_match_status="Suggested", items=[row])
+		mock_frappe.get_all.return_value = ["OCR-IMP-00001"]
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None  # no existing supplier alias
+		# Item processing (reached only after the supplier alias write) blows
+		# up on the OCR Settings lookup.
+		mock_frappe.get_cached_doc.side_effect = Exception("boom in item processing")
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		update_ocr_import_on_submit(pi, "on_submit")
+
+		# The supplier alias write happened before the failure.
+		assert len(_dict_insert_calls(mock_frappe, "OCR Supplier Alias")) == 1
+		# Rolled back to THIS import's own savepoint name.
+		mock_frappe.db.rollback.assert_called_once_with(save_point="ocr_submit_learning_OCR-IMP-00001")
+		mock_frappe.log_error.assert_called_once()
+		assert mock_frappe.log_error.call_args.kwargs["title"] == "OCR Submit Learning Failed"
+		# The Completed status write is NOT rolled back — it happens BEFORE
+		# the savepoint, verified by call order on the shared frappe mock.
+		set_completed = call.db.set_value("OCR Import", "OCR-IMP-00001", "status", "Completed")
+		savepoint_call = call.db.savepoint("ocr_submit_learning_OCR-IMP-00001")
+		rollback_call = call.db.rollback(save_point="ocr_submit_learning_OCR-IMP-00001")
+		calls = mock_frappe.mock_calls
+		idx_set = calls.index(set_completed)
+		idx_sp = calls.index(savepoint_call)
+		idx_rb = calls.index(rollback_call)
+		assert idx_set < idx_sp < idx_rb
+
+	def test_auto_drafted_record_skips_learning(self, mock_frappe):
+		"""Review item 2: auto_draft only fires on high-confidence (Auto
+		Matched/Confirmed) matches — there is nothing Suggested left to learn,
+		so an auto-drafted OCR Import must never train an alias."""
+		ocr_import = self._ocr_import(supplier_match_status="Suggested", auto_drafted=1)
+		mock_frappe.get_doc.side_effect = _get_doc_side_effect(ocr_import)
+		mock_frappe.db.get_value.return_value = None
+		pi = SimpleNamespace(
+			doctype="Purchase Invoice",
+			name="PI-001",
+			supplier="Acme Trading",
+			company="Test Company",
+			items=[],
+		)
+
+		_learn_from_submitted_document(pi, "OCR-IMP-00001")
+
+		assert _dict_insert_calls(mock_frappe, "OCR Supplier Alias") == []
