@@ -2,6 +2,57 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-09-19
+
+Minor release. Two well-bounded auto-draft learning holes identified by a live read-only probe
+(Q18): accepting a pre-filled suggestion never taught the matcher, and a genuine R0 line on
+every invoice from one haulier blocked both readiness and auto-draft confidence.
+
+### Fixed
+- **Bench-caught before release (architect smoke, 2026-09-19):** the submit-learning savepoint name embedded the OCR Import name; `OCR-IMP-…` hyphens are a MariaDB syntax error in `SAVEPOINT <name>`, which would have failed every OCR-linked PI/PR submit. Now uses the loop index, with a regression test pinning names to `[A-Za-z0-9_]`.
+- **Learning text over 140 characters** no longer aborts learning (pre-existing on the confirm-on-save path too): service patterns are trimmed at a word boundary; exact-match aliases that would not fit are skipped.
+- **Fix A — learn from the SUBMITTED document, not just an explicit Confirmed click.**
+  `OCRImport.on_update` only saved a supplier/item alias when the operator changed a field to
+  `Confirmed` in that save — an operator who accepted a correct pre-filled fuzzy (`Suggested`)
+  match without touching it taught nothing, so the same printed supplier name or item
+  description kept returning `Suggested` forever (probe: 41 + 24 skipped auto-drafts since
+  2026-08-01 across both sites from this hole alone). `api.update_ocr_import_on_submit` now
+  also learns from the submitted PI/PR — the strongest human-validated signal available —
+  via the new `_learn_from_submitted_document`: a supplier alias when the OCR Import's own
+  match wasn't already `Auto Matched`/`Confirmed` (learns from `doc.supplier`, never the OCR
+  Import's own `supplier`, since the operator may have changed it after the draft was
+  created); and, per `Suggested` item row whose `description_ocr` matches EXACTLY ONE line on
+  the submitted doc, an item alias + service mapping (or service-mapping-only for a
+  `default_item` catch-all row) — an ambiguous match (0 or >1 candidate lines, or a duplicated
+  description among the OCR Import's own rows) skips that row silently. Wrapped in
+  try/except → `frappe.log_error("OCR Submit Learning Failed")`; a learning failure never
+  blocks the Completed status update. Journal Entry submits learn nothing (no supplier/lines
+  in that shape). `_save_supplier_alias` / `_save_item_alias` / `_save_service_mapping` were
+  refactored into module-level `_upsert_supplier_alias` / `_upsert_item_alias` /
+  `_upsert_service_mapping` (explicit-parameter contract) so `on_update` and the new
+  submit-time path share one implementation — `on_update`'s behaviour is unchanged (existing
+  tests pass unmodified).
+- **Fix B — a zero-value line no longer blocks Matched / auto-draft / PI creation.** One
+  haulier prints a return leg at R0 on every invoice; Gemini extracts it as a genuine second
+  line (rate 0, amount 0, default item, no expense account), which used to force `Needs
+  Review` (a non-stock item with no `expense_account`) and fail the auto-draft confidence
+  gate — operators deleted the row by hand before every create (17 + 1 records/month). New
+  `ocr_import._is_ignorable_zero_line(item)`: True only when rate AND amount are both 0,
+  there is no PO/PR reference (`purchase_order_item` / `pr_detail`), and `item_code` is blank
+  or a non-stock Item — a genuinely FREE stock item still needs a real receipt/invoice line
+  (inventory quantity moved) and is never ignorable. Applied in exactly three places —
+  `OCRImport._update_status`, `auto_draft._is_high_confidence`, and
+  `OCRImport.create_purchase_invoice` (the built PI drops the row, mirroring what an operator
+  does by hand) — each ONLY when the record has at least one non-ignorable row; an
+  all-ignorable record behaves exactly as before. `create_purchase_receipt` and
+  `create_journal_entry` are untouched (out of scope). The totals-reconciliation gate is
+  unaffected (a zero row contributes zero either way).
+
+### Tests
+- 959 tests (was 926) — new coverage for both fixes' spec'd cases (supplier/item learning
+  matrices, ambiguity guards, exception isolation, the `_is_ignorable_zero_line` truth table,
+  `_update_status` / `_is_high_confidence` / PI-builder behaviour with a trailing zero row).
+
 ## [1.10.4] — 2026-09-14
 
 Patch release. Operator-safe seeds: stop a sibling app's deploy from silently reverting

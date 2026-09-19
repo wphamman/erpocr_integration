@@ -35,12 +35,17 @@ def _make_ocr_import(**overrides):
 
 
 def _make_item(**overrides):
+	# rate defaults non-zero (v1.11.0): a real Gemini-extracted line always
+	# carries a real rate — 0.0 would make every default item here look like
+	# the Fix B "ignorable zero-value line" (see _is_ignorable_zero_line),
+	# which would silently drop it from _is_high_confidence's per-item loop.
+	# Tests that specifically need a zero-value row set rate=0.0 explicitly.
 	defaults = dict(
 		item_code="ITEM-001",
 		match_status="Auto Matched",
 		description_ocr="Test item",
 		qty=1.0,
-		rate=0.0,
+		rate=100.0,
 	)
 	defaults.update(overrides)
 	return SimpleNamespace(**defaults)
@@ -122,6 +127,30 @@ class TestIsHighConfidence:
 		)
 		is_high, _ = _is_high_confidence(doc)
 		assert is_high is True
+
+	def test_high_confidence_with_ignorable_zero_row(self, mock_frappe):
+		"""v1.11.0 (Fix B / Q18): a zero-value row (rate 0, amount 0, blank
+		item_code, no PO/PR ref) must not block confidence — the haulier's R0
+		return-leg case that used to force a manual delete before auto-draft."""
+		doc = _make_ocr_import(
+			items=[
+				_make_item(item_code="ITEM-001", match_status="Auto Matched"),
+				_make_item(item_code="", rate=0.0, amount=0.0, match_status="Suggested"),
+			],
+		)
+		is_high, reason = _is_high_confidence(doc)
+		assert is_high is True
+		assert reason == ""
+
+	def test_low_confidence_when_only_item_is_ignorable_zero_row(self, mock_frappe):
+		"""An all-zero record has no real item to verify and must not
+		auto-draft (the 'must have at least one item' check now requires a
+		non-ignorable one)."""
+		doc = _make_ocr_import(
+			items=[_make_item(item_code="", rate=0.0, amount=0.0, match_status="Suggested")],
+		)
+		is_high, _ = _is_high_confidence(doc)
+		assert is_high is False
 
 
 class TestAutoLinkPurchaseOrder:

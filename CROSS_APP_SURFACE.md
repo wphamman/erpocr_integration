@@ -4,8 +4,9 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.10.4** (product baseline = tag `v1.10.4`, LIVE on both sites since 2026-09-14; see the v1.10.1–v1.10.4
-delta notes below). Historical context from the v1.10.0 baseline (`39b9562`) follows.
+**Current through v1.11.0** (product baseline = tag `v1.10.4`, LIVE on both sites since 2026-09-14; v1.11.0 not yet
+deployed as of this writing — see the v1.10.1–v1.11.0 delta notes below). Historical context from the v1.10.0
+baseline (`39b9562`) follows.
 
 **v1.10.0 provider delta:** the existing
 `upload_fleet_slip` write now has the explicit cookie-CSRF invariant below; no method, signature,
@@ -49,6 +50,11 @@ reverting operator edits to the role docs. Same three roles, same values; nothin
 already did) — a Cost Center User Permission no longer filters those lists for its holder. A consumer that
 was (unknowingly) relying on that filtering as a scoping mechanism should say so; `company` remains a
 deliberate, ungated single-company boundary.
+
+**v1.11.0 delta: none.** Fix A (submit-time learning off the existing PI/PR/JE `on_submit` doc_event)
+and Fix B (a zero-value line no longer blocks `_update_status`/auto-draft/the built PI) are both
+internal to matching/auto-draft/PI-building — no new or changed whitelisted method, no payload/response
+shape change, no new field, no permission-posture change. Still 33 methods.
 
 **v1.10.0 ERP-P2-2 delta (ADR-0017):** the existing §2c provider write now explicitly fails
 closed for cookie-authenticated requests unless an initialized session CSRF token matches the
