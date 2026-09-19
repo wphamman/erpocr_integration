@@ -407,3 +407,15 @@
   learning text respects the 140-char Data limit. Correcting Auto Matched aliases that a submitted document
   contradicts is deliberately NOT done yet.
 
+## ADR-0023 — Jev is trialled in a blind shadow before it may replace the supplier matcher
+- **Status:** Accepted 2026-09-19 · shipped v1.12.0 (Q17)
+- **Context:** jev_lab's offline eval scored TypeSafe Jev at 94% top-1 supplier accuracy against our 84%. Willie:
+  "I don't want to replace what we have until we know jev is more accurate or the same accuracy for much cheaper."
+- **Decision:** Record Jev's pick beside a snapshot of the matcher's pick on live imports, changing nothing: fields
+  hidden on the form (most OCR Managers are System Managers, so permlevel alone is not blind), never read by matching,
+  status or auto-draft. Off by default per site; soft monthly cap; the API key lives only inside the request helper and
+  the job never lets an exception reach the job runner's locals-dumping traceback. Direct HTTP to System One, no SDK.
+- **Consequences:** Replacement is decided on live data: top-1 accuracy against the submitted invoice's supplier, and
+  API spend against supplier corrections per 100 invoices. Own-company reads are skipped by design and scored as
+  matcher-only. The trial starts only when Willie enters a dedicated key and enables it.
+
