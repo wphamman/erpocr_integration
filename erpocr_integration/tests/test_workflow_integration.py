@@ -1258,14 +1258,14 @@ class TestSubmitTimeLearning:
 		# The supplier alias write happened before the failure.
 		assert len(_dict_insert_calls(mock_frappe, "OCR Supplier Alias")) == 1
 		# Rolled back to THIS import's own savepoint name.
-		mock_frappe.db.rollback.assert_called_once_with(save_point="ocr_submit_learning_0")
+		mock_frappe.db.rollback.assert_called_once_with(save_point="ocr_submit_learning_pi_0")
 		mock_frappe.log_error.assert_called_once()
 		assert mock_frappe.log_error.call_args.kwargs["title"] == "OCR Submit Learning Failed"
 		# The Completed status write is NOT rolled back — it happens BEFORE
 		# the savepoint, verified by call order on the shared frappe mock.
 		set_completed = call.db.set_value("OCR Import", "OCR-IMP-00001", "status", "Completed")
-		savepoint_call = call.db.savepoint("ocr_submit_learning_0")
-		rollback_call = call.db.rollback(save_point="ocr_submit_learning_0")
+		savepoint_call = call.db.savepoint("ocr_submit_learning_pi_0")
+		rollback_call = call.db.rollback(save_point="ocr_submit_learning_pi_0")
 		calls = mock_frappe.mock_calls
 		idx_set = calls.index(set_completed)
 		idx_sp = calls.index(savepoint_call)

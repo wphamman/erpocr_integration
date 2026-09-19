@@ -830,7 +830,9 @@ def update_ocr_import_on_submit(doc, method):
 		# frappe.db.savepoint — a record name like OCR-IMP-00957 is a MariaDB syntax
 		# error that aborts the whole submit (bench-caught 2026-09-19; the mock
 		# could not see it). Use the loop index, never a document name.
-		savepoint = f"ocr_submit_learning_{idx}"
+		# Doctype tag keeps PI and PR learning savepoints distinct if both hooks
+		# ever run in one transaction (a reused name replaces the older marker).
+		savepoint = f"ocr_submit_learning_{'pr' if doc.doctype == 'Purchase Receipt' else 'pi'}_{idx}"
 		frappe.db.savepoint(savepoint)
 		try:
 			_learn_from_submitted_document(doc, name)
