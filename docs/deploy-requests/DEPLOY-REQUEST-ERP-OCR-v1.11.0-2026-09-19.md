@@ -46,4 +46,4 @@ Final smoke: 15/15 checks PASS, incl. 17 service mappings learned from 5 real re
 **Rollback:** re-deploy tag `v1.10.4`.
 
 ---
-**Status:** ON DEPLOY-LIST-2026-09-19 (both sites), coordinator 15:58 SAST.
+**Status: DEPLOYED — live on BOTH sites as 1.12.0.** Landed on the 2026-09-21 evening train (DEPLOY-LIST-2026-09-21, which superseded DEPLOY-LIST-2026-09-19 after that one never deployed; erpocr rolled forward to v1.12.0, which carries v1.11.0, behind a floor-blocking `starpops_production` v0.3.8 fix). **Architect post-deploy probe 2026-09-22 12:03 SAST (authorised, read-only, both sites):** `get_versions` 1.12.0; all 13 `jev_*` fields present on OCR Import and every one `hidden:1` + `permlevel:1` (the blind trial survived the migrate); `enable_jev_shadow` off on both; 0 OCR Imports carry a `jev_status`, so nothing has been sent to TypeSafe; **0** `OCR Submit Learning Failed` and **0** `Jev Shadow Failed` Error Log rows. Learning writes resumed — since 09-21 SP +4 supplier aliases / +6 item aliases / +22 service mappings, Cactus +5 / +6 / +17. No rollback needed.

@@ -4,8 +4,8 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
-**Current through v1.12.0** (product baseline = tag `v1.10.4`, LIVE on both sites since 2026-09-14; v1.11.0/v1.12.0
-not yet deployed as of this writing — see the v1.10.1–v1.12.0 delta notes below). Historical context from the
+**Current through v1.12.0** (product baseline = tag `v1.12.0`, LIVE on both sites since the 2026-09-21 train,
+architect probe-verified 2026-09-22 — it carries v1.11.0, which never deployed on its own list). Historical context from the
 v1.10.0 baseline (`39b9562`) follows.
 
 **v1.12.0 delta (Q17 — Jev shadow trial): no new or changed WHITELISTED method (still 33); ONE new outbound
