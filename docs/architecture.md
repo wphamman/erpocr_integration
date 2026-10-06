@@ -192,7 +192,12 @@ and throws naming each conflict and the configured approvers. A user listed in
 stamped server-side and the approval is cleared if `bill_no` or `supplier` changes. ERPNext's own
 `check_supplier_invoice_uniqueness` (same supplier + year) stays on and runs first. The 2023 DB-level
 'Unique' setting on `bill_no` is detected and flagged on the settings form (`get_status`), never changed;
-while it exists, approvals cannot take effect. Auto-draft pre-checks duplicates and skips cleanly.
+while it exists the hook first looks for an exact-`bill_no` holder on any other PI (any docstatus, any
+company, as the table-wide index would) and throws naming it, approved or not, so a collision with a
+cancelled PI never reaches MariaDB's IntegrityError. Approval rules: only approvers create, edit (re-stamps)
+or withdraw (clears) an approval; a tick with nothing to approve is refused; a changed number or supplier
+clears it. Limits: `db_set`/`frappe.db.set_value` on `bill_no` bypass validate (as any Frappe validation;
+`bill_no` is not allow_on_submit in v15), and removing an approver does not invalidate their past approvals. Auto-draft pre-checks duplicates and skips cleanly.
 
 ### Cross-app integration (fleet_management) — summary
 OCR runs **standalone or alongside `fleet_management`** — neither app imports nor depends on the

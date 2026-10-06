@@ -101,11 +101,59 @@ def _conflict_message(doc, conflicts, approvers) -> str:
 		)
 	if approvers:
 		names = ", ".join(escape_html(frappe.db.get_value("User", u, "full_name") or u) for u in approvers)
-		ask = _("Ask {0} to tick 'Approve duplicate invoice number' and give a reason.").format(names)
+		ask = _(
+			"Ask {0} to tick 'Approve duplicate invoice number' in the Supplier Invoice section and give a reason."
+		).format(names)
 	else:
 		ask = _("No approvers are configured in OCR Settings; ask a System Manager to add one.")
 	head = _("Supplier invoice number {0} is already used by:").format(escape_html(doc.bill_no))
 	return head + "<br>" + "<br>".join(lines) + "<br><br>" + ask
+
+
+def _db_unique_holder(bill_no, exclude_name) -> dict | None:
+	"""Another PI the legacy DB 'Unique' index would collide with.
+
+	The index is table-wide and compares with the column's own collation, so: exact
+	`bill_no` match, ANY docstatus (cancelled included), ANY is_return, NO company filter.
+	"""
+	rows = frappe.db.sql(
+		"""
+		SELECT name, docstatus
+		FROM `tabPurchase Invoice`
+		WHERE bill_no = %(bill_no)s AND name != %(name)s
+		ORDER BY creation DESC, name DESC
+		LIMIT 1
+		""",
+		{"bill_no": bill_no, "name": exclude_name or ""},
+		as_dict=True,
+	)
+	return rows[0] if rows else None
+
+
+def _unique_blocker_message(holder) -> str:
+	status = _("cancelled") if holder.get("docstatus") == 2 else _("existing")
+	return _(
+		"Supplier invoice number is already held by {0} PI {1}. The database 'Unique' setting on "
+		"Supplier Invoice No (Customize Form) blocks re-using this number, even from a cancelled "
+		"invoice. Ask a System Manager to remove that setting; after that an approver can approve "
+		"the re-use if needed."
+	).format(status, get_link_to_form("Purchase Invoice", holder["name"]))
+
+
+_OVERRIDE_FIELDS = (
+	"custom_duplicate_bill_override",
+	"custom_duplicate_bill_reason",
+	"custom_duplicate_bill_approved_by",
+	"custom_duplicate_bill_approved_at",
+)
+
+
+def _override_changed(doc, before) -> bool:
+	if _as_flag(doc.custom_duplicate_bill_override) != _as_flag(before.custom_duplicate_bill_override):
+		return True
+	return any(
+		(getattr(doc, f, None) or "") != (getattr(before, f, None) or "") for f in _OVERRIDE_FIELDS[1:]
+	)
 
 
 def validate_purchase_invoice(doc, method=None) -> None:
@@ -117,45 +165,60 @@ def validate_purchase_invoice(doc, method=None) -> None:
 	if not norm or _as_flag(getattr(doc, "is_return", 0)):
 		return
 
+	# R3: while the legacy DB 'Unique' setting exists, MariaDB would reject a re-used
+	# number (even from a cancelled PI) regardless of any approval; say so first.
+	if unique_setting_present():
+		holder = _db_unique_holder(doc.bill_no, doc.name)
+		if holder:
+			frappe.throw(_unique_blocker_message(holder), title=_("Duplicate supplier invoice number"))
+
 	approvers = _approvers(settings)
+	is_approver = frappe.session.user in approvers
+	conflicts = find_conflicts(doc.bill_no, doc.name, doc.company)
 	before = doc.get_doc_before_save()
 	was_approved = bool(before) and _as_flag(getattr(before, "custom_duplicate_bill_override", 0))
+	ticked = _as_flag(doc.custom_duplicate_bill_override)
 
-	if _as_flag(doc.custom_duplicate_bill_override):
-		if was_approved and (
-			normalize_bill_no(before.bill_no) != norm or (before.supplier or "") != (doc.supplier or "")
-		):
-			# Number or supplier changed after approval: fresh approval needed.
-			_clear_override(doc)
-		elif was_approved:
-			# Unchanged since approval: keep it; the stamp is not client-writable.
-			doc.custom_duplicate_bill_approved_by = before.custom_duplicate_bill_approved_by
-			doc.custom_duplicate_bill_approved_at = before.custom_duplicate_bill_approved_at
-		else:
-			if frappe.session.user not in approvers:
-				frappe.throw(
-					_("Only a named approver (OCR Settings) can approve a duplicate invoice number.")
-				)
+	if was_approved and (
+		normalize_bill_no(before.bill_no) != norm or (before.supplier or "") != (doc.supplier or "")
+	):
+		# Number or supplier changed after approval: fresh approval needed (anyone's save).
+		_clear_override(doc)
+		ticked = False
+	elif was_approved:
+		if not is_approver:
+			if _override_changed(doc, before):
+				frappe.throw(_("Only a named approver can change or withdraw an approval."))
+		elif not ticked:
+			_clear_override(doc)  # approver withdraws
+		elif (doc.custom_duplicate_bill_reason or "").strip() != (
+			before.custom_duplicate_bill_reason or ""
+		).strip():
 			if not (doc.custom_duplicate_bill_reason or "").strip():
 				frappe.throw(_("A reason is required to approve a duplicate invoice number."))
 			doc.custom_duplicate_bill_approved_by = frappe.session.user
 			doc.custom_duplicate_bill_approved_at = now_datetime()
+		else:
+			doc.custom_duplicate_bill_approved_by = before.custom_duplicate_bill_approved_by
+			doc.custom_duplicate_bill_approved_at = before.custom_duplicate_bill_approved_at
+	elif ticked:
+		if not is_approver:
+			frappe.throw(_("Only a named approver (OCR Settings) can approve a duplicate invoice number."))
+		if not (doc.custom_duplicate_bill_reason or "").strip():
+			frappe.throw(_("A reason is required to approve a duplicate invoice number."))
+		if not conflicts:
+			frappe.throw(
+				_(
+					"There is no duplicate invoice number to approve; untick 'Approve duplicate invoice number'."
+				)
+			)
+		doc.custom_duplicate_bill_approved_by = frappe.session.user
+		doc.custom_duplicate_bill_approved_at = now_datetime()
 	else:
 		doc.custom_duplicate_bill_approved_by = None
 		doc.custom_duplicate_bill_approved_at = None
 
-	conflicts = find_conflicts(doc.bill_no, doc.name, doc.company)
-	if not conflicts:
-		return
-
-	if _as_flag(doc.custom_duplicate_bill_override):
-		if unique_setting_present():
-			frappe.throw(
-				_(
-					"Approval recorded, but the database 'Unique' setting on Supplier Invoice No still "
-					"blocks this number. Ask for that setting to be removed in Customize Form."
-				)
-			)
+	if not conflicts or ticked:
 		return
 
 	frappe.throw(_conflict_message(doc, conflicts, approvers), title=_("Duplicate supplier invoice number"))

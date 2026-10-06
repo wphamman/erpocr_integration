@@ -175,11 +175,13 @@ class TestHook:
 			bill_no="inv 000061",  # same normalised number
 			custom_duplicate_bill_override=1,
 			custom_duplicate_bill_reason="Genuine re-bill",
-			custom_duplicate_bill_approved_by="forged@example.com",
+			custom_duplicate_bill_approved_by=APPROVER,
+			custom_duplicate_bill_approved_at=STAMP,
 		)
 		validate_purchase_invoice(doc)
 		env.throw.assert_not_called()
-		assert doc.custom_duplicate_bill_approved_by == APPROVER  # not client-writable
+		assert doc.custom_duplicate_bill_override == 1
+		assert doc.custom_duplicate_bill_approved_by == APPROVER
 
 	@pytest.mark.parametrize("change", [{"bill_no": "INV-000062"}, {"supplier": "Other Supplier"}])
 	def test_change_after_approval_clears_and_blocks(self, env, change):
@@ -206,13 +208,94 @@ class TestHook:
 		assert doc.custom_duplicate_bill_approved_at is None
 		assert "already used by" in env.throw.call_args[0][0]
 
-	def test_unique_setting_present_with_approval_gives_clear_error(self, env):
+	def _approved_pair(self, **doc_kw):
+		kw = dict(
+			custom_duplicate_bill_override=1,
+			custom_duplicate_bill_reason="Genuine re-bill",
+			custom_duplicate_bill_approved_by=APPROVER,
+			custom_duplicate_bill_approved_at=STAMP,
+		)
+		before = _pi(**kw)
+		return before, _pi(before=before, **dict(kw, **doc_kw))
+
+	def test_non_approver_cannot_edit_reason_after_approval(self, env):
+		env.db.sql.return_value = [CONFLICT_SAME]
+		_, doc = self._approved_pair(custom_duplicate_bill_reason="Changed by clerk")
+		with pytest.raises(Exception):
+			validate_purchase_invoice(doc)
+		assert "change or withdraw" in env.throw.call_args[0][0]
+
+	def test_non_approver_cannot_untick_approval(self, env):
+		env.db.sql.return_value = [CONFLICT_SAME]
+		_, doc = self._approved_pair(custom_duplicate_bill_override=0)
+		with pytest.raises(Exception):
+			validate_purchase_invoice(doc)
+		assert "change or withdraw" in env.throw.call_args[0][0]
+
+	def test_approver_reason_edit_restamps(self, env):
 		env.session.user = APPROVER
 		env.db.sql.return_value = [CONFLICT_SAME]
+		_, doc = self._approved_pair(custom_duplicate_bill_reason="Updated reason")
+		validate_purchase_invoice(doc)
+		env.throw.assert_not_called()
+		assert doc.custom_duplicate_bill_approved_at == STAMP  # patched now_datetime
+		assert doc.custom_duplicate_bill_approved_by == APPROVER
+		assert doc.custom_duplicate_bill_reason == "Updated reason"
+
+	def test_approver_untick_withdraws_and_blocks(self, env):
+		env.session.user = APPROVER
+		env.db.sql.return_value = [CONFLICT_SAME]
+		_, doc = self._approved_pair(custom_duplicate_bill_override=0)
+		with pytest.raises(Exception):
+			validate_purchase_invoice(doc)
+		assert doc.custom_duplicate_bill_override == 0
+		assert doc.custom_duplicate_bill_reason is None
+		assert doc.custom_duplicate_bill_approved_by is None
+		assert doc.custom_duplicate_bill_approved_at is None
+
+	def test_new_tick_with_no_conflict_throws(self, env):
+		env.session.user = APPROVER
+		env.db.sql.return_value = []
+		with pytest.raises(Exception):
+			validate_purchase_invoice(_pi(custom_duplicate_bill_override=1, custom_duplicate_bill_reason="r"))
+		assert "no duplicate invoice number to approve" in env.throw.call_args[0][0]
+
+	def test_conflict_message_says_where_the_checkbox_is(self, env):
+		env.db.sql.return_value = [CONFLICT_SAME]
+		with pytest.raises(Exception):
+			validate_purchase_invoice(_pi())
+		assert "in the Supplier Invoice section" in env.throw.call_args[0][0]
+
+	def test_unique_setting_cancelled_exact_holder_gives_db_message(self, env):
 		env.get_meta.return_value.get_field.return_value = SimpleNamespace(unique="1")
+		env.db.sql.return_value = [{"name": "ACC-PINV-2026-00003", "docstatus": 2}]
+		with pytest.raises(Exception):
+			validate_purchase_invoice(_pi(bill_no="INV-000061"))
+		msg = env.throw.call_args[0][0]
+		assert "cancelled" in msg and "ACC-PINV-2026-00003" in msg and "'Unique' setting" in msg
+		sql, params = env.db.sql.call_args_list[0][0]
+		assert params == {"bill_no": "INV-000061", "name": "ACC-PINV-2026-00010"}
+		assert "bill_no = %(bill_no)s" in sql and "ORDER BY" in sql
+		assert "docstatus <" not in sql and "company" not in sql and "is_return" not in sql
+		assert len(env.db.sql.call_args_list) == 1  # blocked before the normal scan
+
+	def test_unique_setting_blocks_even_when_approval_ticked(self, env):
+		env.session.user = APPROVER
+		env.get_meta.return_value.get_field.return_value = SimpleNamespace(unique="1")
+		env.db.sql.return_value = [{"name": "ACC-PINV-2026-00003", "docstatus": 1}]
 		with pytest.raises(Exception):
 			validate_purchase_invoice(_pi(custom_duplicate_bill_override=1, custom_duplicate_bill_reason="r"))
 		assert "'Unique' setting" in env.throw.call_args[0][0]
+
+	def test_unique_setting_normalised_only_match_uses_normal_flow(self, env):
+		env.get_meta.return_value.get_field.return_value = SimpleNamespace(unique="1")
+		# first call = exact DB-holder query (nothing), second = normalised scan (hit)
+		env.db.sql.side_effect = [[], [CONFLICT_SAME]]
+		with pytest.raises(Exception):
+			validate_purchase_invoice(_pi(bill_no="INV 61"))
+		msg = env.throw.call_args[0][0]
+		assert "'Unique' setting" not in msg and "already used by" in msg
+		env.db.sql.side_effect = None
 
 	def test_supplier_name_is_escaped(self, env):
 		env.db.sql.return_value = [CONFLICT_OTHER]
