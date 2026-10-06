@@ -225,6 +225,20 @@ class TestHook:
 			validate_purchase_invoice(doc)
 		assert "change or withdraw" in env.throw.call_args[0][0]
 
+	def test_non_approver_desk_save_with_string_stamp_passes(self, env):
+		# A Desk save sends approved_at back as a STRING; the saved copy holds a datetime.
+		# A non-approver editing an unrelated field must not be refused, and a forged
+		# by/at must be replaced by the stored stamp.
+		env.db.sql.return_value = [CONFLICT_SAME]
+		_, doc = self._approved_pair(
+			custom_duplicate_bill_approved_at=str(STAMP),
+			custom_duplicate_bill_approved_by="someone.else@example.com",
+		)
+		validate_purchase_invoice(doc)
+		env.throw.assert_not_called()
+		assert doc.custom_duplicate_bill_approved_at == STAMP
+		assert doc.custom_duplicate_bill_approved_by == APPROVER
+
 	def test_non_approver_cannot_untick_approval(self, env):
 		env.db.sql.return_value = [CONFLICT_SAME]
 		_, doc = self._approved_pair(custom_duplicate_bill_override=0)

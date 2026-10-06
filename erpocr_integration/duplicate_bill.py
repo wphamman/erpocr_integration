@@ -140,20 +140,18 @@ def _unique_blocker_message(holder) -> str:
 	).format(status, get_link_to_form("Purchase Invoice", holder["name"]))
 
 
-_OVERRIDE_FIELDS = (
-	"custom_duplicate_bill_override",
-	"custom_duplicate_bill_reason",
-	"custom_duplicate_bill_approved_by",
-	"custom_duplicate_bill_approved_at",
-)
-
-
 def _override_changed(doc, before) -> bool:
+	"""Did the user change the approval itself (the tick or the reason)?
+
+	approved_by/at are server-stamped and restored by the caller, so they are NOT
+	compared: a Desk save sends approved_at back as a string while the saved copy
+	holds a datetime, and comparing them would refuse every save of an approved PI.
+	"""
 	if _as_flag(doc.custom_duplicate_bill_override) != _as_flag(before.custom_duplicate_bill_override):
 		return True
-	return any(
-		(getattr(doc, f, None) or "") != (getattr(before, f, None) or "") for f in _OVERRIDE_FIELDS[1:]
-	)
+	return (doc.custom_duplicate_bill_reason or "").strip() != (
+		before.custom_duplicate_bill_reason or ""
+	).strip()
 
 
 def validate_purchase_invoice(doc, method=None) -> None:
@@ -189,6 +187,8 @@ def validate_purchase_invoice(doc, method=None) -> None:
 		if not is_approver:
 			if _override_changed(doc, before):
 				frappe.throw(_("Only a named approver can change or withdraw an approval."))
+			doc.custom_duplicate_bill_approved_by = before.custom_duplicate_bill_approved_by
+			doc.custom_duplicate_bill_approved_at = before.custom_duplicate_bill_approved_at
 		elif not ticked:
 			_clear_override(doc)  # approver withdraws
 		elif (doc.custom_duplicate_bill_reason or "").strip() != (
