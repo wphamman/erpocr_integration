@@ -86,6 +86,55 @@ def after_migrate() -> None:
 	setup_optional_custom_fields()
 
 
+def _duplicate_bill_fields() -> list[dict]:
+	"""Q20 (v1.13.0): the approval fields on Purchase Invoice.
+
+	Plain fields only — NO Section/Column Break — chained after `bill_date`, so
+	nothing of ours lands inside a stock section (portfolio layout tripwire).
+	`no_copy` so an amended/duplicated PI never inherits an approval.
+	"""
+	gate = "eval:doc.custom_duplicate_bill_override"
+	common = {"no_copy": 1}
+	return [
+		dict(
+			common,
+			fieldname="custom_duplicate_bill_override",
+			label="Approve duplicate invoice number",
+			fieldtype="Check",
+			insert_after="bill_date",
+			in_standard_filter=1,
+		),
+		dict(
+			common,
+			fieldname="custom_duplicate_bill_reason",
+			label="Reason",
+			fieldtype="Small Text",
+			insert_after="custom_duplicate_bill_override",
+			depends_on=gate,
+			mandatory_depends_on=gate,
+		),
+		dict(
+			common,
+			fieldname="custom_duplicate_bill_approved_by",
+			label="Approved By",
+			fieldtype="Link",
+			options="User",
+			insert_after="custom_duplicate_bill_reason",
+			read_only=1,
+			depends_on=gate,
+		),
+		dict(
+			common,
+			fieldname="custom_duplicate_bill_approved_at",
+			label="Approved At",
+			fieldtype="Datetime",
+			insert_after="custom_duplicate_bill_approved_by",
+			read_only=1,
+			depends_on=gate,
+		),
+	]
+
+
 def setup_custom_fields() -> None:
 	"""Install Custom Fields on core ERPNext doctypes (always present — no gating).
 
@@ -107,12 +156,26 @@ def setup_custom_fields() -> None:
 	}
 	create_custom_fields(
 		{
-			"Purchase Invoice": [dict(backlink)],
+			"Purchase Invoice": [dict(backlink), *_duplicate_bill_fields()],
 			"Purchase Receipt": [dict(backlink, insert_after="supplier_delivery_note")],
 			"Journal Entry": [dict(backlink, insert_after="cheque_no")],
 		},
 		ignore_validate=True,
 	)
+
+
+def _fleet_anchor() -> str | None:
+	"""`insert_after` for `custom_ocr_section`: fleet's last field, `driver_name`.
+
+	If Fleet Vehicle lacks it, return None (field is appended) and log; never crash.
+	"""
+	if frappe.get_meta("Fleet Vehicle").has_field("driver_name"):
+		return "driver_name"
+	frappe.log_error(
+		title="OCR Fleet Vehicle anchor missing",
+		message="Fleet Vehicle has no `driver_name`; custom_ocr_section left unanchored (appended).",
+	)
+	return None
 
 
 def setup_optional_custom_fields() -> None:
@@ -150,7 +213,9 @@ def setup_optional_custom_fields() -> None:
 						"fieldname": "custom_ocr_section",
 						"label": "OCR Fleet Slip Settings",
 						"fieldtype": "Section Break",
-						"insert_after": "wesbank_cost_code",
+						# Q19: was "wesbank_cost_code", removed by fleet_management 2026-03-06.
+						# driver_name is the last field of fleet's last section.
+						"insert_after": _fleet_anchor(),
 						"collapsible": 1,
 					},
 					{

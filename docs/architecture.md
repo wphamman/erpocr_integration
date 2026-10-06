@@ -182,6 +182,18 @@ it can never influence today's matching. Scope: invoice pipeline only — DN, fl
 are untouched. See [docs/architecture/OPEN-QUESTIONS.md](architecture/OPEN-QUESTIONS.md) Q17 for
 the full ruling and what "replace the current matcher" would require.
 
+### Duplicate Supplier Invoice Numbers (Q20, v1.13.0)
+
+Opt-in (`OCR Settings.enable_duplicate_bill_check`). `erpocr_integration/duplicate_bill.py` runs as a
+`validate` doc_event on every Purchase Invoice. It finds other live PIs (`docstatus < 2`, not returns,
+same company) whose normalised `bill_no` (uppercase, non-alphanumerics removed) matches, across suppliers,
+and throws naming each conflict and the configured approvers. A user listed in
+`duplicate_bill_approvers` can tick `custom_duplicate_bill_override` with a reason; approver and time are
+stamped server-side and the approval is cleared if `bill_no` or `supplier` changes. ERPNext's own
+`check_supplier_invoice_uniqueness` (same supplier + year) stays on and runs first. The 2023 DB-level
+'Unique' setting on `bill_no` is detected and flagged on the settings form (`get_status`), never changed;
+while it exists, approvals cannot take effect. Auto-draft pre-checks duplicates and skips cleanly.
+
 ### Cross-app integration (fleet_management) — summary
 OCR runs **standalone or alongside `fleet_management`** — neither app imports nor depends on the
 other; integration is bidirectional via ERPNext Custom Fields, runtime feature-detected, so
@@ -240,6 +252,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Fleet Expense Account**: Default expense account for non-fleet-card vehicle PIs
 - **Enable Auto-Draft**: Opt-in (off by default) — auto-draft high-confidence matches (see [implementation-patterns.md](implementation-patterns.md))
 - **Enable Fleet Card Auto-Record**: Opt-in (off by default) — auto-complete high-confidence Fleet Card slips via `mark_recorded()` (v1.8.0; see *OCR Fleet Slip Workflow*). Never creates a Purchase Invoice.
+- **Block Duplicate Supplier Invoice Numbers** (+ **Duplicate Invoice Approvers**, status panel): Opt-in (off by default, v1.13.0) — see *Duplicate Supplier Invoice Numbers* below.
 - **Enable Jev Shadow Trial**: Opt-in (off by default, v1.12.0) — record TypeSafe Jev's supplier pick alongside today's matcher's pick, for later comparison. See *Jev Shadow Trial* below.
 - **TypeSafe API Key**: TypeSafe API key (Password), only used when the shadow trial is on.
 - **Jev Model**: Pinned model version (default `jev-1.13.0`) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
