@@ -233,6 +233,30 @@ def _invoice_date_in_fiscal_year(ocr_import) -> tuple[bool, str]:
 		)
 
 
+def _duplicate_bill_reason(ocr_import, settings) -> str:
+	"""Skip reason when the invoice number is already on another live PI, else "".
+
+	Feature on: any conflict (same or different supplier). Feature off: only a
+	same-supplier hit, which ERPNext's own check would throw on anyway.
+	"""
+	from erpocr_integration.duplicate_bill import find_conflicts
+
+	supplier = getattr(ocr_import, "supplier", None)
+	conflicts = find_conflicts(
+		getattr(ocr_import, "invoice_number", None),
+		getattr(ocr_import, "purchase_invoice", None),
+		getattr(ocr_import, "company", None),
+	)
+	if not getattr(settings, "enable_duplicate_bill_check", 0):
+		conflicts = [c for c in conflicts if c.get("supplier") == supplier]
+	if not conflicts:
+		return ""
+	first = conflicts[0]
+	kind = "same" if first.get("supplier") == supplier else "different"
+	more = f" +{len(conflicts) - 1} more" if len(conflicts) > 1 else ""
+	return f"Duplicate invoice number: {first['name']} ({kind} supplier){more}"
+
+
 def attempt_auto_draft(ocr_import, settings) -> bool:
 	"""Attempt to auto-draft a document from a high-confidence OCR Import.
 
@@ -283,6 +307,13 @@ def attempt_auto_draft(ocr_import, settings) -> bool:
 	totals_ok, totals_reason = _totals_reconcile(ocr_import)
 	if not totals_ok:
 		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", totals_reason)
+		return False
+
+	# Duplicate supplier invoice number (Q20): skip cleanly instead of letting
+	# PI insert throw (and write an Error Log row). Never sets the override.
+	dup_reason = _duplicate_bill_reason(ocr_import, settings)
+	if dup_reason:
+		frappe.db.set_value("OCR Import", ocr_import.name, "auto_draft_skipped_reason", dup_reason)
 		return False
 
 	try:

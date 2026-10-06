@@ -4,6 +4,17 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
+**v1.13.0 delta (Q20 + Q19): ONE new whitelisted method (33 -> 34), ONE new `validate` doc_event on
+Purchase Invoice, FOUR new Custom Fields on Purchase Invoice, one Fleet Vehicle anchor change.**
+`duplicate_bill.validate_purchase_invoice` now runs on EVERY Purchase Invoice save, for every creator (no
+sibling app creates PIs in code today, architect-verified 2026-10-06), and throws on a re-used supplier
+invoice number unless a named approver approved it; it is a no-op while
+`OCR Settings.enable_duplicate_bill_check` is off. New PI Custom Fields (plain, `no_copy`, after
+`bill_date`): `custom_duplicate_bill_override`, `_reason`, `_approved_by`, `_approved_at`. New GET
+`erpocr_integration.duplicate_bill.get_status` (System Manager only). Fleet Vehicle `custom_ocr_section`
+is re-anchored from `wesbank_cost_code` (a field fleet_management removed) to `driver_name`; no field
+added or removed there.
+
 **Current through v1.12.0** (product baseline = tag `v1.12.0`, LIVE on both sites since the 2026-09-21 train,
 architect probe-verified 2026-09-22 — it carries v1.11.0, which never deployed on its own list). Historical context from the
 v1.10.0 baseline (`39b9562`) follows.
@@ -94,13 +105,14 @@ with `fleet_management` via ERPNext Custom Fields (§4). There is **no `required
   §3a, not a separate app.) This app imports/references none of them.
 - Arrow direction is clean: consumers → erpocr_integration. Never the reverse.
 
-## 2. Whitelisted RPC endpoints (33 total; **0 `allow_guest`**)
+## 2. Whitelisted RPC endpoints (34 total; **0 `allow_guest`**)
 
 ### 2a. Module-level endpoints (`frappe.call` method paths)
 | Method path | HTTP | Guard | Purpose |
 |---|---|---|---|
 | `erpocr_integration.stats_api.get_ocr_stats` | GET | **System Manager / Accounts Manager only** | Aggregated processing stats — *the one endpoint intended for an external dashboard consumer* |
 | `erpocr_integration.statement_api.rereconcile_statement` | POST-ish | OCR Statement write | Re-run statement reconciliation after manual supplier change |
+| `erpocr_integration.duplicate_bill.get_status` | GET | **System Manager only** | v1.13.0: duplicate-invoice protection report for the OCR Settings form |
 | `erpocr_integration.api.upload_pdf` | POST | create perm on OCR Import | Manual file upload |
 | `erpocr_integration.api.retry_gemini_extraction` | POST | OCR Import write; **+ System Manager** when status ≠ `Error` | Retry a failed extraction (any holder of write perm), or — since v1.10.2 — **re-extract** a `Needs Review`/`Matched` record, which additionally requires **System Manager** and is refused outright once a PI/PR/JE is linked. Signature unchanged. |
 | `erpocr_integration.api.check_duplicates` | GET | OCR Import perm | Duplicate detection pre-create |

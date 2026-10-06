@@ -776,3 +776,84 @@ class TestTotalsReconcile:
 		assert "1,961.00" in reason
 		assert "1,470.75" in reason
 		assert "subtotal" in reason  # reference picked via the now-fixed detector
+
+
+class TestDuplicateBillPrecheck:
+	"""Q20 (v1.13.0): auto-draft skips a re-used invoice number instead of throwing."""
+
+	def _doc(self):
+		doc = _make_ocr_import(
+			name="OCR-IMP-DUP",
+			status="Matched",
+			document_type="",
+			purchase_order=None,
+			purchase_invoice=None,
+			purchase_receipt=None,
+			journal_entry=None,
+			company="Test Co",
+			invoice_number="INV-000061",
+			supplier="Acme Supplies",
+			subtotal=1000.00,
+			tax_amount=150.00,
+			total_amount=1150.00,
+			items=[_make_item(qty=1.0, rate=1000.00)],
+		)
+		doc.create_purchase_invoice = MagicMock(return_value="PI-X")
+		doc.save = MagicMock()
+		return doc
+
+	def _hit(self, name, supplier):
+		return {
+			"name": name,
+			"supplier": supplier,
+			"posting_date": None,
+			"grand_total": 1150.0,
+			"docstatus": 1,
+		}
+
+	def test_feature_on_different_supplier_hit_skips_without_error_log(self, mock_frappe):
+		doc = self._doc()
+		mock_frappe.get_list.return_value = []
+		mock_frappe.log_error.reset_mock()
+		mock_frappe.db.set_value.reset_mock()
+		mock_frappe.db.sql.return_value = [
+			self._hit("ACC-PINV-1", "Other Co"),
+			self._hit("ACC-PINV-2", "Acme Supplies"),
+		]
+		result = attempt_auto_draft(doc, _make_settings(enable_duplicate_bill_check=1))
+		mock_frappe.db.sql.return_value = []
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+		mock_frappe.log_error.assert_not_called()
+		args = mock_frappe.db.set_value.call_args[0]
+		assert args[2] == "auto_draft_skipped_reason"
+		assert args[3] == "Duplicate invoice number: ACC-PINV-1 (different supplier) +1 more"
+
+	def test_feature_off_same_supplier_hit_still_skips(self, mock_frappe):
+		doc = self._doc()
+		mock_frappe.get_list.return_value = []
+		mock_frappe.db.set_value.reset_mock()
+		mock_frappe.db.sql.return_value = [self._hit("ACC-PINV-2", "Acme Supplies")]
+		result = attempt_auto_draft(doc, _make_settings())
+		mock_frappe.db.sql.return_value = []
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+		assert (
+			mock_frappe.db.set_value.call_args[0][3] == "Duplicate invoice number: ACC-PINV-2 (same supplier)"
+		)
+
+	def test_feature_off_different_supplier_hit_does_not_block(self, mock_frappe):
+		doc = self._doc()
+		mock_frappe.get_list.return_value = []
+		mock_frappe.db.sql.return_value = [self._hit("ACC-PINV-1", "Other Co")]
+		result = attempt_auto_draft(doc, _make_settings())
+		mock_frappe.db.sql.return_value = []
+		assert result is True
+		doc.create_purchase_invoice.assert_called_once()
+
+	def test_no_conflict_unchanged(self, mock_frappe):
+		doc = self._doc()
+		mock_frappe.get_list.return_value = []
+		mock_frappe.db.sql.return_value = []
+		assert attempt_auto_draft(doc, _make_settings(enable_duplicate_bill_check=1)) is True
+		doc.create_purchase_invoice.assert_called_once()

@@ -109,6 +109,9 @@ after_migrate = "erpocr_integration.install.after_migrate"
 
 doc_events = {
 	"Purchase Invoice": {
+		# Q20 (v1.13.0): runs on EVERY Purchase Invoice, any creator. Feature-gated
+		# by OCR Settings.enable_duplicate_bill_check (off = returns immediately).
+		"validate": "erpocr_integration.duplicate_bill.validate_purchase_invoice",
 		"on_submit": [
 			"erpocr_integration.api.update_ocr_import_on_submit",
 			"erpocr_integration.fleet_api.update_ocr_fleet_on_submit",

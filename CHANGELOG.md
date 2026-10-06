@@ -2,6 +2,34 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] — 2026-10-06
+
+Minor release. Q20: a re-used supplier invoice number is now blocked with a clear message, and a
+**named approver** can override it with a reason, instead of staff adding a suffix to the number
+(301 of 4,713 SP Purchase Invoices were booked that way, which breaks statement reconciliation).
+Plus Q19: the Fleet Vehicle section anchor is repaired.
+
+### Added
+- **Duplicate supplier-invoice-number check (`duplicate_bill.py`)**, a `validate` doc_event on
+  EVERY Purchase Invoice (any creator). Off by default (`OCR Settings.enable_duplicate_bill_check`).
+  Compares a normalised number (uppercase, non-alphanumerics removed) across suppliers within the
+  company, ignoring cancelled PIs and returns. Names each conflict and the approvers.
+- **Named approvers**: `OCR Settings.duplicate_bill_approvers` (new child doctype `OCR Duplicate Bill
+  Approver`). No implicit approvers (not System Manager, not Administrator). Approval requires a
+  reason; approver and time are stamped server-side. It is cleared when the number or supplier
+  changes.
+- **Four Purchase Invoice Custom Fields** (plain fields after `bill_date`, `no_copy`):
+  `custom_duplicate_bill_override` (list-filterable audit view), `_reason`, `_approved_by`, `_approved_at`.
+- **Protection status** on OCR Settings (`duplicate_bill.get_status`, System Manager only): reports
+  the legacy database-level 'Unique' setting on Supplier Invoice No (detected, never changed), the
+  state of ERPNext's own `check_supplier_invoice_uniqueness`, and "no protection active".
+- Auto-draft pre-checks duplicates and skips with `auto_draft_skipped_reason` ("Duplicate invoice
+  number: <PI> (same|different supplier)") instead of throwing; never sets the override.
+
+### Fixed
+- **Q19**: `Fleet Vehicle` `custom_ocr_section` was anchored after `wesbank_cost_code` (removed by
+  fleet_management 2026-03-06); now `driver_name`, with patch `v1_13_0.reanchor_fleet_ocr_section`.
+
 ## [1.12.0] — 2026-09-19
 
 Minor release. Q17 shadow trial: TypeSafe Jev's supplier pick is now recorded ALONGSIDE today's
