@@ -55,3 +55,10 @@ Review:
 less protection than today.
 
 **Status:** REQUESTED 2026-10-06.
+
+## Addendum 2026-10-06 (evening): Empire Vending, a third site
+Willie confirmed `erp.empirevending.co.za` runs only erpocr (Frappe Cloud, own server). Coordinator probe with Willie's OK: erpocr
+1.12.0 on frappe 15.120.0 / erpnext 15.121.0 (newer than SP/Cactus), no fleet_management. **v1.13.0 is safe there as the same
+1.12.0 → 1.13.0 hop**: the framework internals it relies on are identical at those versions (upstream source diffed), and the
+Fleet patch and fields skip a site without Fleet Vehicle. Post-deploy: 1.13.0, `enable_duplicate_bill_check` = 0, patch logged.
+Who deploys there is Willie's call.
