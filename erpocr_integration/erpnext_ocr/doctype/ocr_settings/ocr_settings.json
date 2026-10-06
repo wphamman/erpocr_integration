@@ -48,7 +48,11 @@
 		"column_break_jev",
 		"jev_model",
 		"jev_monthly_budget_usd",
-		"jev_timeout_seconds"
+		"jev_timeout_seconds",
+		"section_break_dupbill",
+		"enable_duplicate_bill_check",
+		"duplicate_bill_approvers",
+		"duplicate_bill_status"
 	],
 	"fields": [
 		{
@@ -354,6 +358,32 @@
 			"label": "Jev Timeout (seconds)",
 			"default": "20",
 			"depends_on": "eval:doc.enable_jev_shadow"
+		},
+		{
+			"fieldname": "section_break_dupbill",
+			"fieldtype": "Section Break",
+			"label": "Duplicate supplier invoice numbers",
+			"collapsible": 1
+		},
+		{
+			"fieldname": "enable_duplicate_bill_check",
+			"fieldtype": "Check",
+			"label": "Block Duplicate Supplier Invoice Numbers",
+			"default": "0",
+			"description": "Applies to every Purchase Invoice. A named approver can override with a reason. ERPNext's own same-supplier, same-financial-year check stays in force and cannot be overridden."
+		},
+		{
+			"fieldname": "duplicate_bill_approvers",
+			"fieldtype": "Table MultiSelect",
+			"label": "Duplicate Invoice Approvers",
+			"options": "OCR Duplicate Bill Approver",
+			"depends_on": "eval:doc.enable_duplicate_bill_check",
+			"description": "Only these users can approve a duplicate. System Manager and Administrator are not implicit approvers."
+		},
+		{
+			"fieldname": "duplicate_bill_status",
+			"fieldtype": "HTML",
+			"label": "Protection Status"
 		}
 	],
 	"index_web_pages_for_search": 1,
