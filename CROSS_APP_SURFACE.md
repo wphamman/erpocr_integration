@@ -15,7 +15,7 @@ invoice number unless a named approver approved it; it is a no-op while
 is re-anchored from `wesbank_cost_code` (a field fleet_management removed) to `driver_name`; no field
 added or removed there.
 
-**Current through v1.13.0** (tagged 2026-10-06, `933895f` → `34b71e3`, LIVE on Star Pops + Cactus since 2026-10-07 07:51 SAST and on Empire Vending since its 2026-10-09 move; duplicate check OFF on all three; its delta is at
+**Current through v1.13.1** (v1.13.1 = `1deeb10` → `6a33044`, no surface change: a v16 query fix + an upload-screen fix; LIVE on Star Pops + Cactus since 2026-10-09 ~21:32 and on Empire Vending since 2026-10-09 14:27. v1.13.0 = `933895f` → `34b71e3`; duplicate check OFF on all three; its delta is at
 the top of this file). Product baseline = tag `v1.12.0`, LIVE on both sites since the 2026-09-21 train, architect
 probe-verified 2026-09-22; it carries v1.11.0, which never deployed on its own list. Historical context from the
 v1.10.0 baseline (`39b9562`) follows.
