@@ -2,6 +2,24 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] — 2026-10-09
+
+Patch release. **A v16 blocker found on the erp-test end-user walk** (frappe 16.51.0), plus one upload-screen bug that is
+also live on v15.
+
+### Fixed
+- **Service-item matching failed every import on v16.** `match_service_item` asked the database to sort mappings by
+  `LENGTH(description_pattern) DESC`. v16's query builder rejects an SQL expression in `order_by` ("Invalid field format in
+  Order By"), so every OCR import that reached service matching ended in Error on erp-test. The query now sorts by `name` and
+  the longest-pattern-first order is applied in Python (`_longest_pattern_first`), which behaves the same on v15 and v16. No
+  other `order_by`, `fields` or `group_by` in the app uses an expression (checked).
+- **After a manual upload the form never refreshed and showed no result message.** The status poll fell back to
+  `frappe.ui.form.get_open_form()`, which exists in neither v15 nor v16, so it threw when extraction finished. It now uses the
+  open form (`cur_frm`). The extraction itself was never affected; staff had to reload by hand.
+
+### Tests
+1,060 → 1,062.
+
 ## [1.13.0] — 2026-10-06
 
 Minor release. Q20: a re-used supplier invoice number is now blocked with a clear message, and a

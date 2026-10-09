@@ -419,3 +419,32 @@
   API spend against supplier corrections per 100 invoices. Own-company reads are skipped by design and scored as
   matcher-only. The trial starts only when Willie enters a dedicated key and enables it.
 
+
+## ADR-0024 — Re-used supplier invoice numbers are blocked in the app, with a named approver instead of a suffix
+- **Status:** Accepted 2026-10-06 (Willie) · shipped v1.13.0 (Q20, with the Q19 anchor fix)
+- **Context:** A 2023 Customize Form tick made `Purchase Invoice.bill_no` unique at database level, on both sites. That
+  index is supplier-blind and counts cancelled invoices, and no role can override a database index. Staff booked 301
+  (SP) and 73 (Cactus) invoices with a suffix added to the supplier's real number instead. About 81% of SP's were
+  corrections blocked only by a cancelled invoice. The suffixes break statement reconciliation. And the workaround
+  defeated the control itself: in 8 same-supplier/same-amount pairs the money left twice (2023 to early 2025;
+  whether it was owed twice needs the supplier documents). ERPNext's own `check_supplier_invoice_uniqueness` (same
+  supplier + same fiscal year, cancelled ignored) is on at both sites and blocked only real duplicates.
+- **Decision:**
+  - Move the block into the app as a Purchase Invoice `validate` hook on every PI, opt-in per site.
+  - Match on the normalised number (uppercase alphanumerics), across suppliers, ignoring cancelled PIs and returns.
+  - Approvers are named in OCR Settings; there is no implicit approver.
+  - An approval needs an actual conflict and a reason. It is stamped server-side. A non-approver can neither create,
+    edit nor withdraw it, and it is cleared if the number or supplier changes.
+  - ERPNext's built-in check stays on and pre-empts the same-supplier/same-year case, which stays absolute.
+  - The 2023 tick is detected and reported, never changed by the app. While it exists, a collision that MariaDB
+    would reject (exact number, any docstatus) gets a clear message instead of an IntegrityError.
+  - Auto-draft pre-checks and skips instead of throwing.
+- **Consequences:**
+  - Rollout order on each site: enable the feature and name approvers FIRST, then untick Unique in Customize Form.
+    That way there is never less protection than today. Verified on the prod-copy bench 2026-10-06: unticking drops
+    the database index, so no manual DB step is needed.
+  - Normalised matching will ask for approval on short receipt numbers shared by different retailers (e.g. `5744.`
+    vs `5744`). That is the intended trade, but it sets the approver's workload.
+  - Limits: `db_set`/`set_value` bypass validate (as for every Frappe validation; `bill_no` is not allow_on_submit),
+    and removing an approver does not void their past approvals.
+  - The 6+ suffixed invoices already booked are left as they are.

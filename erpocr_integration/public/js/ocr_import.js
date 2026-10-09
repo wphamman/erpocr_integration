@@ -719,8 +719,11 @@ function poll_extraction_status(frm, ocr_import_name) {
 					if (!['Pending', 'Extracting', 'Processing'].includes(status) || poll_count >= max_polls) {
 						clearInterval(interval);
 
-						// Reload form (fall back to open form when frm was not passed)
-						let active_frm = frm || frappe.ui.form.get_open_form();
+						// Reload form (fall back to open form when frm was not passed).
+						// cur_frm, not frappe.ui.form.get_open_form: that function exists in
+						// neither v15 nor v16, so this threw and the upload's final message
+						// and reload never ran (found on erp-test 2026-10-09).
+						let active_frm = frm || window.cur_frm;
 						if (active_frm && active_frm.doc && active_frm.doc.name === ocr_import_name) {
 							active_frm.reload_doc();
 						}
