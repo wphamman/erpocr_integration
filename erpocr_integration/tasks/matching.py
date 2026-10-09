@@ -381,6 +381,16 @@ def _service_mapping_result(mapping) -> dict:
 	}
 
 
+def _longest_pattern_first(mappings):
+	"""Most specific (longest) pattern first; ties by name (the query's order).
+
+	Sorted here, not in SQL: v16's query builder rejects an expression such as
+	`LENGTH(description_pattern)` in order_by ("Invalid field format in Order By"),
+	which failed every import that reached service matching on erp-test (2026-10-09).
+	"""
+	return sorted(mappings, key=lambda m: len(m.description_pattern or ""), reverse=True)
+
+
 def match_service_item(
 	description_ocr: str, company: str | None = None, supplier: str | None = None
 ) -> dict | None:
@@ -427,11 +437,11 @@ def match_service_item(
 			"OCR Service Mapping",
 			filters={"company": company, "supplier": supplier},
 			fields=["description_pattern", "item_code", "item_name", "expense_account", "cost_center"],
-			order_by="LENGTH(description_pattern) DESC",
+			order_by="name asc",
 			ignore_permissions=True,
 		)
 
-		for mapping in supplier_mappings:
+		for mapping in _longest_pattern_first(supplier_mappings):
 			if (mapping.description_pattern or "").strip() == SUPPLIER_DEFAULT_PATTERN:
 				continue  # the supplier default — handled at Priority 3, never as a substring
 			pattern_norm = normalize_for_matching(mapping.description_pattern)
@@ -443,11 +453,11 @@ def match_service_item(
 		"OCR Service Mapping",
 		filters={"company": company, "supplier": ["is", "not set"]},
 		fields=["description_pattern", "item_code", "item_name", "expense_account", "cost_center"],
-		order_by="LENGTH(description_pattern) DESC",
+		order_by="name asc",
 		ignore_permissions=True,
 	)
 
-	for mapping in generic_mappings:
+	for mapping in _longest_pattern_first(generic_mappings):
 		if (mapping.description_pattern or "").strip() == SUPPLIER_DEFAULT_PATTERN:
 			continue
 		pattern_norm = normalize_for_matching(mapping.description_pattern)

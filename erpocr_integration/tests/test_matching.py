@@ -854,6 +854,46 @@ class TestMatchServiceItem:
 		assert result is not None
 		assert result["item_code"] == "DELIVERY"
 
+	def test_longest_pattern_wins_whatever_the_query_order(self, mock_frappe):
+		"""The query no longer sorts by length (v16 rejects the SQL expression), so the
+		Python sort must pick the most specific pattern even when the shorter one comes first."""
+		self._setup_mappings(
+			mock_frappe,
+			generic_mappings=[
+				{
+					"description_pattern": "delivery",
+					"item_code": "DELIVERY",
+					"item_name": "Delivery",
+					"expense_account": "5200 - Delivery - TC",
+					"cost_center": "",
+				},
+				{
+					"description_pattern": "delivery fee express",
+					"item_code": "EXPRESS",
+					"item_name": "Express",
+					"expense_account": "5210 - Express - TC",
+					"cost_center": "",
+				},
+			],
+		)
+		from erpocr_integration.tasks.matching import match_service_item
+
+		result = match_service_item("Delivery Fee Express - same day", company="Test Company")
+		assert result["item_code"] == "EXPRESS"
+
+	def test_order_by_is_a_plain_field_v16_safe(self, mock_frappe):
+		"""v16's query builder only accepts 'field [asc|desc]' in order_by."""
+		import re
+
+		self._setup_mappings(mock_frappe, supplier_mappings=[], generic_mappings=[])
+		from erpocr_integration.tasks.matching import match_service_item
+
+		match_service_item("anything", company="Test Company", supplier="SUP-001")
+		for call in mock_frappe.get_all.call_args_list:
+			order_by = call.kwargs.get("order_by", "")
+			for part in order_by.split(","):
+				assert re.fullmatch(r"\s*[a-z_]+(\s+(asc|desc))?\s*", part, re.I), order_by
+
 
 class TestSupplierDefaultMapping:
 	"""Supplier-default ('*' wildcard) service mappings — code any line for a
