@@ -10,6 +10,14 @@ import json
 
 import frappe
 import requests
+from frappe import _
+
+from erpocr_integration.tasks.billing_alert import (
+	GeminiBillingError,
+	is_billing_failure,
+	on_gemini_success,
+	record_billing_failure,
+)
 
 _CLASSIFICATION_PROMPT = """Classify this document as one of:
 - "invoice": A single invoice or a PDF containing multiple invoices. Has line items with quantities, unit prices, and amounts. May have a single supplier and invoice number.
@@ -59,6 +67,11 @@ def classify_document(
 			return "statement", confidence
 		return "invoice", confidence
 
+	except GeminiBillingError:
+		# Google refused payment: extraction would fail the same way. Let the
+		# Drive poller stop and leave the file untouched (no Error placeholder),
+		# so it is picked up again once billing works.
+		raise
 	except Exception:
 		frappe.log_error(
 			title="Document Classification Error",
@@ -96,8 +109,17 @@ def _call_classification_api(
 	headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
 	response = requests.post(url, json=payload, headers=headers, timeout=30)
-	response.raise_for_status()
+	try:
+		response.raise_for_status()
+	except requests.exceptions.HTTPError:
+		if is_billing_failure(response.status_code, response.text):
+			record_billing_failure()
+			raise GeminiBillingError(
+				_("Google refused payment for the AI service (HTTP {0}).").format(response.status_code)
+			) from None
+		raise
 
+	on_gemini_success()
 	data = response.json()
 	candidates = data.get("candidates", [])
 	text = candidates[0]["content"]["parts"][0]["text"]

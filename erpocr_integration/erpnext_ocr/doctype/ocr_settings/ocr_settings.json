@@ -52,7 +52,11 @@
 		"section_break_dupbill",
 		"enable_duplicate_bill_check",
 		"duplicate_bill_approvers",
-		"duplicate_bill_status"
+		"duplicate_bill_status",
+		"section_break_billing_alert",
+		"billing_alert_recipients",
+		"billing_failure_since",
+		"billing_alert_last_sent"
 	],
 	"fields": [
 		{
@@ -384,6 +388,31 @@
 			"fieldname": "duplicate_bill_status",
 			"fieldtype": "HTML",
 			"label": "Protection Status"
+		},
+		{
+			"fieldname": "section_break_billing_alert",
+			"fieldtype": "Section Break",
+			"label": "AI Service Payment Alert"
+		},
+		{
+			"fieldname": "billing_alert_recipients",
+			"fieldtype": "Small Text",
+			"label": "Also Email These People",
+			"description": "If Google stops the AI service for payment reasons, an email goes to every System Manager and to the addresses here. Separate addresses with commas. At most one email every 6 hours."
+		},
+		{
+			"fieldname": "billing_failure_since",
+			"fieldtype": "Datetime",
+			"label": "Payment Failing Since",
+			"hidden": 1,
+			"read_only": 1
+		},
+		{
+			"fieldname": "billing_alert_last_sent",
+			"fieldtype": "Datetime",
+			"label": "Payment Alert Last Sent",
+			"hidden": 1,
+			"read_only": 1
 		}
 	],
 	"index_web_pages_for_search": 1,

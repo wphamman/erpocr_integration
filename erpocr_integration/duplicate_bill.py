@@ -17,7 +17,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import escape_html, get_link_to_form, now_datetime
+from frappe.utils import escape_html, fmt_money, get_link_to_form, now_datetime
 
 
 def normalize_bill_no(value) -> str:
@@ -39,7 +39,7 @@ def find_conflicts(bill_no, exclude_name, company) -> list[dict]:
 		return []
 	rows = frappe.db.sql(
 		"""
-		SELECT name, supplier, posting_date, grand_total, docstatus
+		SELECT name, supplier, posting_date, grand_total, currency, docstatus
 		FROM `tabPurchase Invoice`
 		WHERE docstatus < 2
 			AND is_return = 0
@@ -78,7 +78,25 @@ def _clear_override(doc) -> None:
 	doc.custom_duplicate_bill_override = 0
 	doc.custom_duplicate_bill_reason = None
 	doc.custom_duplicate_bill_approved_by = None
+	doc.custom_duplicate_bill_approved_by_name = None
 	doc.custom_duplicate_bill_approved_at = None
+
+
+def _stamp_approval(doc) -> None:
+	"""Record who approved and when. The login is the audit record; the full name is what staff read."""
+	user = frappe.session.user
+	doc.custom_duplicate_bill_approved_by = user
+	doc.custom_duplicate_bill_approved_by_name = frappe.db.get_value("User", user, "full_name") or user
+	doc.custom_duplicate_bill_approved_at = now_datetime()
+
+
+def _keep_approval(doc, before) -> None:
+	"""Restore the server-stamped approval fields from the saved copy (client values are ignored)."""
+	doc.custom_duplicate_bill_approved_by = before.custom_duplicate_bill_approved_by
+	doc.custom_duplicate_bill_approved_by_name = getattr(
+		before, "custom_duplicate_bill_approved_by_name", None
+	)
+	doc.custom_duplicate_bill_approved_at = before.custom_duplicate_bill_approved_at
 
 
 def _conflict_message(doc, conflicts, approvers) -> str:
@@ -95,7 +113,7 @@ def _conflict_message(doc, conflicts, approvers) -> str:
 				get_link_to_form("Purchase Invoice", c["name"]),
 				escape_html(c.get("supplier") or ""),
 				c.get("posting_date"),
-				c.get("grand_total"),
+				fmt_money(c.get("grand_total"), currency=c.get("currency")),
 				wording,
 			)
 		)
@@ -187,8 +205,7 @@ def validate_purchase_invoice(doc, method=None) -> None:
 		if not is_approver:
 			if _override_changed(doc, before):
 				frappe.throw(_("Only a named approver can change or withdraw an approval."))
-			doc.custom_duplicate_bill_approved_by = before.custom_duplicate_bill_approved_by
-			doc.custom_duplicate_bill_approved_at = before.custom_duplicate_bill_approved_at
+			_keep_approval(doc, before)
 		elif not ticked:
 			_clear_override(doc)  # approver withdraws
 		elif (doc.custom_duplicate_bill_reason or "").strip() != (
@@ -196,11 +213,9 @@ def validate_purchase_invoice(doc, method=None) -> None:
 		).strip():
 			if not (doc.custom_duplicate_bill_reason or "").strip():
 				frappe.throw(_("A reason is required to approve a duplicate invoice number."))
-			doc.custom_duplicate_bill_approved_by = frappe.session.user
-			doc.custom_duplicate_bill_approved_at = now_datetime()
+			_stamp_approval(doc)
 		else:
-			doc.custom_duplicate_bill_approved_by = before.custom_duplicate_bill_approved_by
-			doc.custom_duplicate_bill_approved_at = before.custom_duplicate_bill_approved_at
+			_keep_approval(doc, before)
 	elif ticked:
 		if not is_approver:
 			frappe.throw(_("Only a named approver (OCR Settings) can approve a duplicate invoice number."))
@@ -212,10 +227,10 @@ def validate_purchase_invoice(doc, method=None) -> None:
 					"There is no duplicate invoice number to approve; untick 'Approve duplicate invoice number'."
 				)
 			)
-		doc.custom_duplicate_bill_approved_by = frappe.session.user
-		doc.custom_duplicate_bill_approved_at = now_datetime()
+		_stamp_approval(doc)
 	else:
 		doc.custom_duplicate_bill_approved_by = None
+		doc.custom_duplicate_bill_approved_by_name = None
 		doc.custom_duplicate_bill_approved_at = None
 
 	if not conflicts or ticked:

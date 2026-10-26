@@ -2,6 +2,51 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] — 2026-10-26
+
+Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording fixes, and Unlink & Reset for clerks.
+
+### Added
+- **Gemini billing-failure alert (Q23).** HTTP 402, or a 429 `RESOURCE_EXHAUSTED` that mentions prepay/credits, is now a
+  distinct `GeminiBillingError` and is not retried in the job. System Managers plus the new OCR Settings field
+  `billing_alert_recipients` get one plain-language email, at most every 6 hours. A red banner shows on the OCR Import and
+  OCR Fleet Slip lists until the next successful Gemini call. A billing failure no longer uses up a Drive file's
+  `MAX_DRIVE_RETRIES`, so scans heal on their own once billing works; while it is down each Drive poll sends one probe file.
+- **v16 app-owned Sidebar (Q22).** A standard `Sidebar` named `ERPNext OCR` ships as a file
+  (`erpnext_ocr/sidebar/erpnext_ocr/erpnext_ocr.json`): Home (the workspace) then OCR Import, OCR Delivery Note, OCR Fleet
+  Slip, OCR Statement, OCR Supplier Alias, OCR Item Alias, OCR Service Mapping, OCR Settings. Workspace and DocType items only,
+  no URL item. frappe 16 imports it on migrate and the orphan sweep keeps it (the file backs it); frappe 15 never reads a
+  `sidebar` folder, so it does nothing there. A new `install.heal_v16_sidebar` (from `after_migrate`, no-op without a Sidebar
+  doctype) restores `standard`/`app`/`module` on our row if they drift, sets the converted `ERPNext OCR (Custom)` sidebar to
+  `standard = 0` with no app, and deletes the empty custom `Module Def` `ERPNext OCR (Custom)` (only when no Workspace,
+  DocType, Report or Page is filed under it and no other Sidebar either).
+
+- **One dashboard name, "OCR Accounts".** `app_title` (v16 Desktop icon) and the `<title>` of `/accounts`
+  (`frontend/index.html`, `www/accounts.html`, `public/accounts/index.html`) now match the apps-screen entry. The committed
+  build differs from the previous one only in that title line. The desk workspace "ERPNext OCR" is unchanged.
+- **Duplicate-number approvals show the approver's full name.** New read-only Purchase Invoice field
+  `custom_duplicate_bill_approved_by_name` (label "Approved By"); the login stays stored in `custom_duplicate_bill_approved_by`
+  (now hidden, label "Approved By (login)") for audit. The approval rules are unchanged. Approvals made before this release
+  (the check is off on all sites) would show no name.
+- **Money in the duplicate-number message** reads `R 45,747.00`, in each conflicting invoice's own currency
+  (`fmt_money`), instead of `45747.0`.
+- **"Upload File" on a new OCR Import is a blue toolbar button** (was under Actions, which v16 hides ungrouped buttons
+  into). The Quick Start and User guides say so.
+
+- **Unlink & Reset for clerks without Delete (OCR Import).** When the linked Purchase Invoice, Purchase Receipt or Journal
+  Entry is a draft whose `custom_ocr_import` back-link names this OCR Import, write permission on the draft is enough when the current user also created it (owner), and the
+  delete runs after a row-locked re-read of docstatus with `ignore_permissions` (the only place the app does so for a financial document, and only after that
+  write check). Cancelled documents, drafts made elsewhere, drafts without a back-link and sites without the field still
+  need real Delete permission; submitted still refuses. OCR Delivery Note and OCR Fleet Slip are unchanged: the documents
+  they create carry no back-link to prove provenance.
+
+### Fixed
+- **429 and 5xx responses were never retried.** `if e.response` is False for any error response, so the status code was
+  always unknown and the backoff never ran. The check is now `is not None`.
+
+### Tests
+1,062 → 1,100 (billing alert) → 1,121 (Sidebar) → 1,128 (wording) → 1,136 (Unlink & Reset) → 1,145 (review rounds 1-2).
+
 ## [1.13.1] — 2026-10-09
 
 Patch release. **A v16 blocker found on the erp-test end-user walk** (frappe 16.51.0), plus one upload-screen bug that is

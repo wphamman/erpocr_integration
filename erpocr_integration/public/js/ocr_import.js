@@ -139,7 +139,7 @@ frappe.ui.form.on('OCR Import', {
 				};
 
 				input.click();
-			}, __('Actions'));
+			}).addClass('btn-primary');  // ungrouped + primary: v16 moves grouped/plain buttons into "Actions"
 		}
 
 		// Create dropdown — one click sets document_type, saves, and creates the document
