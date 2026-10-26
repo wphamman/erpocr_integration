@@ -4,6 +4,8 @@ Canonical record of this app's external surface (portfolio rule **R3**: one docu
 whitelisted API layer per app). Authored against **v1.2.0**; the §2c driver-shell upload
 contract (and the `OCR Fleet Driver` role) added for **P4** on the v1.3.0/v1.4.0 line.
 
+**v1.14.0 delta (Q23 + Q22 + wording + Unlink): ONE new whitelisted method (34 -> 35):** `erpocr_integration.tasks.billing_alert.get_billing_status` (GET; needs read on OCR Import OR OCR Fleet Slip; returns only `{down: bool, since: str|None}`, used by the OCR list banners). New OCR Settings fields `billing_alert_recipients` (Small Text) plus hidden state `billing_failure_since` / `billing_alert_last_sent` (Datetime; **an empty Datetime single reads back as `0001-01-01`, so read them only via `billing_alert._read_dt`**). New PI Custom Field `custom_duplicate_bill_approved_by_name` (read-only Data, labelled "Approved By"); `custom_duplicate_bill_approved_by` is kept but hidden. **v16 only:** a standard `Sidebar` "ERPNext OCR" ships as a file (`erpnext_ocr/sidebar/`), inert on v15; `after_migrate` neutralises the converted "ERPNext OCR (Custom)" sidebar and deletes its empty ghost Module Def. `hooks.app_title` is now "OCR Accounts". Behaviour change any consumer may see: Gemini 429/5xx are now actually retried with backoff, which was broken before (`if e.response` was always False). `OCRImport.unlink_document` lets the creator of a draft discard it with write permission (cancelled still needs Delete).
+
 **v1.13.0 delta (Q20 + Q19): ONE new whitelisted method (33 -> 34), ONE new `validate` doc_event on
 Purchase Invoice, FOUR new Custom Fields on Purchase Invoice, one Fleet Vehicle anchor change.**
 `duplicate_bill.validate_purchase_invoice` now runs on EVERY Purchase Invoice save, for every creator (no
@@ -15,7 +17,7 @@ invoice number unless a named approver approved it; it is a no-op while
 is re-anchored from `wesbank_cost_code` (a field fleet_management removed) to `driver_name`; no field
 added or removed there.
 
-**Current through v1.13.1** (v1.13.1 = `1deeb10` → `6a33044`, no surface change: a v16 query fix + an upload-screen fix; LIVE on Star Pops + Cactus since 2026-10-09 ~21:32 and on Empire Vending since 2026-10-09 14:27. v1.13.0 = `933895f` → `34b71e3`; duplicate check OFF on all three; its delta is at
+**Current through v1.14.0** (tagged 2026-10-26, NOT yet deployed; see the delta at the top). v1.13.1 = `1deeb10` → `6a33044`, no surface change: a v16 query fix + an upload-screen fix; LIVE on Star Pops + Cactus since 2026-10-09 ~21:32 and on Empire Vending since 2026-10-09 14:27. v1.13.0 = `933895f` → `34b71e3`; duplicate check OFF on all three; its delta is at
 the top of this file). Product baseline = tag `v1.12.0`, LIVE on both sites since the 2026-09-21 train, architect
 probe-verified 2026-09-22; it carries v1.11.0, which never deployed on its own list. Historical context from the
 v1.10.0 baseline (`39b9562`) follows.
