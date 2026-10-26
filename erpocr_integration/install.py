@@ -84,6 +84,79 @@ def after_migrate() -> None:
 	_seed_roles()
 	setup_custom_fields()
 	setup_optional_custom_fields()
+	heal_v16_sidebar()
+
+
+# --- v16 app-owned Sidebar (Q22, v1.14.0) -----------------------------------
+#
+# The standard Sidebar itself is a FILE: erpnext_ocr/sidebar/erpnext_ocr/erpnext_ocr.json.
+# frappe 16 imports it during the schema-sync phase of migrate and keeps it past the
+# orphan sweep (which only deletes standard Sidebars with no file). frappe 15 never walks
+# a `sidebar` folder (model/sync.py IMPORTABLE_DOCTYPES has no sidebar), so the file is
+# inert there. This hook does only the two tidy-ups a file cannot do, and is a no-op on v15.
+
+SIDEBAR_NAME = "ERPNext OCR"
+CONVERTED_SIDEBAR = "ERPNext OCR (Custom)"
+GHOST_MODULE = "ERPNext OCR (Custom)"
+_GHOST_CONTENT_DOCTYPES = ("Workspace", "DocType", "Report", "Page")
+
+
+def heal_v16_sidebar() -> None:
+	"""Idempotent v16 sidebar tidy-up. Never raises; no-op where there is no Sidebar doctype."""
+	try:
+		if not frappe.db.exists("DocType", "Sidebar"):
+			return
+		_restore_standard_sidebar()
+		_neutralise_converted_sidebar()
+		_delete_ghost_module()
+	except Exception:
+		frappe.log_error(title="ERPNext OCR sidebar tidy-up failed", message=frappe.get_traceback())
+
+
+def _restore_standard_sidebar() -> None:
+	"""If our standard row exists but lost `standard`/`app`/`module`, put them back.
+
+	The file only re-imports when it is newer than the row, so an edited row would
+	otherwise stay edited. Items and everything else are left alone. Written directly
+	(not via save): a Sidebar save is developer-mode-only.
+	"""
+	row = frappe.db.get_value("Sidebar", SIDEBAR_NAME, ["standard", "app", "module"], as_dict=True)
+	if not row:
+		return
+	want = {"standard": 1, "app": "erpocr_integration", "module": "ERPNext OCR"}
+	changed = {k: v for k, v in want.items() if row.get(k) != v}
+	if changed:
+		frappe.db.set_value("Sidebar", SIDEBAR_NAME, changed, update_modified=False)
+
+
+def _neutralise_converted_sidebar() -> None:
+	"""The sidebar converted from an operator custom must not be standard or own an app."""
+	row = frappe.db.get_value("Sidebar", CONVERTED_SIDEBAR, ["standard", "app"], as_dict=True)
+	if row and (row.get("standard") or row.get("app")):
+		frappe.db.set_value("Sidebar", CONVERTED_SIDEBAR, {"standard": 0, "app": None}, update_modified=False)
+
+
+def _delete_ghost_module() -> None:
+	"""Delete Module Def 'ERPNext OCR (Custom)' (made by the v16 conversion) when it is empty.
+
+	Only when it is a custom module and nothing but the converted sidebar lives in it.
+	Deleting a Module Def also deletes the Sidebars filed under it.
+	"""
+	module = frappe.db.get_value("Module Def", GHOST_MODULE, ["custom"], as_dict=True)
+	if not module or not module.get("custom"):
+		return
+	for doctype in _GHOST_CONTENT_DOCTYPES:
+		if frappe.db.exists(doctype, {"module": GHOST_MODULE}):
+			return
+	others = frappe.get_all(
+		"Sidebar",
+		filters={"module": GHOST_MODULE, "name": ["!=", CONVERTED_SIDEBAR]},
+		pluck="name",
+		order_by="name asc",
+	)
+	if others:
+		return
+	frappe.delete_doc("Module Def", GHOST_MODULE, force=True, ignore_permissions=True)
 
 
 def _duplicate_bill_fields() -> list[dict]:

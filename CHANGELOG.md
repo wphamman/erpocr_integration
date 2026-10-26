@@ -12,13 +12,21 @@ Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording 
   `billing_alert_recipients` get one plain-language email, at most every 6 hours. A red banner shows on the OCR Import and
   OCR Fleet Slip lists until the next successful Gemini call. A billing failure no longer uses up a Drive file's
   `MAX_DRIVE_RETRIES`, so scans heal on their own once billing works; while it is down each Drive poll sends one probe file.
+- **v16 app-owned Sidebar (Q22).** A standard `Sidebar` named `ERPNext OCR` ships as a file
+  (`erpnext_ocr/sidebar/erpnext_ocr/erpnext_ocr.json`): Home (the workspace) then OCR Import, OCR Delivery Note, OCR Fleet
+  Slip, OCR Statement, OCR Supplier Alias, OCR Item Alias, OCR Service Mapping, OCR Settings. Workspace and DocType items only,
+  no URL item. frappe 16 imports it on migrate and the orphan sweep keeps it (the file backs it); frappe 15 never reads a
+  `sidebar` folder, so it does nothing there. A new `install.heal_v16_sidebar` (from `after_migrate`, no-op without a Sidebar
+  doctype) restores `standard`/`app`/`module` on our row if they drift, sets the converted `ERPNext OCR (Custom)` sidebar to
+  `standard = 0` with no app, and deletes the empty custom `Module Def` `ERPNext OCR (Custom)` (only when no Workspace,
+  DocType, Report or Page is filed under it and no other Sidebar either).
 
 ### Fixed
 - **429 and 5xx responses were never retried.** `if e.response` is False for any error response, so the status code was
   always unknown and the backoff never ran. The check is now `is not None`.
 
 ### Tests
-1,062 → 1,100 (item A).
+1,062 → 1,100 (billing alert) → 1,121 (Sidebar).
 
 ## [1.13.1] — 2026-10-09
 
