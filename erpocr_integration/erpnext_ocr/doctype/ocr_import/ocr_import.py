@@ -1603,6 +1603,12 @@ class OCRImport(Document):
 
 		return je.name
 
+	def _linked_doc_is_own(self, linked_doctype: str, linked_name: str) -> bool:
+		"""True when the linked document's back-link (`custom_ocr_import`) names this record."""
+		if not frappe.get_meta(linked_doctype).has_field("custom_ocr_import"):
+			return False
+		return frappe.db.get_value(linked_doctype, linked_name, "custom_ocr_import") == self.name
+
 	@frappe.whitelist(methods=["POST"])
 	def unlink_document(self):
 		"""Unlink and delete the draft PI/PR/JE, resetting this OCR Import for re-use.
@@ -1647,10 +1653,14 @@ class OCRImport(Document):
 				_("{0} {1} is submitted. Amend or cancel it first.").format(linked_doctype, linked_name)
 			)
 
-		# Require delete permission on the linked document — prevents a user with
-		# only OCR Import write from deleting a draft they otherwise couldn't touch.
+		# A DRAFT that this very OCR record created (its back-link names us) only needs
+		# WRITE permission on the draft: clerks who can edit the invoice they just
+		# created should not need Delete, which would also let them delete cancelled
+		# invoices. Anything else (cancelled, someone else's draft, no back-link)
+		# still needs real Delete permission, exactly as before.
+		own_draft = docstatus == 0 and self._linked_doc_is_own(linked_doctype, linked_name)
 		if docstatus is not None:
-			frappe.has_permission(linked_doctype, "delete", linked_name, throw=True)
+			frappe.has_permission(linked_doctype, "write" if own_draft else "delete", linked_name, throw=True)
 
 		# Clear the link on this OCR Import FIRST via db_set — this removes
 		# the incoming Link reference so frappe.delete_doc won't be blocked.
@@ -1664,7 +1674,12 @@ class OCRImport(Document):
 		deleted = False
 		if docstatus is not None:
 			# docstatus 0 (draft) or 2 (cancelled) — safe to delete
-			frappe.delete_doc(linked_doctype, linked_name, force=True)
+			if own_draft:
+				# Narrow, deliberate bypass: write permission was checked above and the
+				# draft is provably this record's own. Nothing else skips permissions.
+				frappe.delete_doc(linked_doctype, linked_name, force=True, ignore_permissions=True)
+			else:
+				frappe.delete_doc(linked_doctype, linked_name, force=True)
 			deleted = True
 
 		# Reload and save — save triggers before_save → _update_status()
