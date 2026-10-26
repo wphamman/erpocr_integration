@@ -448,6 +448,32 @@ class TestDriveSelfHeal:
 		assert dl.call_count == 1
 		assert store.rows == {}
 
+	def test_five_files_classifier_refusing_while_down_one_classify_no_placeholders(
+		self, mock_frappe, sample_settings, _isolate
+	):
+		_isolate["billing_failure_since"] = datetime.datetime(2026, 10, 26, 8, 0)
+		store = _Store()
+		mock_frappe.get_all = MagicMock(side_effect=store.get_all)
+		mock_frappe.get_doc = MagicMock(side_effect=store.get_doc)
+		sample_settings.drive_integration_enabled = True
+		sample_settings.drive_scan_folder_id = "folder"
+		sample_settings.get_password = MagicMock(return_value="{}")
+		mock_frappe.get_single = MagicMock(return_value=sample_settings)
+		files = [{"id": f"d{i}", "name": f"{i}.pdf"} for i in range(5)]
+		with (
+			patch.object(drive, "_get_drive_service", return_value=MagicMock()),
+			patch.object(drive, "_list_pdf_files", return_value=files),
+			patch.object(drive, "_download_file", return_value=b"%PDF-1.4 c"),
+			patch(
+				"erpocr_integration.tasks.classify_document.classify_document",
+				side_effect=GeminiBillingError("no pay"),
+			) as cls,
+			patch("time.sleep"),
+		):
+			drive.poll_drive_scan_folder()
+		assert cls.call_count == 1
+		assert store.rows == {}
+
 	def test_probe_only_while_billing_is_down(self, mock_frappe, sample_settings, _isolate):
 		_isolate["billing_failure_since"] = datetime.datetime(2026, 10, 26, 8, 0)
 		sample_settings.drive_integration_enabled = True

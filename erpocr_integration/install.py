@@ -148,6 +148,12 @@ def _delete_ghost_module() -> None:
 	for doctype in _GHOST_CONTENT_DOCTYPES:
 		if frappe.db.exists(doctype, {"module": GHOST_MODULE}):
 			return
+	# Module Def.on_trash also deletes every Custom Sidebar (site or per-user
+	# customisation) filed under the module: never destroy those.
+	if frappe.db.exists("DocType", "Custom Sidebar") and frappe.db.exists(
+		"Custom Sidebar", {"module": GHOST_MODULE}
+	):
+		return
 	others = frappe.get_all(
 		"Sidebar",
 		filters={"module": GHOST_MODULE, "name": ["!=", CONVERTED_SIDEBAR]},

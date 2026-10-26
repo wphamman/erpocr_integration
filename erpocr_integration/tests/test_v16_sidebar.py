@@ -161,6 +161,16 @@ class TestHeal:
 		install.heal_v16_sidebar()
 		mock_frappe.delete_doc.assert_not_called()
 
+	def test_keeps_ghost_module_holding_a_custom_sidebar(self, mock_frappe, db):
+		db.rows[("DocType", "Custom Sidebar")] = True
+		db.content.add(("Custom Sidebar", "ERPNext OCR (Custom)"))
+		install.heal_v16_sidebar()
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_custom_sidebar_doctype_absent_does_not_block(self, mock_frappe, db):
+		install.heal_v16_sidebar()  # no Custom Sidebar doctype row in the fake
+		mock_frappe.delete_doc.assert_called_once()
+
 	def test_no_ghost_module_is_fine(self, mock_frappe, db):
 		del db.rows[("Module Def", "ERPNext OCR (Custom)")]
 		install.heal_v16_sidebar()
