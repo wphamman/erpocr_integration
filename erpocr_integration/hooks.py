@@ -1,5 +1,5 @@
 app_name = "erpocr_integration"
-app_title = "ERPNext OCR Integration"
+app_title = "OCR Accounts"
 app_publisher = "wphamman"
 app_description = "Gemini AI OCR integration for ERPNext — automatic invoice data extraction and import"
 app_email = "wphamman@users.noreply.github.com"

@@ -40,6 +40,7 @@ def _pi(before=None, **kw):
 		custom_duplicate_bill_override=0,
 		custom_duplicate_bill_reason=None,
 		custom_duplicate_bill_approved_by=None,
+		custom_duplicate_bill_approved_by_name=None,
 		custom_duplicate_bill_approved_at=None,
 	)
 	d.update(kw)
@@ -346,3 +347,85 @@ class TestGetStatus:
 		with pytest.raises(Exception):
 			get_status()
 		env.get_roles.return_value = ["All"]
+
+
+class TestApproverFullName:
+	def test_new_approval_stamps_login_and_full_name(self, env):
+		env.session.user = APPROVER
+		env.db.sql.return_value = [CONFLICT_SAME]
+		env.db.get_value.return_value = "Danell Example"
+		doc = _pi(custom_duplicate_bill_override=1, custom_duplicate_bill_reason="Re-issued")
+		validate_purchase_invoice(doc)
+		assert doc.custom_duplicate_bill_approved_by == APPROVER  # login kept for audit
+		assert doc.custom_duplicate_bill_approved_by_name == "Danell Example"
+
+	def test_falls_back_to_login_when_user_has_no_full_name(self, env):
+		env.session.user = APPROVER
+		env.db.sql.return_value = [CONFLICT_SAME]
+		env.db.get_value.return_value = None
+		doc = _pi(custom_duplicate_bill_override=1, custom_duplicate_bill_reason="r")
+		validate_purchase_invoice(doc)
+		assert doc.custom_duplicate_bill_approved_by_name == APPROVER
+
+	def test_clerk_save_keeps_saved_name_and_ignores_client_value(self, env):
+		env.session.user = OTHER
+		env.db.sql.return_value = [CONFLICT_SAME]
+		before = _pi(
+			custom_duplicate_bill_override=1,
+			custom_duplicate_bill_reason="r",
+			custom_duplicate_bill_approved_by=APPROVER,
+			custom_duplicate_bill_approved_by_name="Danell Example",
+			custom_duplicate_bill_approved_at=STAMP,
+		)
+		doc = _pi(
+			before=before,
+			custom_duplicate_bill_override=1,
+			custom_duplicate_bill_reason="r",
+			custom_duplicate_bill_approved_by_name="Forged Name",
+		)
+		validate_purchase_invoice(doc)
+		assert doc.custom_duplicate_bill_approved_by_name == "Danell Example"
+		assert doc.custom_duplicate_bill_approved_by == APPROVER
+
+	def test_withdrawal_clears_the_name(self, env):
+		env.session.user = APPROVER
+		env.db.sql.return_value = [CONFLICT_SAME]
+		before = _pi(
+			custom_duplicate_bill_override=1,
+			custom_duplicate_bill_reason="r",
+			custom_duplicate_bill_approved_by=APPROVER,
+			custom_duplicate_bill_approved_by_name="Danell Example",
+			custom_duplicate_bill_approved_at=STAMP,
+		)
+		doc = _pi(
+			before=before,
+			custom_duplicate_bill_override=0,
+			custom_duplicate_bill_approved_by_name="Danell Example",
+		)
+		with pytest.raises(Exception):
+			validate_purchase_invoice(doc)  # still a conflict, so it blocks
+		assert doc.custom_duplicate_bill_approved_by is None
+		assert doc.custom_duplicate_bill_approved_by_name is None
+
+
+class TestConflictMoney:
+	def _fmt(self, value, currency=None):
+		symbol = {"ZAR": "R", "USD": "$"}[currency]
+		return f"{symbol} {value:,.2f}"
+
+	def test_amount_shown_as_money_in_that_invoices_currency(self, env):
+		rows = [
+			dict(CONFLICT_SAME, grand_total=45747.0, currency="ZAR"),
+			dict(CONFLICT_OTHER, grand_total=1200.5, currency="USD"),
+		]
+		env.db.sql.return_value = rows
+		with patch.object(db_mod, "fmt_money", side_effect=self._fmt):
+			with pytest.raises(Exception):
+				validate_purchase_invoice(_pi())
+		msg = env.throw.call_args[0][0]
+		assert "R 45,747.00" in msg and "$ 1,200.50" in msg
+		assert "45747.0" not in msg
+
+	def test_query_selects_the_currency(self, env):
+		find_conflicts("INV-1", "PI-X", "Star Pops")
+		assert "currency" in env.db.sql.call_args[0][0]

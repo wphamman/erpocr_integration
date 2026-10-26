@@ -10,6 +10,7 @@ _PI_FIELDS = [
 	"custom_duplicate_bill_override",
 	"custom_duplicate_bill_reason",
 	"custom_duplicate_bill_approved_by",
+	"custom_duplicate_bill_approved_by_name",
 	"custom_duplicate_bill_approved_at",
 ]
 
@@ -20,7 +21,7 @@ class TestPurchaseInvoiceFields:
 			setup_custom_fields()
 		return mock_create.call_args[0][0]["Purchase Invoice"]
 
-	def test_four_fields_plain_no_copy_chained_after_bill_date(self):
+	def test_five_fields_plain_no_copy_chained_after_bill_date(self):
 		rows = {f["fieldname"]: f for f in self._pi_fields()}
 		assert [n for n in rows if n.startswith("custom_duplicate_bill")] == _PI_FIELDS
 		for name in _PI_FIELDS:
@@ -37,8 +38,15 @@ class TestPurchaseInvoiceFields:
 		assert rows[_PI_FIELDS[1]]["fieldtype"] == "Small Text"
 		assert rows[_PI_FIELDS[1]]["depends_on"] == rows[_PI_FIELDS[1]]["mandatory_depends_on"] == gate
 		assert rows[_PI_FIELDS[2]]["fieldtype"] == "Link" and rows[_PI_FIELDS[2]]["options"] == "User"
-		assert rows[_PI_FIELDS[3]]["fieldtype"] == "Datetime"
-		assert rows[_PI_FIELDS[2]]["read_only"] == rows[_PI_FIELDS[3]]["read_only"] == 1
+		assert rows[_PI_FIELDS[3]]["fieldtype"] == "Data"
+		assert rows[_PI_FIELDS[4]]["fieldtype"] == "Datetime"
+		assert all(rows[n]["read_only"] == 1 for n in _PI_FIELDS[2:])
+
+	def test_staff_see_the_full_name_and_the_login_is_kept_hidden(self):
+		rows = {f["fieldname"]: f for f in self._pi_fields()}
+		assert rows["custom_duplicate_bill_approved_by_name"]["label"] == "Approved By"
+		assert not rows["custom_duplicate_bill_approved_by_name"].get("hidden")
+		assert rows["custom_duplicate_bill_approved_by"]["hidden"] == 1  # still stored, for audit
 
 
 class TestFleetAnchor:

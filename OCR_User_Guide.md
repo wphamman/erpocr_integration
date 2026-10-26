@@ -280,7 +280,7 @@ Now every line from that supplier that doesn't match a more specific rule is aut
 
 | What | Where |
 |---|---|
-| Upload a new invoice | OCR Import > New > Actions > Upload File |
+| Upload a new invoice | OCR Import > New > Upload File (blue button in the top toolbar) |
 | See all imports | OCR Import list (filter by status) |
 | Review pending imports | OCR Import list > filter: Status = Needs Review |
 | Created Purchase Invoices | Click the **Purchase Invoice** link on any Draft Created or Completed OCR Import |

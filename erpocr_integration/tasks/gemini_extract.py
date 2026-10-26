@@ -9,6 +9,13 @@ import frappe
 import requests
 from frappe import _
 
+from erpocr_integration.tasks.billing_alert import (
+	GeminiBillingError,
+	is_billing_failure,
+	on_gemini_success,
+	record_billing_failure,
+)
+
 
 def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "application/pdf") -> list[dict]:
 	"""
@@ -50,6 +57,10 @@ def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "ap
 	# Call Gemini API with retry logic
 	try:
 		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+	except GeminiBillingError:
+		# Google refused payment: not a parse/extract problem. Let the caller
+		# tell it apart (it must not count against the Drive retry cap).
+		raise
 	except Exception as e:
 		frappe.log_error(
 			title="Gemini API Error",
@@ -311,6 +322,7 @@ def _call_gemini_api(
 		try:
 			response = requests.post(url, json=payload, headers=headers, timeout=60)
 			response.raise_for_status()
+			on_gemini_success()
 			return response.json()
 
 		except requests.exceptions.HTTPError as e:
@@ -324,7 +336,21 @@ def _call_gemini_api(
 			# Truncate error body to prevent sensitive invoice data from being logged
 			error_body_truncated = error_body[:500] + "..." if len(error_body) > 500 else error_body
 
-			status_code = e.response.status_code if e.response else None
+			# NOT ``if e.response``: requests.Response.__bool__ is False for any
+			# 4xx/5xx, which made status_code None for every HTTP error.
+			status_code = e.response.status_code if e.response is not None else None
+
+			# Billing failure (402, or a 429 about credits): never fixes itself,
+			# so do not retry. Alert once, then raise a distinct error.
+			if is_billing_failure(status_code, error_body):
+				record_billing_failure()
+				frappe.log_error(
+					title="Gemini Billing Failure",
+					message=f"HTTP {status_code}: Google refused payment.\n\nResponse (first 500 chars):\n{error_body_truncated}",
+				)
+				raise GeminiBillingError(
+					_("Google refused payment for the AI service (HTTP {0}).").format(status_code)
+				) from None
 
 			# Rate limit (429) or server error (5xx) - retry
 			if status_code in (429, 500, 503) and attempt < max_retries - 1:
@@ -498,6 +524,10 @@ def extract_delivery_note_data(pdf_content: bytes, filename: str, mime_type: str
 
 	try:
 		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+	except GeminiBillingError:
+		# Google refused payment: not a parse/extract problem. Let the caller
+		# tell it apart (it must not count against the Drive retry cap).
+		raise
 	except Exception as e:
 		frappe.log_error(
 			title="Gemini API Error (DN)",
@@ -719,6 +749,10 @@ def extract_fleet_slip_data(pdf_content: bytes, filename: str, mime_type: str = 
 
 	try:
 		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+	except GeminiBillingError:
+		# Google refused payment: not a parse/extract problem. Let the caller
+		# tell it apart (it must not count against the Drive retry cap).
+		raise
 	except Exception as e:
 		frappe.log_error(
 			title="Gemini API Error (Fleet)",
@@ -972,6 +1006,10 @@ def extract_statement_data(pdf_content: bytes, filename: str, mime_type: str = "
 
 	try:
 		response_data = _call_gemini_api(pdf_content, prompt, schema, api_key, model, mime_type)
+	except GeminiBillingError:
+		# Google refused payment: not a parse/extract problem. Let the caller
+		# tell it apart (it must not count against the Drive retry cap).
+		raise
 	except Exception as e:
 		frappe.log_error(
 			title="Gemini API Error",

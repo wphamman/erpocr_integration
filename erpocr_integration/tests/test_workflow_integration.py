@@ -1290,3 +1290,154 @@ class TestSubmitTimeLearning:
 		_learn_from_submitted_document(pi, "OCR-IMP-00001")
 
 		assert _dict_insert_calls(mock_frappe, "OCR Supplier Alias") == []
+
+
+class TestUnlinkWithoutDeletePermission:
+	"""Item D (v1.14.0): a clerk with write but no Delete on Purchase Invoice can
+	Unlink & Reset a draft THIS record created; nothing else widens."""
+
+	@pytest.fixture(autouse=True)
+	def _restore_mock(self, mock_frappe):
+		saved = (mock_frappe.db.get_value, mock_frappe.has_permission, mock_frappe.delete_doc)
+		saved_user = mock_frappe.session.user
+		yield
+		mock_frappe.db.get_value, mock_frappe.has_permission, mock_frappe.delete_doc = saved
+		mock_frappe.session.user = saved_user
+
+	def _setup(
+		self,
+		mock_frappe,
+		docstatus,
+		back_link,
+		deny_delete=True,
+		owner="clerk@example.com",
+		locked_docstatus=None,
+	):
+		mock_frappe.session.user = "clerk@example.com"
+		doc = _make_ocr_import(
+			name="OCR-IMP-00042",
+			status="Draft Created",
+			document_type="Purchase Invoice",
+			purchase_invoice="PI-00001",
+		)
+		mock_frappe.delete_doc = MagicMock()
+		mock_frappe.msgprint = MagicMock()
+		doc.db_set = MagicMock(side_effect=lambda k, v: setattr(doc, k, v))
+		doc.reload = MagicMock()
+		doc.save = MagicMock()
+		mock_frappe.get_meta.return_value.has_field.return_value = True
+
+		def get_value(doctype, name, field, *a, **kw):
+			if isinstance(field, list):
+				return {"custom_ocr_import": back_link, "owner": owner}
+			if kw.get("for_update") and locked_docstatus is not None:
+				return locked_docstatus  # state at lock time (e.g. cancelled meanwhile)
+			return docstatus
+
+		mock_frappe.db.get_value = MagicMock(side_effect=get_value)
+		asked = []
+
+		def has_permission(doctype, ptype, *args, **kwargs):
+			if doctype == "Purchase Invoice":
+				asked.append(ptype)
+				if ptype == "delete" and deny_delete:
+					if kwargs.get("throw"):
+						raise Exception("Insufficient Permission for Purchase Invoice")
+					return False
+			return True
+
+		mock_frappe.has_permission = MagicMock(side_effect=has_permission)
+		return doc, asked
+
+	def test_clerk_without_delete_removes_own_draft(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042")
+		doc.unlink_document()
+		assert asked == ["write"]
+		# the row was re-read under a lock before the bypassing delete
+		assert any(c.kwargs.get("for_update") for c in mock_frappe.db.get_value.call_args_list)
+		mock_frappe.delete_doc.assert_called_once_with(
+			"Purchase Invoice", "PI-00001", force=True, ignore_permissions=True
+		)
+		doc.save.assert_called_once()
+
+	def test_clerk_without_write_on_own_draft_is_refused(self, mock_frappe):
+		doc, _ = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042")
+
+		def no_write(doctype, ptype, *a, **kw):
+			if doctype == "Purchase Invoice" and ptype == "write":
+				raise Exception("Insufficient Permission")
+			return True
+
+		mock_frappe.has_permission = MagicMock(side_effect=no_write)
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_clerk_without_delete_cannot_remove_cancelled_invoice(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=2, back_link="OCR-IMP-00042")
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_clerk_without_delete_cannot_remove_someone_elses_draft(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-99999")
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_draft_with_no_back_link_needs_delete(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link=None)
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+
+	def test_site_without_back_link_field_behaves_as_before(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042")
+		mock_frappe.get_meta.return_value.has_field.return_value = False
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+
+	def test_submitted_still_refused(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=1, back_link="OCR-IMP-00042")
+		with pytest.raises(Exception):
+			doc.unlink_document()
+		assert asked == []
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_user_with_delete_deleting_own_draft_still_works(self, mock_frappe):
+		doc, _asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042", deny_delete=False)
+		doc.unlink_document()
+		mock_frappe.delete_doc.assert_called_once()
+
+	def test_forged_back_links_on_someone_elses_draft_need_delete(self, mock_frappe):
+		doc, asked = self._setup(
+			mock_frappe, docstatus=0, back_link="OCR-IMP-00042", owner="victim@example.com"
+		)
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_administrator_owned_auto_draft_needs_delete(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042", owner="Administrator")
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+
+	def test_cancelled_between_check_and_delete_needs_delete(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042", locked_docstatus=2)
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["write", "delete"]
+		mock_frappe.delete_doc.assert_not_called()
+		doc.db_set.assert_not_called()
+
+	def test_cancelled_between_with_delete_permission_uses_normal_delete(self, mock_frappe):
+		doc, _asked = self._setup(
+			mock_frappe, docstatus=0, back_link="OCR-IMP-00042", locked_docstatus=2, deny_delete=False
+		)
+		doc.unlink_document()
+		mock_frappe.delete_doc.assert_called_once_with("Purchase Invoice", "PI-00001", force=True)

@@ -19,6 +19,8 @@ import json
 import frappe
 from frappe import _
 
+from erpocr_integration.tasks.billing_alert import drive_give_back_fields
+
 # ── source_type vocabulary (the cross-app source discriminator) ──────────────
 # OCR Fleet Slip.source_type is a Data field that records HOW a slip was
 # ingested. It is the contract's source discriminator — set server-side as a
@@ -109,12 +111,15 @@ def fleet_gemini_process(
 		frappe.logger().info(f"Fleet: Processed {filename} → {ocr_fleet_name}")
 
 	except Exception as e:
+		# Billing failures must not use up the Drive retry cap (written with the Error status).
+		give_back = drive_give_back_fields(e, "OCR Fleet Slip", ocr_fleet_name)
 		frappe.db.set_value(
 			"OCR Fleet Slip",
 			ocr_fleet_name,
 			{
 				"status": "Error",
 				"error_log": str(e)[:2000],
+				**give_back,
 			},
 		)
 		frappe.db.commit()  # nosemgrep

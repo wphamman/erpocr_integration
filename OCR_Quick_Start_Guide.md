@@ -69,7 +69,7 @@ The attachment is extracted automatically. You can forward emails with multiple 
 
 1. Log in to ERPNext
 2. In the search bar, type **OCR Import** and click **+ Add OCR Import**
-3. Click the **Upload File** button in the top toolbar
+3. Click the blue **Upload File** button in the top toolbar
 4. Select your file (PDF, JPEG, or PNG — max 10 MB)
 5. Wait 5–30 seconds for processing
 

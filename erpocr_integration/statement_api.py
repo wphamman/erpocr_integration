@@ -3,6 +3,8 @@
 import frappe
 from frappe import _
 
+from erpocr_integration.tasks.billing_alert import drive_give_back_fields
+
 
 def statement_gemini_process(
 	file_content: bytes,
@@ -62,8 +64,10 @@ def statement_gemini_process(
 					message=f"Failed to move {filename} to archive: {e!s}",
 				)
 
-	except Exception:
+	except Exception as exc:
 		try:
+			# Billing failures must not use up the Drive retry cap (written with the Error status).
+			give_back = drive_give_back_fields(exc, "OCR Statement", ocr_statement_name)
 			error_log = frappe.log_error(
 				title="Statement Processing Error",
 				message=f"Statement extraction failed for {filename}\n{frappe.get_traceback()}",
@@ -71,7 +75,7 @@ def statement_gemini_process(
 			frappe.db.set_value(
 				"OCR Statement",
 				ocr_statement_name,
-				{"status": "Error", "error_log": error_log.name},
+				{"status": "Error", "error_log": error_log.name, **give_back},
 			)
 			frappe.db.commit()  # nosemgrep
 		except Exception:
