@@ -102,6 +102,7 @@ def billing_is_down() -> bool:
 
 def record_billing_failure() -> None:
 	"""Mark billing as failing and email people, at most once per 6 hours. Never raises."""
+	send_since = None
 	try:
 		now = now_datetime()
 		since = _read_dt("billing_failure_since")
@@ -110,19 +111,28 @@ def record_billing_failure() -> None:
 			since = now
 
 		last_sent = _read_dt("billing_alert_last_sent")
-		due = last_sent is None or last_sent <= now - datetime.timedelta(hours=ALERT_INTERVAL_HOURS)
-		if due:
+		if last_sent is None or last_sent <= now - datetime.timedelta(hours=ALERT_INTERVAL_HOURS):
 			# Stamp BEFORE sending so a mail failure can't turn into a mail storm.
 			# Read-then-act with no lock: two jobs failing in the same instant can
 			# both send. Accepted (one duplicate email at worst).
 			frappe.db.set_single_value("OCR Settings", "billing_alert_last_sent", now, update_modified=False)
-			_send_alert(since)
+			send_since = since
 
-		# The caller may roll back on its way to marking the record as Error;
-		# commit now so the state (and any queued email) is not lost with it.
+		# Commit the STATE first: the caller rolls back on its way to marking the
+		# record as Error, and the banner must survive that (and a mail failure).
 		frappe.db.commit()  # nosemgrep
-	except Exception:
-		_log_failure("Gemini billing alert could not be recorded")
+	except Exception as exc:
+		_log_failure("Gemini billing alert: recording state failed", exc)
+		return
+
+	if send_since is None:
+		return
+	try:
+		_send_alert(send_since)
+		# A second commit so the queued email also survives the caller's rollback.
+		frappe.db.commit()  # nosemgrep
+	except Exception as exc:
+		_log_failure("Gemini billing alert: sending email failed", exc)
 
 
 def on_gemini_success() -> None:
@@ -132,14 +142,16 @@ def on_gemini_success() -> None:
 			frappe.db.set_single_value("OCR Settings", "billing_failure_since", None, update_modified=False)
 			frappe.db.set_single_value("OCR Settings", "billing_alert_last_sent", None, update_modified=False)
 			frappe.db.commit()  # nosemgrep
-	except Exception:
-		_log_failure("Gemini billing state could not be cleared")
+	except Exception as exc:
+		_log_failure("Gemini billing alert: clearing state failed", exc)
 
 
-def _log_failure(title: str) -> None:
-	# Fixed text only: no traceback, no exception object (key-leak discipline).
+def _log_failure(title: str, exc: BaseException | None = None) -> None:
+	# The step (in `title`) and the exception CLASS NAME only: no message text, no
+	# traceback, no locals (key-leak discipline).
+	kind = type(exc).__name__ if exc is not None else "unknown"
 	try:
-		frappe.log_error(title=title, message="See the Error Log entry above for this job, if any.")
+		frappe.log_error(title=title, message=f"Exception type: {kind}")
 	except Exception:
 		pass
 
@@ -245,6 +257,6 @@ def drive_give_back_fields(exc, doctype: str, name: str) -> dict:
 		row = frappe.db.get_value(doctype, name, ["drive_file_id", "drive_retry_count"], as_dict=True)
 		if row and row.get("drive_file_id"):
 			return {"drive_retry_count": (row.get("drive_retry_count") or 0) - 1}
-	except Exception:
-		_log_failure("Could not work out a Drive retry give-back")
+	except Exception as err:
+		_log_failure("Gemini billing: Drive give-back lookup failed", err)
 	return {}

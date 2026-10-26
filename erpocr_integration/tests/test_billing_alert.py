@@ -701,3 +701,76 @@ class TestEmptyDatetimeReadsAsUnset:
 		assert billing._read_dt("billing_failure_since") is None
 		_isolate["billing_failure_since"] = "garbage"
 		assert billing._read_dt("billing_failure_since") is None
+
+
+class TestMailFailureKeepsState:
+	T0 = datetime.datetime(2026, 10, 26, 8, 0)
+
+	def _fail(self, mock_frappe, error=None):
+		mock_frappe.sendmail = MagicMock(side_effect=error or TypeError("secret-key-123 None email_id"))
+		mock_frappe.get_traceback.reset_mock()
+		with (
+			patch.object(billing, "now_datetime", return_value=self.T0),
+			patch.object(billing, "get_alert_recipients", return_value=["a@x.com"]),
+		):
+			billing.record_billing_failure()
+
+	def test_state_is_committed_before_the_send_and_banner_reports_down(self, mock_frappe, _isolate):
+		events = []
+		mock_frappe.db.commit = MagicMock(side_effect=lambda *a, **k: events.append("commit"))
+		mock_frappe.sendmail = MagicMock(side_effect=lambda **k: events.append("send") or 1 / 0)
+		with (
+			patch.object(billing, "now_datetime", return_value=self.T0),
+			patch.object(billing, "get_alert_recipients", return_value=["a@x.com"]),
+		):
+			billing.record_billing_failure()
+		assert events == ["commit", "send"]  # state committed first; the failed send adds no commit
+		assert _isolate["billing_failure_since"] == self.T0
+		assert _isolate["billing_alert_last_sent"] == self.T0
+		mock_frappe.has_permission = MagicMock(return_value=True)
+		assert billing.get_billing_status()["down"] is True
+
+	def test_success_commits_again_so_the_queued_mail_survives(self, mock_frappe):
+		events = []
+		mock_frappe.db.commit = MagicMock(side_effect=lambda *a, **k: events.append("commit"))
+		mock_frappe.sendmail = MagicMock(side_effect=lambda **k: events.append("send"))
+		with (
+			patch.object(billing, "now_datetime", return_value=self.T0),
+			patch.object(billing, "get_alert_recipients", return_value=["a@x.com"]),
+		):
+			billing.record_billing_failure()
+		assert events == ["commit", "send", "commit"]
+
+	def test_log_names_step_and_exception_type_only(self, mock_frappe):
+		self._fail(mock_frappe)
+		mock_frappe.log_error.assert_called_once()
+		kwargs = mock_frappe.log_error.call_args.kwargs
+		assert "sending email" in kwargs["title"]
+		assert kwargs["message"] == "Exception type: TypeError"
+		assert "secret-key-123" not in str(mock_frappe.log_error.call_args)
+		mock_frappe.get_traceback.assert_not_called()
+
+	def test_recording_failure_is_logged_with_its_step(self, mock_frappe):
+		mock_frappe.db.get_single_value = MagicMock(side_effect=RuntimeError("secret-key-123"))
+		billing.record_billing_failure()
+		kwargs = mock_frappe.log_error.call_args.kwargs
+		assert "recording state" in kwargs["title"]
+		assert kwargs["message"] == "Exception type: RuntimeError"
+
+	def test_stamp_before_send_still_prevents_a_mail_storm(self, mock_frappe, _isolate):
+		self._fail(mock_frappe)
+		mock_frappe.sendmail.reset_mock()
+		with (
+			patch.object(billing, "now_datetime", return_value=self.T0 + datetime.timedelta(minutes=5)),
+			patch.object(billing, "get_alert_recipients", return_value=["a@x.com"]),
+		):
+			billing.record_billing_failure()
+		mock_frappe.sendmail.assert_not_called()
+
+	def test_clearing_failure_is_logged_with_its_step_and_never_raises(self, mock_frappe, _isolate):
+		_isolate["billing_failure_since"] = self.T0
+		mock_frappe.db.set_single_value = MagicMock(side_effect=OSError("secret-key-123"))
+		billing.on_gemini_success()
+		kwargs = mock_frappe.log_error.call_args.kwargs
+		assert "clearing state" in kwargs["title"]
+		assert kwargs["message"] == "Exception type: OSError"
