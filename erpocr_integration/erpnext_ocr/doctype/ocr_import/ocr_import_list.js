@@ -39,6 +39,22 @@ frappe.listview_settings['OCR Import'] = {
 	// permission checks, and row locks are inherited unchanged.
 	// ------------------------------------------------------------------
 	onload: function(listview) {
+		// Red banner while Google is refusing payment for the AI service (v1.14.0, Q23).
+		// Server returns only {down, since}; cleared by the next successful read.
+		frappe.call({
+			method: 'erpocr_integration.tasks.billing_alert.get_billing_status',
+			type: 'GET',
+			callback: function(r) {
+				const status = r.message || {};
+				listview.page.main.find('.ocr-billing-banner').remove();
+				if (!status.down) return;
+				const since = status.since ? frappe.datetime.str_to_user(status.since) : '';
+				const banner = $('<div class="ocr-billing-banner alert alert-danger" style="margin-bottom: 10px;"></div>');
+				banner.text(__('OCR is stopped: Google refused payment for the AI service since {0}. Ask Willie to top up the billing account. New uploads will fail until then.', [since]));
+				listview.page.main.prepend(banner);
+			}
+		});
+
 		listview.page.add_action_item(__('Create Purchase Invoice'), function() {
 			_bulk_create_pi(listview);
 		});

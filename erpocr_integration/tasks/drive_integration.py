@@ -21,6 +21,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaInMemoryUpload
 
+from erpocr_integration.tasks.billing_alert import GeminiBillingError, billing_is_down
+
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 MAX_DRIVE_RETRIES = 3  # Stop retrying Drive files after this many extraction failures
@@ -431,6 +433,12 @@ def poll_drive_scan_folder():
 
 	enqueued_count = 0
 	for file_info in files:
+		# While Google is refusing payment, send ONE file per poll as a probe
+		# instead of a failing batch; the next successful call clears the state
+		# and the following poll carries on normally (v1.14.0, Q23).
+		if enqueued_count and billing_is_down():
+			frappe.logger().info("Drive scan: AI service payment is failing; sending one file per poll")
+			break
 		try:
 			was_enqueued = _process_scan_file(service, file_info, settings)
 			if was_enqueued:
@@ -438,6 +446,11 @@ def poll_drive_scan_folder():
 				# Stagger requests: wait 5s between enqueues so background workers
 				# don't all hit Gemini at once (free tier = 10 RPM)
 				time.sleep(5)
+		except GeminiBillingError:
+			# The classifier hit a payment refusal. Every other file would too:
+			# stop, leave the rest untouched, try again on the next poll.
+			frappe.logger().warning("Drive scan: AI service payment refused; stopping this poll")
+			break
 		except Exception as e:
 			frappe.log_error(
 				title="Drive Scan Error", message=f"Failed to process {file_info.get('name', '?')}: {e!s}"
@@ -928,6 +941,12 @@ def poll_drive_dn_folder():
 
 	enqueued_count = 0
 	for file_info in files:
+		# While Google is refusing payment, send ONE file per poll as a probe
+		# instead of a failing batch; the next successful call clears the state
+		# and the following poll carries on normally (v1.14.0, Q23).
+		if enqueued_count and billing_is_down():
+			frappe.logger().info("Drive scan: AI service payment is failing; sending one file per poll")
+			break
 		try:
 			was_enqueued = _process_dn_scan_file(service, file_info, settings)
 			if was_enqueued:
@@ -1120,6 +1139,12 @@ def poll_drive_fleet_folder():
 
 	enqueued_count = 0
 	for file_info in files:
+		# While Google is refusing payment, send ONE file per poll as a probe
+		# instead of a failing batch; the next successful call clears the state
+		# and the following poll carries on normally (v1.14.0, Q23).
+		if enqueued_count and billing_is_down():
+			frappe.logger().info("Drive scan: AI service payment is failing; sending one file per poll")
+			break
 		try:
 			was_enqueued = _process_fleet_scan_file(service, file_info, settings)
 			if was_enqueued:

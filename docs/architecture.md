@@ -258,6 +258,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Enable Auto-Draft**: Opt-in (off by default) — auto-draft high-confidence matches (see [implementation-patterns.md](implementation-patterns.md))
 - **Enable Fleet Card Auto-Record**: Opt-in (off by default) — auto-complete high-confidence Fleet Card slips via `mark_recorded()` (v1.8.0; see *OCR Fleet Slip Workflow*). Never creates a Purchase Invoice.
 - **Block Duplicate Supplier Invoice Numbers** (+ **Duplicate Invoice Approvers**, status panel): Opt-in (off by default, v1.13.0) — see *Duplicate Supplier Invoice Numbers* below.
+- **Also Email These People** (`billing_alert_recipients`): extra addresses (comma separated) for the Gemini payment-failure email, on top of every System Manager (v1.14.0, Q23). `billing_failure_since` / `billing_alert_last_sent` are hidden state fields.
 - **Enable Jev Shadow Trial**: Opt-in (off by default, v1.12.0) — record TypeSafe Jev's supplier pick alongside today's matcher's pick, for later comparison. See *Jev Shadow Trial* below.
 - **TypeSafe API Key**: TypeSafe API key (Password), only used when the shadow trial is on.
 - **Jev Model**: Pinned model version (default `jev-1.13.0`) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.

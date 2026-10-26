@@ -23,6 +23,22 @@ frappe.listview_settings['OCR Fleet Slip'] = {
 	},
 
 	onload: function(listview) {
+		// Red banner while Google is refusing payment for the AI service (v1.14.0, Q23).
+		// Server returns only {down, since}; cleared by the next successful read.
+		frappe.call({
+			method: 'erpocr_integration.tasks.billing_alert.get_billing_status',
+			type: 'GET',
+			callback: function(r) {
+				const status = r.message || {};
+				listview.page.main.find('.ocr-billing-banner').remove();
+				if (!status.down) return;
+				const since = status.since ? frappe.datetime.str_to_user(status.since) : '';
+				const banner = $('<div class="ocr-billing-banner alert alert-danger" style="margin-bottom: 10px;"></div>');
+				banner.text(__('OCR is stopped: Google refused payment for the AI service since {0}. Ask Willie to top up the billing account. New uploads will fail until then.', [since]));
+				listview.page.main.prepend(banner);
+			}
+		});
+
 		listview.page.add_actions_menu_item(__('Mark Recorded (Fleet Card)'), function() {
 			var checked = listview.get_checked_items();
 			if (!checked.length) {

@@ -13,6 +13,8 @@ Mirrors the structure of api.py but for the OCR Delivery Note workflow:
 import frappe
 from frappe import _
 
+from erpocr_integration.tasks.billing_alert import GeminiBillingError, give_back_drive_attempt
+
 
 def dn_gemini_process(
 	file_content: bytes,
@@ -80,8 +82,11 @@ def dn_gemini_process(
 					message=f"Failed to move {filename} to DN archive: {e!s}",
 				)
 
-	except Exception:
+	except Exception as exc:
 		try:
+			if isinstance(exc, GeminiBillingError):
+				# Billing failures must not use up the Drive retry cap.
+				give_back_drive_attempt("OCR Delivery Note", ocr_dn_name)
 			error_log = frappe.log_error(
 				title="OCR DN Extraction Error",
 				message=f"Gemini extraction failed for DN {filename}\n{frappe.get_traceback()}",

@@ -2,6 +2,24 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] — 2026-10-26
+
+Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording fixes, and Unlink & Reset for clerks.
+
+### Added
+- **Gemini billing-failure alert (Q23).** HTTP 402, or a 429 `RESOURCE_EXHAUSTED` that mentions prepay/credits, is now a
+  distinct `GeminiBillingError` and is not retried in the job. System Managers plus the new OCR Settings field
+  `billing_alert_recipients` get one plain-language email, at most every 6 hours. A red banner shows on the OCR Import and
+  OCR Fleet Slip lists until the next successful Gemini call. A billing failure no longer uses up a Drive file's
+  `MAX_DRIVE_RETRIES`, so scans heal on their own once billing works; while it is down each Drive poll sends one probe file.
+
+### Fixed
+- **429 and 5xx responses were never retried.** `if e.response` is False for any error response, so the status code was
+  always unknown and the backoff never ran. The check is now `is not None`.
+
+### Tests
+1,062 → 1,100 (item A).
+
 ## [1.13.1] — 2026-10-09
 
 Patch release. **A v16 blocker found on the erp-test end-user walk** (frappe 16.51.0), plus one upload-screen bug that is

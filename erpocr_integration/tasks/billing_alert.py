@@ -1,0 +1,227 @@
+# Copyright (c) 2026, ERPNext OCR Integration Contributors
+# For license information, please see license.txt
+
+"""Gemini billing-failure handling (v1.14.0, Q23).
+
+Google billing accounts are pre-paid, so the AI service can start refusing
+payment (HTTP 402, or a 429 "credits depleted") at any time. That never fixes
+itself, so retrying in the job is pointless. This module:
+
+* recognises a billing failure from the response (``is_billing_failure``),
+* records "OCR is stopped since <time>" and emails people at most once every
+  6 hours (``record_billing_failure``),
+* clears that state on the next successful Gemini call (``on_gemini_success``),
+* feeds the red banner on the OCR lists (``get_billing_status``), and
+* lets Drive scans heal once billing is fixed (``give_back_drive_attempt``).
+
+State lives in two hidden OCR Settings fields (``billing_failure_since``,
+``billing_alert_last_sent``), not in the cache: it must survive a cache flush
+(a flush would otherwise re-send the email and blank the banner), and the
+banner endpoint reads it.
+
+Key discipline (same as the Jev trial): nothing in here ever receives, reads
+or stores the API key, and nothing here calls ``frappe.get_traceback()`` or
+logs an exception object. Every entry point swallows its own errors.
+"""
+
+from __future__ import annotations
+
+import datetime
+import re
+
+import frappe
+from frappe import _
+from frappe.utils import now_datetime
+
+ALERT_INTERVAL_HOURS = 6
+
+# Words that mark a *prepay / credit* 429. Deliberately NOT bare "billing":
+# Google's ordinary quota 429 reads "...please check your plan and billing
+# details", and that one is a retryable rate limit.
+_BILLING_WORDS = ("prepay", "credit", "billing account", "payment")
+
+
+class GeminiBillingError(Exception):
+	"""Google refused the call for payment reasons. Never retried in-job."""
+
+
+def is_billing_failure(status_code, body_text) -> bool:
+	"""True when an HTTP error response means "the billing account can't pay".
+
+	* 402 is always a billing failure.
+	* 429 counts only when the body says RESOURCE_EXHAUSTED *and* uses
+	  prepay/credit wording. An ordinary rate-limit 429 stays retryable.
+	"""
+	if status_code == 402:
+		return True
+	if status_code == 429:
+		body = (body_text or "").lower()
+		return "resource_exhausted" in body and any(word in body for word in _BILLING_WORDS)
+	return False
+
+
+# --------------------------------------------------------------------- state
+
+
+def _as_datetime(value) -> datetime.datetime:
+	"""A Datetime setting may come back as a datetime or as its string form."""
+	if isinstance(value, datetime.datetime):
+		return value
+	return datetime.datetime.fromisoformat(str(value))
+
+
+def billing_is_down() -> bool:
+	"""Cheap check used by the Drive pollers. Never raises."""
+	try:
+		return bool(frappe.db.get_single_value("OCR Settings", "billing_failure_since"))
+	except Exception:
+		return False
+
+
+def record_billing_failure() -> None:
+	"""Mark billing as failing and email people, at most once per 6 hours. Never raises."""
+	try:
+		now = now_datetime()
+		since = frappe.db.get_single_value("OCR Settings", "billing_failure_since")
+		if not since:
+			frappe.db.set_single_value("OCR Settings", "billing_failure_since", now, update_modified=False)
+			since = now
+
+		last_sent = frappe.db.get_single_value("OCR Settings", "billing_alert_last_sent")
+		due = not last_sent or _as_datetime(last_sent) <= now - datetime.timedelta(hours=ALERT_INTERVAL_HOURS)
+		if due:
+			# Stamp BEFORE sending so a mail failure can't turn into a mail storm.
+			# Read-then-act with no lock: two jobs failing in the same instant can
+			# both send. Accepted (one duplicate email at worst).
+			frappe.db.set_single_value("OCR Settings", "billing_alert_last_sent", now, update_modified=False)
+			_send_alert(since)
+
+		# The caller may roll back on its way to marking the record as Error;
+		# commit now so the state (and any queued email) is not lost with it.
+		frappe.db.commit()  # nosemgrep
+	except Exception:
+		_log_failure("Gemini billing alert could not be recorded")
+
+
+def on_gemini_success() -> None:
+	"""A Gemini call worked: clear the banner state. Never raises."""
+	try:
+		if frappe.db.get_single_value("OCR Settings", "billing_failure_since"):
+			frappe.db.set_single_value("OCR Settings", "billing_failure_since", None, update_modified=False)
+			frappe.db.set_single_value("OCR Settings", "billing_alert_last_sent", None, update_modified=False)
+			frappe.db.commit()  # nosemgrep
+	except Exception:
+		_log_failure("Gemini billing state could not be cleared")
+
+
+def _log_failure(title: str) -> None:
+	# Fixed text only: no traceback, no exception object (key-leak discipline).
+	try:
+		frappe.log_error(title=title, message="See the Error Log entry above for this job, if any.")
+	except Exception:
+		pass
+
+
+# --------------------------------------------------------------------- email
+
+
+def get_alert_recipients() -> list[str]:
+	"""System Managers (enabled, not Administrator/Guest) plus the settings list."""
+	recipients: list[str] = []
+
+	managers = frappe.get_all(
+		"Has Role",
+		filters={"role": "System Manager", "parenttype": "User"},
+		fields=["parent"],
+		order_by="parent asc",
+	)
+	names = sorted({m.parent for m in managers} - {"Administrator", "Guest"})
+	if names:
+		users = frappe.get_all(
+			"User",
+			filters={"name": ["in", names], "enabled": 1},
+			fields=["name", "email"],
+			order_by="name asc",
+		)
+		recipients.extend((u.email or u.name) for u in users)
+
+	extra = frappe.db.get_single_value("OCR Settings", "billing_alert_recipients") or ""
+	recipients.extend(parse_email_list(extra))
+
+	seen, unique = set(), []
+	for address in recipients:
+		key = address.strip().lower()
+		if key and key not in seen:
+			seen.add(key)
+			unique.append(address.strip())
+	return unique
+
+
+def parse_email_list(text: str) -> list[str]:
+	"""Split a comma/semicolon/newline separated list of addresses."""
+	return [part.strip() for part in re.split(r"[,;\s]+", text or "") if part.strip()]
+
+
+def _send_alert(since) -> None:
+	recipients = get_alert_recipients()
+	if not recipients:
+		return
+
+	site = getattr(frappe.local, "site", "") or ""
+	since_text = str(since)[:16]
+	subject = _("OCR has stopped: Google is refusing payment for the AI service")
+	message = _(
+		"<p>The OCR system on {0} cannot read documents right now. Google refused payment for the AI "
+		"service that reads them. This started at {1}.</p>"
+		"<p><b>What to do:</b> top up, or fix the card on, the Google billing account for the project "
+		"behind the OCR key. Reading documents starts again by itself once payment works.</p>"
+		"<p><b>After that:</b> documents that failed in the meantime need to be run again. Open each "
+		"one marked Error and press Retry Extraction. Scans dropped in the Google Drive folders are "
+		"picked up again automatically.</p>"
+		"<p>This email is sent at most once every {2} hours while the problem lasts.</p>"
+	).format(site, since_text, ALERT_INTERVAL_HOURS)
+
+	frappe.sendmail(recipients=recipients, subject=subject, message=message, now=False)
+
+
+# -------------------------------------------------------------------- banner
+
+
+@frappe.whitelist(methods=["GET"])
+def get_billing_status() -> dict:
+	"""Is Gemini billing failing? For the red banner on the OCR lists.
+
+	Returns only ``{down, since}`` and is open to anyone who can read an OCR
+	list. Nothing from the settings is exposed.
+	"""
+	if not (frappe.has_permission("OCR Import", "read") or frappe.has_permission("OCR Fleet Slip", "read")):
+		frappe.throw(_("You do not have access to this."), frappe.PermissionError)
+
+	since = frappe.db.get_single_value("OCR Settings", "billing_failure_since")
+	return {"down": bool(since), "since": str(since) if since else None}
+
+
+# ---------------------------------------------------------------- Drive heal
+
+
+def give_back_drive_attempt(doctype: str, name: str) -> None:
+	"""Do not let a billing failure count toward ``MAX_DRIVE_RETRIES``.
+
+	The poller sets the next attempt's count to ``stored + 1``. Storing one
+	less than this attempt's count makes the next attempt reuse the same
+	number, so any number of billing failures leave the cap untouched. (-1 on
+	a first attempt is intended: next attempt is 0 again.) Never raises.
+	"""
+	try:
+		row = frappe.db.get_value(doctype, name, ["drive_file_id", "drive_retry_count"], as_dict=True)
+		if row and row.get("drive_file_id"):
+			frappe.db.set_value(
+				doctype,
+				name,
+				"drive_retry_count",
+				(row.get("drive_retry_count") or 0) - 1,
+				update_modified=False,
+			)
+			frappe.db.commit()  # nosemgrep
+	except Exception:
+		_log_failure("Could not give back a Drive retry attempt")
