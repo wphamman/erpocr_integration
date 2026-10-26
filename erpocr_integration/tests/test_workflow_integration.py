@@ -1299,10 +1299,21 @@ class TestUnlinkWithoutDeletePermission:
 	@pytest.fixture(autouse=True)
 	def _restore_mock(self, mock_frappe):
 		saved = (mock_frappe.db.get_value, mock_frappe.has_permission, mock_frappe.delete_doc)
+		saved_user = mock_frappe.session.user
 		yield
 		mock_frappe.db.get_value, mock_frappe.has_permission, mock_frappe.delete_doc = saved
+		mock_frappe.session.user = saved_user
 
-	def _setup(self, mock_frappe, docstatus, back_link, deny_delete=True):
+	def _setup(
+		self,
+		mock_frappe,
+		docstatus,
+		back_link,
+		deny_delete=True,
+		owner="clerk@example.com",
+		locked_docstatus=None,
+	):
+		mock_frappe.session.user = "clerk@example.com"
 		doc = _make_ocr_import(
 			name="OCR-IMP-00042",
 			status="Draft Created",
@@ -1317,7 +1328,11 @@ class TestUnlinkWithoutDeletePermission:
 		mock_frappe.get_meta.return_value.has_field.return_value = True
 
 		def get_value(doctype, name, field, *a, **kw):
-			return {"docstatus": docstatus, "custom_ocr_import": back_link}[field]
+			if isinstance(field, list):
+				return {"custom_ocr_import": back_link, "owner": owner}
+			if kw.get("for_update") and locked_docstatus is not None:
+				return locked_docstatus  # state at lock time (e.g. cancelled meanwhile)
+			return docstatus
 
 		mock_frappe.db.get_value = MagicMock(side_effect=get_value)
 		asked = []
@@ -1338,6 +1353,8 @@ class TestUnlinkWithoutDeletePermission:
 		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042")
 		doc.unlink_document()
 		assert asked == ["write"]
+		# the row was re-read under a lock before the bypassing delete
+		assert any(c.kwargs.get("for_update") for c in mock_frappe.db.get_value.call_args_list)
 		mock_frappe.delete_doc.assert_called_once_with(
 			"Purchase Invoice", "PI-00001", force=True, ignore_permissions=True
 		)
@@ -1394,3 +1411,33 @@ class TestUnlinkWithoutDeletePermission:
 		doc, _asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042", deny_delete=False)
 		doc.unlink_document()
 		mock_frappe.delete_doc.assert_called_once()
+
+	def test_forged_back_links_on_someone_elses_draft_need_delete(self, mock_frappe):
+		doc, asked = self._setup(
+			mock_frappe, docstatus=0, back_link="OCR-IMP-00042", owner="victim@example.com"
+		)
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+		mock_frappe.delete_doc.assert_not_called()
+
+	def test_administrator_owned_auto_draft_needs_delete(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042", owner="Administrator")
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["delete"]
+
+	def test_cancelled_between_check_and_delete_needs_delete(self, mock_frappe):
+		doc, asked = self._setup(mock_frappe, docstatus=0, back_link="OCR-IMP-00042", locked_docstatus=2)
+		with pytest.raises(Exception, match="Insufficient"):
+			doc.unlink_document()
+		assert asked == ["write", "delete"]
+		mock_frappe.delete_doc.assert_not_called()
+		doc.db_set.assert_not_called()
+
+	def test_cancelled_between_with_delete_permission_uses_normal_delete(self, mock_frappe):
+		doc, _asked = self._setup(
+			mock_frappe, docstatus=0, back_link="OCR-IMP-00042", locked_docstatus=2, deny_delete=False
+		)
+		doc.unlink_document()
+		mock_frappe.delete_doc.assert_called_once_with("Purchase Invoice", "PI-00001", force=True)

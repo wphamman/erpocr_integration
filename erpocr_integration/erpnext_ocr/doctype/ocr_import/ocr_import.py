@@ -1604,10 +1604,15 @@ class OCRImport(Document):
 		return je.name
 
 	def _linked_doc_is_own(self, linked_doctype: str, linked_name: str) -> bool:
-		"""True when the linked document's back-link (`custom_ocr_import`) names this record."""
+		"""True when the linked document names this record AND was created by the current user."""
 		if not frappe.get_meta(linked_doctype).has_field("custom_ocr_import"):
 			return False
-		return frappe.db.get_value(linked_doctype, linked_name, "custom_ocr_import") == self.name
+		row = frappe.db.get_value(linked_doctype, linked_name, ["custom_ocr_import", "owner"], as_dict=True)
+		return (
+			bool(row)
+			and row.get("custom_ocr_import") == self.name
+			and row.get("owner") == frappe.session.user
+		)
 
 	@frappe.whitelist(methods=["POST"])
 	def unlink_document(self):
@@ -1653,14 +1658,22 @@ class OCRImport(Document):
 				_("{0} {1} is submitted. Amend or cancel it first.").format(linked_doctype, linked_name)
 			)
 
-		# A DRAFT that this very OCR record created (its back-link names us) only needs
-		# WRITE permission on the draft: clerks who can edit the invoice they just
-		# created should not need Delete, which would also let them delete cancelled
-		# invoices. Anything else (cancelled, someone else's draft, no back-link)
-		# still needs real Delete permission, exactly as before.
+		# A DRAFT that this very OCR record created, and that the CURRENT USER created
+		# themselves (owner), only needs WRITE permission: clerks who can edit the
+		# invoice they just made should not need Delete, which would also let them
+		# delete cancelled invoices. The owner check matters because both back-links
+		# can be set by anyone with write on the two records (read-only is a UI-only
+		# rule), so the back-link alone proves nothing. Anything else (cancelled,
+		# someone else's draft, no back-link) still needs real Delete permission.
 		own_draft = docstatus == 0 and self._linked_doc_is_own(linked_doctype, linked_name)
 		if docstatus is not None:
 			frappe.has_permission(linked_doctype, "write" if own_draft else "delete", linked_name, throw=True)
+		if own_draft:
+			# Lock the row and re-read: if it was cancelled since the check above, the
+			# shortcut must not apply (a cancelled doc needs real Delete permission).
+			if frappe.db.get_value(linked_doctype, linked_name, "docstatus", for_update=True) != 0:
+				own_draft = False
+				frappe.has_permission(linked_doctype, "delete", linked_name, throw=True)
 
 		# Clear the link on this OCR Import FIRST via db_set — this removes
 		# the incoming Link reference so frappe.delete_doc won't be blocked.

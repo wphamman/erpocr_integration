@@ -412,18 +412,25 @@ class TestDriveSelfHeal:
 		assert drive._process_scan_file(MagicMock(), {"id": "d", "name": "x.pdf"}, sample_settings) is False
 
 	def test_give_back_floors_first_attempt_at_minus_one(self, mock_frappe):
-		store = _Store()
-		store.rows["A"] = {"name": "A", "status": "Error", "drive_file_id": "d", "drive_retry_count": 0}
-		mock_frappe.db.get_value = MagicMock(side_effect=store.get_value)
-		mock_frappe.db.set_value = MagicMock(side_effect=store.set_value)
-		billing.give_back_drive_attempt("OCR Import", "A")
-		assert store.rows["A"]["drive_retry_count"] == -1
+		mock_frappe.db.get_value = MagicMock(return_value={"drive_file_id": "d", "drive_retry_count": 0})
+		out = billing.drive_give_back_fields(GeminiBillingError("x"), "OCR Import", "A")
+		assert out == {"drive_retry_count": -1}
 
-	def test_give_back_ignores_non_drive_records(self, mock_frappe):
-		mock_frappe.db.get_value = MagicMock(return_value={"drive_file_id": None, "drive_retry_count": 0})
+	def test_give_back_writes_and_commits_nothing(self, mock_frappe):
+		mock_frappe.db.get_value = MagicMock(return_value={"drive_file_id": "d", "drive_retry_count": 2})
 		mock_frappe.db.set_value = MagicMock()
-		billing.give_back_drive_attempt("OCR Import", "A")
+		mock_frappe.db.commit.reset_mock()
+		assert billing.drive_give_back_fields(GeminiBillingError("x"), "OCR Import", "A") == {
+			"drive_retry_count": 1
+		}
 		mock_frappe.db.set_value.assert_not_called()
+		mock_frappe.db.commit.assert_not_called()
+
+	def test_give_back_ignores_non_drive_records_and_other_errors(self, mock_frappe):
+		mock_frappe.db.get_value = MagicMock(return_value={"drive_file_id": None, "drive_retry_count": 0})
+		assert billing.drive_give_back_fields(GeminiBillingError("x"), "OCR Import", "A") == {}
+		mock_frappe.db.get_value = MagicMock(return_value={"drive_file_id": "d", "drive_retry_count": 0})
+		assert billing.drive_give_back_fields(ValueError("x"), "OCR Import", "A") == {}
 
 	def test_classifier_billing_stops_the_poll_without_placeholders(self, mock_frappe, sample_settings):
 		store = _Store()
@@ -535,7 +542,7 @@ class TestOtherProcessors:
 			),
 		],
 	)
-	def test_billing_error_gives_back_attempt(self, mock_frappe, module, func, extract, doctype, kwargs):
+	def _run(self, mock_frappe, module, func, extract, kwargs, exc, set_value_error=None):
 		import importlib
 		import inspect
 
@@ -547,27 +554,82 @@ class TestOtherProcessors:
 			if name not in call_kwargs and params[name].default is inspect._empty:
 				call_kwargs[name] = "x"
 		mock_frappe.set_user = MagicMock()
-		with (
-			patch(f"erpocr_integration.tasks.gemini_extract.{extract}", side_effect=GeminiBillingError("x")),
-			patch.object(mod, "give_back_drive_attempt") as give_back,
-		):
+		events = []
+		mock_frappe.db.get_value = MagicMock(
+			side_effect=lambda *a, **k: (
+				events.append(("read", None)),
+				{"drive_file_id": "d", "drive_retry_count": 0},
+			)[1]
+		)
+		mock_frappe.db.set_value = MagicMock(
+			side_effect=lambda *a, **k: (
+				events.append(("set", a[-1] if a else None)),
+				set_value_error and isinstance(a[-1], dict) and (_ for _ in ()).throw(set_value_error),
+			)
+		)
+		mock_frappe.db.commit = MagicMock(side_effect=lambda *a, **k: events.append(("commit", None)))
+		with patch(f"erpocr_integration.tasks.gemini_extract.{extract}", side_effect=exc):
 			fn(**call_kwargs)
-		give_back.assert_called_once()
-		assert give_back.call_args.args[0] == doctype
+		# Only what happens from the give-back read onwards matters.
+		return events[events.index(("read", None)) :] if ("read", None) in events else events
 
-	def test_plain_error_does_not_give_back(self, mock_frappe):
-		import erpocr_integration.dn_api as dn
-
-		mock_frappe.set_user = MagicMock()
-		with (
-			patch(
-				"erpocr_integration.tasks.gemini_extract.extract_delivery_note_data",
-				side_effect=Exception("x"),
+	@pytest.mark.parametrize(
+		("module", "func", "extract", "kwargs"),
+		[
+			(
+				"erpocr_integration.dn_api",
+				"dn_gemini_process",
+				"extract_delivery_note_data",
+				{"file_content": b"x", "filename": "f.pdf", "ocr_dn_name": "N1"},
 			),
-			patch.object(dn, "give_back_drive_attempt") as give_back,
-		):
-			dn.dn_gemini_process(file_content=b"x", filename="f.pdf", ocr_dn_name="N1")
-		give_back.assert_not_called()
+			(
+				"erpocr_integration.fleet_api",
+				"fleet_gemini_process",
+				"extract_fleet_slip_data",
+				{"file_content": b"x", "filename": "f.pdf", "ocr_fleet_name": "N1"},
+			),
+			(
+				"erpocr_integration.statement_api",
+				"statement_gemini_process",
+				"extract_statement_data",
+				{"file_content": b"x", "filename": "f.pdf", "ocr_statement_name": "N1"},
+			),
+		],
+	)
+	def test_billing_error_gives_back_in_the_single_error_write(
+		self, mock_frappe, module, func, extract, kwargs
+	):
+		events = self._run(mock_frappe, module, func, extract, kwargs, GeminiBillingError("x"))
+		sets = [e for e in events if e[0] == "set"]
+		assert len(sets) == 1  # one write: status and given-back count together
+		assert sets[0][1]["status"] == "Error" and sets[0][1]["drive_retry_count"] == -1
+		assert events.index(sets[0]) < events.index(("commit", None))  # no commit before it
+
+	def test_failed_error_write_leaves_nothing_committed(self, mock_frappe):
+		events = self._run(
+			mock_frappe,
+			"erpocr_integration.dn_api",
+			"dn_gemini_process",
+			"extract_delivery_note_data",
+			{"file_content": b"x", "filename": "f.pdf", "ocr_dn_name": "N1"},
+			GeminiBillingError("x"),
+			set_value_error=RuntimeError("db down"),
+		)
+		# The only write attempted failed; no commit may follow a given-back count
+		# on a row that is not Error.
+		assert [e[0] for e in events] == ["read", "set"]
+
+	def test_plain_error_has_no_given_back_count(self, mock_frappe):
+		events = self._run(
+			mock_frappe,
+			"erpocr_integration.dn_api",
+			"dn_gemini_process",
+			"extract_delivery_note_data",
+			{"file_content": b"x", "filename": "f.pdf", "ocr_dn_name": "N1"},
+			Exception("x"),
+		)
+		sets = [e for e in events if e[0] == "set"]
+		assert "drive_retry_count" not in sets[0][1]
 
 
 class TestSettingsValidation:

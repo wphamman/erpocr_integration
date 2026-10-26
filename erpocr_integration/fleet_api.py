@@ -19,7 +19,7 @@ import json
 import frappe
 from frappe import _
 
-from erpocr_integration.tasks.billing_alert import GeminiBillingError, give_back_drive_attempt
+from erpocr_integration.tasks.billing_alert import drive_give_back_fields
 
 # ── source_type vocabulary (the cross-app source discriminator) ──────────────
 # OCR Fleet Slip.source_type is a Data field that records HOW a slip was
@@ -111,15 +111,15 @@ def fleet_gemini_process(
 		frappe.logger().info(f"Fleet: Processed {filename} → {ocr_fleet_name}")
 
 	except Exception as e:
-		if isinstance(e, GeminiBillingError):
-			# Billing failures must not use up the Drive retry cap.
-			give_back_drive_attempt("OCR Fleet Slip", ocr_fleet_name)
+		# Billing failures must not use up the Drive retry cap (written with the Error status).
+		give_back = drive_give_back_fields(e, "OCR Fleet Slip", ocr_fleet_name)
 		frappe.db.set_value(
 			"OCR Fleet Slip",
 			ocr_fleet_name,
 			{
 				"status": "Error",
 				"error_log": str(e)[:2000],
+				**give_back,
 			},
 		)
 		frappe.db.commit()  # nosemgrep

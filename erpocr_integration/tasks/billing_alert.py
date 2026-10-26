@@ -204,24 +204,25 @@ def get_billing_status() -> dict:
 # ---------------------------------------------------------------- Drive heal
 
 
-def give_back_drive_attempt(doctype: str, name: str) -> None:
-	"""Do not let a billing failure count toward ``MAX_DRIVE_RETRIES``.
+def drive_give_back_fields(exc, doctype: str, name: str) -> dict:
+	"""Extra fields for the Error write so a billing failure does not count toward ``MAX_DRIVE_RETRIES``.
 
-	The poller sets the next attempt's count to ``stored + 1``. Storing one
-	less than this attempt's count makes the next attempt reuse the same
-	number, so any number of billing failures leave the cap untouched. (-1 on
-	a first attempt is intended: next attempt is 0 again.) Never raises.
+	The poller sets the next attempt's count to ``stored + 1``. Returning one less
+	than this attempt's count makes the next attempt reuse the same number, so any
+	number of billing failures leave the cap untouched. (-1 on a first attempt is
+	intended: next attempt is 0 again.)
+
+	Read-only: it writes and commits NOTHING. The caller merges the result into
+	its single ``status = Error`` write, so there is never a committed state with a
+	given-back count on a non-Error row (dedup would skip such a row forever).
+	Returns ``{}`` for any other exception, a non-Drive record, or on any error.
 	"""
 	try:
+		if not isinstance(exc, GeminiBillingError):
+			return {}
 		row = frappe.db.get_value(doctype, name, ["drive_file_id", "drive_retry_count"], as_dict=True)
 		if row and row.get("drive_file_id"):
-			frappe.db.set_value(
-				doctype,
-				name,
-				"drive_retry_count",
-				(row.get("drive_retry_count") or 0) - 1,
-				update_modified=False,
-			)
-			frappe.db.commit()  # nosemgrep
+			return {"drive_retry_count": (row.get("drive_retry_count") or 0) - 1}
 	except Exception:
-		_log_failure("Could not give back a Drive retry attempt")
+		_log_failure("Could not work out a Drive retry give-back")
+	return {}

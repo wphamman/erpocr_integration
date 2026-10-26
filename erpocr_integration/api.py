@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 
-from erpocr_integration.tasks.billing_alert import GeminiBillingError, give_back_drive_attempt
+from erpocr_integration.tasks.billing_alert import drive_give_back_fields
 
 # Supported file types for upload (extension → MIME type for Gemini API)
 SUPPORTED_FILE_TYPES = {
@@ -441,15 +441,17 @@ def gemini_process(
 
 		# Update status to Error
 		try:
-			if isinstance(e, GeminiBillingError):
-				# Billing failures must not use up the Drive retry cap.
-				give_back_drive_attempt("OCR Import", ocr_import_name)
+			# Billing failures must not use up the Drive retry cap; the given-back
+			# count is written WITH the Error status in one set_value + one commit.
+			give_back = drive_give_back_fields(e, "OCR Import", ocr_import_name)
 			error_log = frappe.log_error(
 				title="OCR Integration Error",
 				message=f"Gemini extraction failed for {filename}\n{frappe.get_traceback()}",
 			)
 			frappe.db.set_value(
-				"OCR Import", ocr_import_name, {"status": "Error", "error_log": error_log.name}
+				"OCR Import",
+				ocr_import_name,
+				{"status": "Error", "error_log": error_log.name, **give_back},
 			)
 			frappe.db.commit()
 

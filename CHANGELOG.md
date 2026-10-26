@@ -34,8 +34,8 @@ Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording 
   into). The Quick Start and User guides say so.
 
 - **Unlink & Reset for clerks without Delete (OCR Import).** When the linked Purchase Invoice, Purchase Receipt or Journal
-  Entry is a draft whose `custom_ocr_import` back-link names this OCR Import, write permission on the draft is enough, and the
-  delete runs with `ignore_permissions` (the only place the app does so for a financial document, and only after that
+  Entry is a draft whose `custom_ocr_import` back-link names this OCR Import, write permission on the draft is enough when the current user also created it (owner), and the
+  delete runs after a row-locked re-read of docstatus with `ignore_permissions` (the only place the app does so for a financial document, and only after that
   write check). Cancelled documents, drafts made elsewhere, drafts without a back-link and sites without the field still
   need real Delete permission; submitted still refuses. OCR Delivery Note and OCR Fleet Slip are unchanged: the documents
   they create carry no back-link to prove provenance.
@@ -45,7 +45,7 @@ Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording 
   always unknown and the backoff never ran. The check is now `is not None`.
 
 ### Tests
-1,062 → 1,100 (billing alert) → 1,121 (Sidebar) → 1,128 (wording) → 1,136 (Unlink & Reset).
+1,062 → 1,100 (billing alert) → 1,121 (Sidebar) → 1,128 (wording) → 1,136 (Unlink & Reset) → 1,145 (review rounds 1-2).
 
 ## [1.13.1] — 2026-10-09
 
