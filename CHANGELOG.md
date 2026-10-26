@@ -21,12 +21,24 @@ Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording 
   `standard = 0` with no app, and deletes the empty custom `Module Def` `ERPNext OCR (Custom)` (only when no Workspace,
   DocType, Report or Page is filed under it and no other Sidebar either).
 
+- **One dashboard name, "OCR Accounts".** `app_title` (v16 Desktop icon) and the `<title>` of `/accounts`
+  (`frontend/index.html`, `www/accounts.html`, `public/accounts/index.html`) now match the apps-screen entry. The committed
+  build differs from the previous one only in that title line. The desk workspace "ERPNext OCR" is unchanged.
+- **Duplicate-number approvals show the approver's full name.** New read-only Purchase Invoice field
+  `custom_duplicate_bill_approved_by_name` (label "Approved By"); the login stays stored in `custom_duplicate_bill_approved_by`
+  (now hidden, label "Approved By (login)") for audit. The approval rules are unchanged. Approvals made before this release
+  (the check is off on all sites) would show no name.
+- **Money in the duplicate-number message** reads `R 45,747.00`, in each conflicting invoice's own currency
+  (`fmt_money`), instead of `45747.0`.
+- **"Upload File" on a new OCR Import is a blue toolbar button** (was under Actions, which v16 hides ungrouped buttons
+  into). The Quick Start and User guides say so.
+
 ### Fixed
 - **429 and 5xx responses were never retried.** `if e.response` is False for any error response, so the status code was
   always unknown and the backoff never ran. The check is now `is not None`.
 
 ### Tests
-1,062 → 1,100 (billing alert) → 1,121 (Sidebar).
+1,062 → 1,100 (billing alert) → 1,121 (Sidebar) → 1,128 (wording).
 
 ## [1.13.1] — 2026-10-09
 
