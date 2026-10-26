@@ -70,10 +70,32 @@ def _as_datetime(value) -> datetime.datetime:
 	return datetime.datetime.fromisoformat(str(value))
 
 
+def _read_dt(fieldname: str) -> datetime.datetime | None:
+	"""Read a Datetime setting, or None when it is empty.
+
+	Real Frappe casts an empty single Datetime (no row, NULL or "") to
+	``datetime(1, 1, 1)``, which is truthy. Treat falsy values and anything
+	before 1900 as "not set".
+	"""
+	value = frappe.db.get_single_value("OCR Settings", fieldname)
+	if not value:
+		return None
+	if isinstance(value, datetime.datetime):
+		parsed = value
+	elif isinstance(value, datetime.date):
+		parsed = datetime.datetime(value.year, value.month, value.day)
+	else:
+		try:
+			parsed = _as_datetime(value)
+		except ValueError:
+			return None
+	return None if parsed.year < 1900 else parsed
+
+
 def billing_is_down() -> bool:
 	"""Cheap check used by the Drive pollers. Never raises."""
 	try:
-		return bool(frappe.db.get_single_value("OCR Settings", "billing_failure_since"))
+		return _read_dt("billing_failure_since") is not None
 	except Exception:
 		return False
 
@@ -82,13 +104,13 @@ def record_billing_failure() -> None:
 	"""Mark billing as failing and email people, at most once per 6 hours. Never raises."""
 	try:
 		now = now_datetime()
-		since = frappe.db.get_single_value("OCR Settings", "billing_failure_since")
-		if not since:
+		since = _read_dt("billing_failure_since")
+		if since is None:
 			frappe.db.set_single_value("OCR Settings", "billing_failure_since", now, update_modified=False)
 			since = now
 
-		last_sent = frappe.db.get_single_value("OCR Settings", "billing_alert_last_sent")
-		due = not last_sent or _as_datetime(last_sent) <= now - datetime.timedelta(hours=ALERT_INTERVAL_HOURS)
+		last_sent = _read_dt("billing_alert_last_sent")
+		due = last_sent is None or last_sent <= now - datetime.timedelta(hours=ALERT_INTERVAL_HOURS)
 		if due:
 			# Stamp BEFORE sending so a mail failure can't turn into a mail storm.
 			# Read-then-act with no lock: two jobs failing in the same instant can
@@ -106,7 +128,7 @@ def record_billing_failure() -> None:
 def on_gemini_success() -> None:
 	"""A Gemini call worked: clear the banner state. Never raises."""
 	try:
-		if frappe.db.get_single_value("OCR Settings", "billing_failure_since"):
+		if _read_dt("billing_failure_since") is not None:
 			frappe.db.set_single_value("OCR Settings", "billing_failure_since", None, update_modified=False)
 			frappe.db.set_single_value("OCR Settings", "billing_alert_last_sent", None, update_modified=False)
 			frappe.db.commit()  # nosemgrep
@@ -197,8 +219,8 @@ def get_billing_status() -> dict:
 	if not (frappe.has_permission("OCR Import", "read") or frappe.has_permission("OCR Fleet Slip", "read")):
 		frappe.throw(_("You do not have access to this."), frappe.PermissionError)
 
-	since = frappe.db.get_single_value("OCR Settings", "billing_failure_since")
-	return {"down": bool(since), "since": str(since) if since else None}
+	since = _read_dt("billing_failure_since")
+	return {"down": since is not None, "since": str(since) if since else None}
 
 
 # ---------------------------------------------------------------- Drive heal

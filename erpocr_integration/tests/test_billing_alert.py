@@ -51,7 +51,15 @@ def _isolate(mock_frappe):
 		k: getattr(mock_frappe.db, k)
 		for k in ("get_single_value", "set_single_value", "get_value", "set_value")
 	}
-	mock_frappe.db.get_single_value = MagicMock(side_effect=lambda dt, f: state.get(f))
+	# Real Frappe casts an EMPTY single Datetime to datetime(1, 1, 1), which is truthy.
+	empty = datetime.datetime(1, 1, 1)
+	dt_fields = ("billing_failure_since", "billing_alert_last_sent")
+
+	def read(dt, f):
+		value = state.get(f)
+		return (value or empty) if f in dt_fields else value
+
+	mock_frappe.db.get_single_value = MagicMock(side_effect=read)
 	mock_frappe.db.set_single_value = MagicMock(side_effect=lambda dt, f, v, **kw: state.__setitem__(f, v))
 	mock_frappe.sendmail = MagicMock()
 	mock_frappe.local = SimpleNamespace(site="test.example.com")
@@ -656,3 +664,40 @@ class TestSettingsValidation:
 		sys.modules["frappe.utils"].validate_email_address = lambda a: bool("@" in a)
 		self._settings("danell@x.com; a@b.co")._validate_billing_alert_recipients()
 		self._settings("")._validate_billing_alert_recipients()
+
+
+class TestEmptyDatetimeReadsAsUnset:
+	"""Real Frappe returns datetime(1, 1, 1) for an empty Datetime setting."""
+
+	def test_not_down_when_empty(self):
+		assert billing.billing_is_down() is False
+
+	def test_status_payload_when_empty(self, mock_frappe):
+		mock_frappe.has_permission = MagicMock(return_value=True)
+		assert billing.get_billing_status() == {"down": False, "since": None}
+
+	def test_first_failure_stamps_since_and_sends(self, mock_frappe, _isolate):
+		t0 = datetime.datetime(2026, 10, 26, 8, 0)
+		with (
+			patch.object(billing, "now_datetime", return_value=t0),
+			patch.object(billing, "get_alert_recipients", return_value=["a@x.com"]),
+		):
+			billing.record_billing_failure()
+		assert _isolate["billing_failure_since"] == t0
+		assert mock_frappe.sendmail.call_count == 1
+		assert billing.billing_is_down() is True
+
+	def test_success_clears_it_again(self, _isolate):
+		_isolate["billing_failure_since"] = datetime.datetime(2026, 10, 26, 8, 0)
+		_isolate["billing_alert_last_sent"] = datetime.datetime(2026, 10, 26, 8, 0)
+		billing.on_gemini_success()
+		assert billing.billing_is_down() is False
+		assert _isolate["billing_alert_last_sent"] is None
+
+	def test_string_and_pre_1900_values(self, _isolate):
+		_isolate["billing_failure_since"] = "2026-10-26 08:00:00.123456"
+		assert billing._read_dt("billing_failure_since") == datetime.datetime(2026, 10, 26, 8, 0, 0, 123456)
+		_isolate["billing_failure_since"] = datetime.date(1, 1, 1)
+		assert billing._read_dt("billing_failure_since") is None
+		_isolate["billing_failure_since"] = "garbage"
+		assert billing._read_dt("billing_failure_since") is None
