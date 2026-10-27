@@ -2,6 +2,25 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.1] — 2026-10-27
+
+Patch release. Two fixes found on the first day of 1.14.0 in production.
+
+### Fixed
+- **Emailed invoices that were already read are no longer skipped.** The hourly email poll searched only UNREAD mail in
+  the Gmail label "OCR Invoices". Gmail delivers mail you forward to your own address already read, so those invoices
+  were silently skipped (Star Pops: nothing from email between 14 and 27 Oct). The poll now takes **every** message in
+  the label, oldest first, at most 20 per run (`MAX_EMAILS_PER_POLL`). The label is the queue: a processed email is moved
+  to "OCR Processed" as before, an email whose attachments failed 3 times is moved out as before, and an unfinished one
+  stays for the next run. The "already imported" check now also counts **Draft Created** and **No Action** (the unread
+  flag used to hide that gap). The poll no longer marks unfinished mail unread. **Before deploying, empty the label of
+  anything you do not want imported**: everything left in it will be processed.
+- **Auto-draft skips a re-used invoice number cleanly while the 2023 'Unique' setting exists.** If the database 'Unique'
+  setting on Purchase Invoice → Supplier Invoice No is still present (any site that has not removed it), auto-draft now
+  looks for the invoice that already holds the number (any supplier, cancelled, any company) and skips with "Invoice number
+  already held by … PI …", instead of failing with a database error and an "Auto-Draft Failed" log row (live: Star Pops
+  `INV-000068`, 27 Oct). Sites that removed the setting are unaffected.
+
 ## [1.14.0] — 2026-10-26
 
 Minor release. Q23 (Gemini billing alert), Q22 (v16 app-owned Sidebar), wording fixes, and Unlink & Reset for clerks.
