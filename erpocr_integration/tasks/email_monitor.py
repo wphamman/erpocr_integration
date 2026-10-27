@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import email
+import hashlib
 import imaplib
 from email.header import decode_header
 
@@ -251,6 +252,11 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 				# HTML-encoding <> to &lt;&gt; in Data fields, which
 				# breaks the dedup query (raw '<' != stored '&lt;').
 				message_id = msg.get("Message-ID", "").strip().strip("<>")
+				if not message_id:
+					# The poll re-reads every message left in the label, so dedup
+					# needs a key even when the header is missing: the same IMAP
+					# message always has the same bytes.
+					message_id = "no-message-id-" + hashlib.sha256(response_part[1]).hexdigest()[:40]
 
 				frappe.logger().info(
 					f"Email monitoring: Processing email '{subject}' (Message-ID: {message_id})"

@@ -86,10 +86,11 @@ class TestPollQueue:
 		assert not [c for c in mail.calls if c[0] == "store" and c[2] == "-FLAGS"]
 
 
-def _email_with_pdf():
+def _email_with_pdf(message_id="<abc@example.com>"):
 	msg = MIMEMultipart()
 	msg["Subject"] = "Invoice"
-	msg["Message-ID"] = "<abc@example.com>"
+	if message_id:
+		msg["Message-ID"] = message_id
 	part = MIMEApplication(b"%PDF-1.4 fake", Name="INV-1.pdf")
 	part["Content-Disposition"] = 'attachment; filename="INV-1.pdf"'
 	msg.attach(part)
@@ -111,3 +112,24 @@ class TestAlreadyImportedStatuses:
 			mock_frappe.get_all.return_value = []
 		assert result is True
 		mock_frappe.enqueue.assert_not_called()
+
+	def test_email_without_message_id_is_still_deduped(self, mock_frappe):
+		# Terra review: with the ALL search a header-less email that stays in the
+		# label must not be re-imported every hour.
+		raw = _email_with_pdf(message_id=None)
+		keys = []
+		for _ in range(2):
+			mail = MagicMock()
+			mail.uid.return_value = ("OK", [(b"1 (BODY[]", raw)])
+			mock_frappe.get_all.reset_mock()
+			mock_frappe.get_all.return_value = [SimpleNamespace(name="OCR-IMP-1", status="Completed")]
+			mock_frappe.enqueue.reset_mock()
+			try:
+				result = _process_email(mail, b"1", SimpleNamespace(email_id=None), MagicMock(), use_uid=True)
+			finally:
+				mock_frappe.get_all.return_value = []
+			assert result is True
+			mock_frappe.enqueue.assert_not_called()
+			keys.append(mock_frappe.get_all.call_args.kwargs["filters"]["email_message_id"])
+		assert keys[0].startswith("no-message-id-")
+		assert keys[0] == keys[1]

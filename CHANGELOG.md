@@ -13,7 +13,7 @@ Patch release. Two fixes found on the first day of 1.14.0 in production.
   the label, oldest first, at most 20 per run (`MAX_EMAILS_PER_POLL`). The label is the queue: a processed email is moved
   to "OCR Processed" as before, an email whose attachments failed 3 times is moved out as before, and an unfinished one
   stays for the next run. The "already imported" check now also counts **Draft Created** and **No Action** (the unread
-  flag used to hide that gap). The poll no longer marks unfinished mail unread. **Before deploying, empty the label of
+  flag used to hide that gap). The poll no longer marks unfinished mail unread. An email without a Message-ID header is deduplicated by a hash of the message itself (Terra review). **Before deploying, empty the label of
   anything you do not want imported**: everything left in it will be processed.
 - **Auto-draft skips a re-used invoice number cleanly while the 2023 'Unique' setting exists.** If the database 'Unique'
   setting on Purchase Invoice → Supplier Invoice No is still present (any site that has not removed it), auto-draft now
