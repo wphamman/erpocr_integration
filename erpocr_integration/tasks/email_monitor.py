@@ -2,15 +2,21 @@
 # For license information, please see license.txt
 
 import email
+import hashlib
 import imaplib
 from email.header import decode_header
 
 import frappe
 from frappe import _
 
-TERMINAL_SUCCESS_STATUSES = {"Needs Review", "Matched", "Completed"}
+# Every status an OCR Import reaches after a successful extraction. The poll takes
+# every message in the label (not just unread), so an import that has moved on to
+# Draft Created / No Action must still count as done or the PDF is imported again.
+TERMINAL_SUCCESS_STATUSES = {"Needs Review", "Matched", "Draft Created", "Completed", "No Action"}
 IN_PROGRESS_STATUSES = {"Pending", "Extracting", "Processing"}
 MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
+# Emails handled per hourly poll, oldest first; the rest wait for the next poll.
+MAX_EMAILS_PER_POLL = 20
 
 
 def poll_email_inbox():
@@ -45,14 +51,17 @@ def poll_email_inbox():
 		if not resolved_folder:
 			return
 
-		# Search for UNSEEN emails only (reduces load on growing folders)
-		# Duplicate check via Message-ID handles edge cases
-		status, messages = mail.uid("search", None, "UNSEEN")
+		# Search ALL messages in the label, not just unread: Gmail delivers mail you
+		# forward to your own alias already read, and those were silently skipped
+		# (153 waiting on SP, 2026-10-27). The label is the queue — every exit below
+		# either moves the email out or is deduped per Message-ID + filename.
+		status, messages = mail.uid("search", None, "ALL")
 		if status != "OK":
 			frappe.log_error(title="Email Monitoring Error", message="Failed to search for emails")
 			return
 
-		email_uids = messages[0].split()
+		# UIDs ascend with arrival in the folder: take the oldest first, capped.
+		email_uids = sorted(messages[0].split(), key=int)[:MAX_EMAILS_PER_POLL]
 
 		if not email_uids:
 			# No emails in folder
@@ -77,11 +86,9 @@ def poll_email_inbox():
 					message=f"Failed to process email UID {email_uid}\n{frappe.get_traceback()}",
 				)
 
-		# Phase 2: Read-write — move processed emails to "OCR Processed" and
-		# clear \Seen on any emails we touched but did NOT successfully process,
-		# so the next UNSEEN poll retries them. We enter this block whenever we
-		# examined any emails (not just when we have successful moves) so the
-		# flag-clear pass runs even on all-failed batches.
+		# Phase 2: Read-write — move processed emails to "OCR Processed".
+		# Emails that did not finish stay in the label; the next poll retries
+		# them (read state no longer matters).
 		if email_uids:
 			mail.close()
 			if not _select_folder(mail, folder_name, readonly=False):
@@ -94,8 +101,7 @@ def poll_email_inbox():
 			# Validate UIDs still exist after re-select.  Handles two edge cases:
 			# - UIDVALIDITY changed between phases (all UIDs become invalid)
 			# - Messages moved/deleted between phases (individual UIDs gone)
-			all_fetched_uids = list(email_uids)
-			uid_csv = b",".join(all_fetched_uids).decode()
+			uid_csv = b",".join(email_uids).decode()
 			status, data = mail.uid("search", None, f"UID {uid_csv}")
 			if status == "OK" and data[0]:
 				valid_uids = set(data[0].split())
@@ -106,20 +112,18 @@ def poll_email_inbox():
 						f"(moved between phases), skipping"
 					)
 				uids_to_move = [u for u in uids_to_move if u in valid_uids]
-				all_fetched_uids = [u for u in all_fetched_uids if u in valid_uids]
 			else:
 				# Search failed or returned empty — none of the UIDs are valid
 				frappe.logger().warning(
 					"Email monitoring: UID validation returned no results, skipping all moves"
 				)
 				uids_to_move = []
-				all_fetched_uids = []
 
 			for email_uid in uids_to_move:
 				try:
-					# Mark as \Seen FIRST — this is the primary guard against
-					# reprocessing.  Even if the label move below fails, the
-					# UNSEEN search in the next poll won't find this message.
+					# Mark as \Seen (cosmetic since the ALL search). If the move
+					# below fails, the next poll re-reads the email and the
+					# per-PDF dedup skips it, so the move is simply retried.
 					mail.uid("store", email_uid, "+FLAGS", "\\Seen")
 				except Exception:
 					frappe.log_error(
@@ -134,19 +138,6 @@ def poll_email_inbox():
 						title="Email Monitoring Error",
 						message=f"Failed to move email UID {email_uid} to processed\n{frappe.get_traceback()}",
 					)
-
-			# \Seen removal guard — for any email we examined but did not
-			# successfully process (failed Phase 1 or failed UID validation),
-			# clear \Seen so the next UNSEEN poll picks it up again. Phase 1
-			# uses BODY.PEEK[] in readonly mode and should never set \Seen,
-			# but some IMAP proxies have been observed to set it anyway. This
-			# pass is best-effort defensive — errors are swallowed.
-			failed_uids = [u for u in all_fetched_uids if u not in uids_to_move]
-			for email_uid in failed_uids:
-				try:
-					mail.uid("store", email_uid, "-FLAGS", "\\Seen")
-				except Exception:
-					pass
 
 			# Expunge deleted messages (if any were marked for deletion)
 			try:
@@ -261,6 +252,11 @@ def _process_email(mail, email_id, email_account, settings, use_uid=False):
 				# HTML-encoding <> to &lt;&gt; in Data fields, which
 				# breaks the dedup query (raw '<' != stored '&lt;').
 				message_id = msg.get("Message-ID", "").strip().strip("<>")
+				if not message_id:
+					# The poll re-reads every message left in the label, so dedup
+					# needs a key even when the header is missing: the same IMAP
+					# message always has the same bytes.
+					message_id = "no-message-id-" + hashlib.sha256(response_part[1]).hexdigest()[:40]
 
 				frappe.logger().info(
 					f"Email monitoring: Processing email '{subject}' (Message-ID: {message_id})"

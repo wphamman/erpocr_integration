@@ -842,14 +842,79 @@ class TestDuplicateBillPrecheck:
 			mock_frappe.db.set_value.call_args[0][3] == "Duplicate invoice number: ACC-PINV-2 (same supplier)"
 		)
 
+	def _unique_tick(self, mock_frappe, present):
+		mock_frappe.get_meta.return_value.get_field.return_value = SimpleNamespace(unique=1 if present else 0)
+
 	def test_feature_off_different_supplier_hit_does_not_block(self, mock_frappe):
 		doc = self._doc()
+		self._unique_tick(mock_frappe, False)
 		mock_frappe.get_list.return_value = []
 		mock_frappe.db.sql.return_value = [self._hit("ACC-PINV-1", "Other Co")]
 		result = attempt_auto_draft(doc, _make_settings())
 		mock_frappe.db.sql.return_value = []
 		assert result is True
 		doc.create_purchase_invoice.assert_called_once()
+
+	def test_unique_tick_different_supplier_holder_skips_with_feature_off(self, mock_frappe):
+		# Live SP 2026-10-27: INV-000068 held by another supplier's PI; the insert
+		# failed on the DB 'Unique' index as "Auto-Draft Failed".
+		doc = self._doc()
+		self._unique_tick(mock_frappe, True)
+		mock_frappe.get_list.return_value = []
+		mock_frappe.log_error.reset_mock()
+		mock_frappe.db.set_value.reset_mock()
+		mock_frappe.db.sql.side_effect = [
+			[self._hit("ACC-PINV-1", "Other Co")],  # find_conflicts (filtered out: feature off)
+			[{"name": "ACC-PINV-1", "docstatus": 1}],  # _db_unique_holder
+		]
+		try:
+			result = attempt_auto_draft(doc, _make_settings())
+		finally:
+			mock_frappe.db.sql.side_effect = None
+			mock_frappe.db.sql.return_value = []
+		assert result is False
+		doc.create_purchase_invoice.assert_not_called()
+		mock_frappe.log_error.assert_not_called()
+		reason = mock_frappe.db.set_value.call_args[0][3]
+		assert reason.startswith("Invoice number already held by existing PI ACC-PINV-1")
+
+	def test_unique_tick_cancelled_holder_skips_with_feature_on(self, mock_frappe):
+		doc = self._doc()
+		self._unique_tick(mock_frappe, True)
+		mock_frappe.get_list.return_value = []
+		mock_frappe.db.set_value.reset_mock()
+		mock_frappe.db.sql.side_effect = [[], [{"name": "ACC-PINV-9", "docstatus": 2}]]
+		try:
+			result = attempt_auto_draft(doc, _make_settings(enable_duplicate_bill_check=1))
+		finally:
+			mock_frappe.db.sql.side_effect = None
+			mock_frappe.db.sql.return_value = []
+		assert result is False
+		assert "cancelled PI ACC-PINV-9" in mock_frappe.db.set_value.call_args[0][3]
+
+	def test_unique_tick_no_holder_proceeds(self, mock_frappe):
+		doc = self._doc()
+		self._unique_tick(mock_frappe, True)
+		mock_frappe.get_list.return_value = []
+		mock_frappe.db.sql.return_value = []
+		assert attempt_auto_draft(doc, _make_settings()) is True
+		doc.create_purchase_invoice.assert_called_once()
+
+	def test_unique_tick_blank_invoice_number_skips_holder_lookup(self, mock_frappe):
+		# A blank number must not match every other blank-numbered PI.
+		doc = self._doc()
+		doc.invoice_number = "  "
+		self._unique_tick(mock_frappe, True)
+		mock_frappe.get_list.return_value = []
+		mock_frappe.db.sql.reset_mock()
+		mock_frappe.db.sql.return_value = [{"name": "ACC-PINV-1", "docstatus": 1}]
+		try:
+			result = attempt_auto_draft(doc, _make_settings())
+		finally:
+			mock_frappe.db.sql.return_value = []
+		assert result is True
+		for call in mock_frappe.db.sql.call_args_list:
+			assert "WHERE bill_no = %(bill_no)s" not in call[0][0]
 
 	def test_no_conflict_unchanged(self, mock_frappe):
 		doc = self._doc()

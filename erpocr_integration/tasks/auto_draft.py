@@ -238,18 +238,30 @@ def _duplicate_bill_reason(ocr_import, settings) -> str:
 
 	Feature on: any conflict (same or different supplier). Feature off: only a
 	same-supplier hit, which ERPNext's own check would throw on anyway.
+	Either way, while the legacy DB 'Unique' setting exists, an exact holder of
+	the number (any supplier, cancelled, any company) also skips: the insert
+	would fail on the index (live: SP INV-000068, 2026-10-27).
 	"""
-	from erpocr_integration.duplicate_bill import find_conflicts
+	from erpocr_integration.duplicate_bill import _db_unique_holder, find_conflicts, unique_setting_present
 
 	supplier = getattr(ocr_import, "supplier", None)
+	invoice_number = getattr(ocr_import, "invoice_number", None)
 	conflicts = find_conflicts(
-		getattr(ocr_import, "invoice_number", None),
+		invoice_number,
 		getattr(ocr_import, "purchase_invoice", None),
 		getattr(ocr_import, "company", None),
 	)
 	if not getattr(settings, "enable_duplicate_bill_check", 0):
 		conflicts = [c for c in conflicts if c.get("supplier") == supplier]
 	if not conflicts:
+		if (invoice_number or "").strip() and unique_setting_present():
+			holder = _db_unique_holder(invoice_number, getattr(ocr_import, "purchase_invoice", None))
+			if holder:
+				status = "cancelled" if holder.get("docstatus") == 2 else "existing"
+				return (
+					f"Invoice number already held by {status} PI {holder['name']} "
+					"(the database 'Unique' setting on Supplier Invoice No blocks re-use)"
+				)
 		return ""
 	first = conflicts[0]
 	kind = "same" if first.get("supplier") == supplier else "different"
