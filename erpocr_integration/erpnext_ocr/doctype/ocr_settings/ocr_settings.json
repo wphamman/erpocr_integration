@@ -343,7 +343,7 @@
 			"fieldname": "jev_model",
 			"fieldtype": "Data",
 			"label": "Jev Model",
-			"default": "jev-1.13.0",
+			"default": "jev-1.14.0",
 			"description": "Pinned model version — never 'jev-latest' (a model bump mid-trial would confound the comparison).",
 			"depends_on": "eval:doc.enable_jev_shadow"
 		},

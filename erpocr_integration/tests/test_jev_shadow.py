@@ -375,6 +375,24 @@ class TestRunJevShadowSuccess:
 		assert kwargs["timeout"] == 20
 		assert mock_post.call_args.args[0] == "https://api.typesafe.ai/v1/systemone"
 
+	def test_unset_model_falls_back_to_pinned_default(self, mock_frappe):
+		"""A Single's field default is only written on save, so a site that never saved
+		OCR Settings after v1.12.0 reads jev_model as None — the code fallback is the pin."""
+		from erpocr_integration.tasks.jev_shadow import run_jev_shadow
+
+		self._setup(mock_frappe)
+		mock_frappe.get_cached_doc = MagicMock(return_value=_make_settings(jev_model=None))
+		payload = {
+			"answers": {"supplier": {"choice": "SUP-001", "probabilities": {"SUP-001": 1.0}}},
+			"usage": {"input_tokens": 100},
+		}
+		with patch(
+			"erpocr_integration.tasks.jev_shadow.requests.post", return_value=_fake_response(payload)
+		) as mock_post:
+			run_jev_shadow("OCR-IMP-00001", "SUP-001", "Auto Matched")
+
+		assert mock_post.call_args.kwargs["json"]["model"] == "jev-1.14.0"
+
 
 class TestRunJevShadowErrors:
 	def _setup(self, mock_frappe):

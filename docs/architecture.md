@@ -261,7 +261,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Also Email These People** (`billing_alert_recipients`): extra addresses (comma separated) for the Gemini payment-failure email, on top of every System Manager (v1.14.0, Q23). `billing_failure_since` / `billing_alert_last_sent` are hidden state fields.
 - **Enable Jev Shadow Trial**: Opt-in (off by default, v1.12.0) — record TypeSafe Jev's supplier pick alongside today's matcher's pick, for later comparison. See *Jev Shadow Trial* below.
 - **TypeSafe API Key**: TypeSafe API key (Password), only used when the shadow trial is on.
-- **Jev Model**: Pinned model version (default `jev-1.13.0`) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
+- **Jev Model**: Pinned model version (default `jev-1.14.0`; it was `jev-1.13.0` until v1.14.2) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
 - **Jev Monthly Budget (USD)**: Soft cap on Jev API spend per calendar month (default 2.0; read-then-act, no lock — concurrent jobs can overshoot by a few calls at ~US$0.0002 each). Once this month's summed `jev_cost_usd` reaches it, the shadow job records `Skipped` and stops calling until next month. `0` (or unset) disables the trial entirely — every job Skips, no calls ever made.
 - **Jev Timeout (seconds)**: Request timeout for the Jev API call (default 20).
 

@@ -2,6 +2,13 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The Jev shadow trial's default model is now `jev-1.14.0`** (was `jev-1.13.0`), in both the code fallback and the
+  OCR Settings field default. Star Pops already runs the trial on `jev-1.14.0` set by hand (since 2026-10-28), so
+  nothing changes there; a site that turns the trial on later starts on the same model. Same price and limits.
+
 ## [1.14.1] — 2026-10-27
 
 Patch release. Two fixes found on the first day of 1.14.0 in production.
