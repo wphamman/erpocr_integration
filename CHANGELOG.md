@@ -2,7 +2,9 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.14.2] — 2026-11-06
+
+Patch release, forced by Google retiring Gemini 2.5 Flash on 1 December 2026. Nothing changes on screen.
 
 ### Changed
 - **Documents are now read by Gemini 3.5 Flash-Lite** (was 2.5 Flash, which Google retires on 1 December 2026). Chosen
