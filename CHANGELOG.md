@@ -2,6 +2,20 @@
 
 All notable changes to the ERPNext OCR Integration app are documented here. Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.2] — 2026-11-06
+
+Patch release, forced by Google retiring Gemini 2.5 Flash on 1 December 2026. Nothing changes on screen.
+
+### Changed
+- **Documents are now read by Gemini 3.5 Flash-Lite** (was 2.5 Flash, which Google retires on 1 December 2026). Chosen
+  by a side-by-side test of four models on real Star Pops invoices and fleet slips. It was as accurate on invoices, read
+  fleet-slip dates better (6 of 7, against 4 of 7), and was about twice as fast. It costs the same or less. The migrate
+  moves any site still on a retired model onto its replacement, and the OCR Settings list now offers 3.5 Flash-Lite,
+  3.6 Flash and "flash-latest" (ADR-0025).
+- **The Jev shadow trial's default model is now `jev-1.14.0`** (was `jev-1.13.0`), in both the code fallback and the
+  OCR Settings field default. Star Pops already runs the trial on `jev-1.14.0` set by hand (since 2026-10-28), so
+  nothing changes there; a site that turns the trial on later starts on the same model. Same price and limits.
+
 ## [1.14.1] — 2026-10-27
 
 Patch release. Two fixes found on the first day of 1.14.0 in production.

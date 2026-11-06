@@ -1,13 +1,13 @@
 # ERPNext OCR Integration (erpocr_integration)
 
-Frappe v15 custom app: Gemini 2.5 Flash extracts structured data from PDFs/images and creates
+Frappe v15 custom app: Gemini (3.5 Flash-Lite since v1.14.2) extracts structured data from PDFs/images and creates
 ERPNext draft documents. Four pipelines — invoices (OCR Import → PI/PR/JE), delivery notes
 (OCR Delivery Note → PO/PR), fleet slips (OCR Fleet Slip → PI, or a Fleet-Card control record
 with no PI), and statement reconciliation (OCR Statement → match lines vs submitted PIs).
 Ingest via manual upload, email forwarding, Google Drive folder polling, plus a driver-shell
 phone-upload contract for fleet slips (`upload_fleet_slip`, P4); opt-in auto-draft for
 high-confidence matches. ~$0.0001/doc. Installs via `bench get-app`; all config lives in
-the OCR Settings single DocType. Currently v1.14.1.
+the OCR Settings single DocType. Currently v1.14.2.
 
 ## Knowledge (always loaded)
 @docs/architecture.md

@@ -25,7 +25,7 @@ If applicable, add screenshots or paste the Error Log entry.
 - ERPNext version: [e.g. v15.x.x]
 - Frappe version: [e.g. v15.x.x]
 - erpocr_integration version: [e.g. v0.3.0]
-- Gemini model: [e.g. gemini-2.5-flash]
+- Gemini model: [e.g. gemini-3.5-flash-lite]
 - Hosting: [e.g. self-hosted, Frappe Cloud]
 
 **Additional context**

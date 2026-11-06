@@ -19,7 +19,7 @@ from erpocr_integration.tasks.billing_alert import (
 
 def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "application/pdf") -> list[dict]:
 	"""
-	Extract invoice data from PDF or image using Gemini 2.5 Flash API.
+	Extract invoice data from PDF or image using the Gemini API.
 
 	Supports multi-invoice PDFs — returns one result per invoice found.
 
@@ -48,7 +48,7 @@ def extract_invoice_data(pdf_content: bytes, filename: str, mime_type: str = "ap
 	if not api_key:
 		frappe.throw(_("Gemini API key not configured in OCR Settings"))
 
-	model = settings.gemini_model or "gemini-2.5-flash"
+	model = settings.gemini_model or "gemini-3.5-flash-lite"
 
 	# Build prompt and schema
 	prompt = _build_extraction_prompt()
@@ -517,7 +517,7 @@ def extract_delivery_note_data(pdf_content: bytes, filename: str, mime_type: str
 	if not api_key:
 		frappe.throw(_("Gemini API key not configured in OCR Settings"))
 
-	model = settings.gemini_model or "gemini-2.5-flash"
+	model = settings.gemini_model or "gemini-3.5-flash-lite"
 
 	prompt = _build_dn_extraction_prompt()
 	schema = _build_dn_extraction_schema()
@@ -742,7 +742,7 @@ def extract_fleet_slip_data(pdf_content: bytes, filename: str, mime_type: str = 
 	if not api_key:
 		frappe.throw(_("Gemini API key not configured in OCR Settings"))
 
-	model = settings.gemini_model or "gemini-2.5-flash"
+	model = settings.gemini_model or "gemini-3.5-flash-lite"
 
 	prompt = _build_fleet_extraction_prompt()
 	schema = _build_fleet_extraction_schema()
@@ -1000,7 +1000,7 @@ def extract_statement_data(pdf_content: bytes, filename: str, mime_type: str = "
 	if not api_key:
 		frappe.throw(_("Gemini API key not configured in OCR Settings"))
 
-	model = settings.gemini_model or "gemini-2.5-flash"
+	model = settings.gemini_model or "gemini-3.5-flash-lite"
 	prompt = _build_statement_prompt()
 	schema = _build_statement_schema()
 

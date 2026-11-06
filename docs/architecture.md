@@ -8,7 +8,7 @@
 
 ## Project Overview
 
-Frappe custom app that integrates Gemini 2.5 Flash API with ERPNext for automatic invoice
+Frappe custom app that integrates the Gemini API (3.5 Flash-Lite since v1.14.2) with ERPNext for automatic invoice
 data extraction and import. Supports PDF, JPEG, and PNG files.
 
 **Repository goal**: A `bench get-app` installable Frappe app that works on both self-hosted
@@ -234,7 +234,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 
 ### OCR Settings
 - **Gemini API Key**: Your API key from Google AI Studio
-- **Gemini Model**: gemini-2.5-flash (recommended), gemini-2.5-pro, gemini-2.0-flash
+- **Gemini Model**: gemini-3.5-flash-lite (recommended, default since v1.14.2 — ADR-0025), gemini-3.6-flash, gemini-flash-latest. The v1.14.2 patch moves a site still on a retired model (2.5-flash, 2.0-flash, 2.5-pro) onto its replacement.
 - **Enable Email Monitoring**: Check to enable automatic email processing
 - **Email Account**: Select ERPNext Email Account to monitor for invoice PDFs
 - **Enable Drive Integration**: Archive processed invoices to Google Drive
@@ -261,7 +261,7 @@ Studio → Billing, or set a low-balance alert on the billing account.
 - **Also Email These People** (`billing_alert_recipients`): extra addresses (comma separated) for the Gemini payment-failure email, on top of every System Manager (v1.14.0, Q23). `billing_failure_since` / `billing_alert_last_sent` are hidden state fields.
 - **Enable Jev Shadow Trial**: Opt-in (off by default, v1.12.0) — record TypeSafe Jev's supplier pick alongside today's matcher's pick, for later comparison. See *Jev Shadow Trial* below.
 - **TypeSafe API Key**: TypeSafe API key (Password), only used when the shadow trial is on.
-- **Jev Model**: Pinned model version (default `jev-1.13.0`) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
+- **Jev Model**: Pinned model version (default `jev-1.14.0`; it was `jev-1.13.0` until v1.14.2) — never `jev-latest`, so a mid-trial model bump can't confound the comparison.
 - **Jev Monthly Budget (USD)**: Soft cap on Jev API spend per calendar month (default 2.0; read-then-act, no lock — concurrent jobs can overshoot by a few calls at ~US$0.0002 each). Once this month's summed `jev_cost_usd` reaches it, the shadow job records `Skipped` and stops calling until next month. `0` (or unset) disables the trial entirely — every job Skips, no calls ever made.
 - **Jev Timeout (seconds)**: Request timeout for the Jev API call (default 20).
 
@@ -277,7 +277,7 @@ bench restart
 # Configure OCR Settings in ERPNext UI:
 # 1. Navigate to: Setup > OCR Settings
 # 2. Enter Gemini API Key (get from https://aistudio.google.com/apikey)
-# 3. Select Model: gemini-2.5-flash
+# 3. Select Model: gemini-3.5-flash-lite
 # 4. Configure ERPNext defaults (company, warehouse, expense account, cost center)
 # 5. Set VAT Tax Template and Non-VAT Tax Template
 # 6. Optional: Enable email monitoring and select Email Account

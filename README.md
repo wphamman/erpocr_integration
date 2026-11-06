@@ -19,7 +19,7 @@
 
 ---
 
-A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini 2.5 Flash** API to extract structured data from PDFs and images, and create draft documents in ERPNext. Four pipelines: **invoices**, **delivery notes**, **fleet slips**, and **statement reconciliation**. Essentially free at small volume (~$0.0001 per document).
+A [Frappe](https://frappeframework.com/) custom app that uses Google's **Gemini** API (3.5 Flash-Lite by default) to extract structured data from PDFs and images, and create draft documents in ERPNext. Four pipelines: **invoices**, **delivery notes**, **fleet slips**, and **statement reconciliation**. Essentially free at small volume (~$0.0001 per document).
 
 ## Features
 

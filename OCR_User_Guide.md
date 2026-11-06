@@ -37,7 +37,7 @@ bench restart
 | Field | What to Enter |
 |---|---|
 | **Gemini API Key** | Get from https://aistudio.google.com/apikey (starts with `AIza...`) |
-| **Gemini Model** | Select **gemini-2.5-flash** (recommended — fast and accurate) |
+| **Gemini Model** | Select **gemini-3.5-flash-lite** (recommended — fast and accurate) |
 
 > **Free tier warning:** The Gemini free tier allows only 15 requests/minute and 1,500 requests/day. If you plan to process invoices in batch (via Drive scan or email), you will likely hit these limits. To avoid extraction failures, link a billing account to your Google AI project at [Google AI Studio](https://aistudio.google.com/apikey) > Settings. This upgrades to Tier 1 (~1,000 RPM) at minimal cost (~$0.0001 per invoice).
 

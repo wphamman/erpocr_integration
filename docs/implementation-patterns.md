@@ -17,7 +17,7 @@ def process(raw_payload: str):
 ```
 
 ### Gemini API Integration
-- Uses Gemini 2.5 Flash API with structured output (JSON schema)
+- Uses the Gemini API (default `gemini-3.5-flash-lite` since v1.14.2, ADR-0025) with structured output (JSON schema)
 - Files sent as base64-encoded inline data with correct MIME type (max 10MB)
 - Supported formats: PDF (`application/pdf`), JPEG (`image/jpeg`), PNG (`image/png`)
 - Retry logic: 5 attempts with 429-specific long backoff (15s/30s/60s/120s) and shorter 5xx backoff (2s/5s/10s/20s)

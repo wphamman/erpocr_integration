@@ -247,7 +247,7 @@ def _run_jev_shadow_inner(
 		_finish({"jev_status": "Skipped", "jev_note": "No enabled Supplier candidates"})
 		return
 
-	model = getattr(settings, "jev_model", None) or "jev-1.13.0"
+	model = getattr(settings, "jev_model", None) or "jev-1.14.0"
 	timeout = getattr(settings, "jev_timeout_seconds", None) or 20
 
 	state = _supplier_state(printed_name, ocr_import.supplier_tax_id)
