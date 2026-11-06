@@ -4,3 +4,4 @@ erpocr_integration.patches.v1_1_6.migrate_fleet_vehicle_to_custom_field
 
 [post_model_sync]
 erpocr_integration.patches.v1_13_0.reanchor_fleet_ocr_section
+erpocr_integration.patches.v1_14_2.replace_retired_gemini_models

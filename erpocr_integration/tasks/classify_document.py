@@ -58,7 +58,7 @@ def classify_document(
 		if not api_key:
 			return "invoice", 0.0
 
-		model = settings.gemini_model or "gemini-2.5-flash"
+		model = settings.gemini_model or "gemini-3.5-flash-lite"
 		result = _call_classification_api(file_content, api_key, model, mime_type)
 
 		doc_type = result.get("document_type", "").lower().strip()

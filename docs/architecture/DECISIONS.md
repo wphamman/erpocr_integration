@@ -448,3 +448,32 @@
   - Limits: `db_set`/`set_value` bypass validate (as for every Frappe validation; `bill_no` is not allow_on_submit),
     and removing an approver does not void their past approvals.
   - The 6+ suffixed invoices already booked are left as they are.
+
+## ADR-0025 — Gemini 3.5 Flash-Lite replaces 2.5 Flash, chosen by a side-by-side test
+- **Status:** Accepted 2026-11-06 (architect; Willie asked for the test and the decision) · ships v1.14.2
+- **Context:** Google retires `gemini-2.5-flash` on 2026-12-01 and redirects every request to `gemini-3.5-flash-lite`.
+  The app's calls are plain single-turn `generateContent` with an inline file and `response_schema`. They use no
+  function calling, chat history, or sampling or thinking settings, so nothing breaks; the only change is the model
+  that reads the documents. Test, 2026-11-06:
+  - Same prompts and schemas as production, 4 models: 2.5-flash, 3.5-flash-lite, 3.6-flash, 3.8-flash.
+  - Documents: 16 invoices from 16 suppliers, scored against their submitted Purchase Invoices, and 7 fleet slips,
+    scored against my own reading of each photo. The documents came from SP production through a temporary
+    read-only user; Willie authorised that in session, it was closed after the test, and the copies were deleted.
+  - Invoices: all four effectively tie (total and VAT 16/16 each; number and date 15/16; the misses are shared).
+    Lite took the buyer as the supplier once (1/16), which a review catches because the supplier does not match.
+  - Fleet slips: correct dates out of 7 were Lite 6, 2.5-flash 4, 3.6 4, 3.8 3. The full 3.6/3.8 models invented
+    years (2023, 2024) on struck-through dates and missed toll VAT (5/7). Litres out of 5: Lite and 3.6 got 5,
+    2.5 and 3.8 got 4.
+  - Classifier: 16/16 for all. Every response parsed, with no thought parts in `parts[0]`. Lite's median time was
+    2.6 s (2.5-flash 5.1 s), and it used no thinking tokens.
+  - Not testable: delivery notes (SP has 0 OCR Delivery Notes) and statements (2 in total).
+- **Decision:**
+  - Default and code fallback become `gemini-3.5-flash-lite`.
+  - The dropdown offers 3.5-flash-lite, 3.6-flash and flash-latest.
+  - A one-time patch moves a site still set to a retired model onto its replacement: 2.5-flash and 2.0-flash go to
+    3.5-flash-lite, and 2.5-pro goes to 3.6-flash. Any other choice is left alone.
+- **Consequences:**
+  - The choice equals Google's own redirect, so a site that misses the deploy still ends up on the tested model.
+  - Watch the first week on SP, Cactus and Empire Vending: supplier match rate, the auto-draft rate and Error counts.
+  - The first real delivery note on any site will also be the first run of that pipeline on this model.
+  - The sample is small (23 documents). Re-test if a later Google redirect changes the model again.
